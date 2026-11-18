@@ -124,3 +124,29 @@ fn a_joined_path_searches_from_the_few_values_given() {
         assert_eq!(n, rows(&e, &off), "{body}");
     }
 }
+
+/// A level that would make more pairs than the query's memory allows is not built: a hub
+/// that every start reaches, with many leaves, is left to the evaluator.
+#[test]
+fn a_level_past_the_memory_limit_is_left_to_the_evaluator() {
+    let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..50 {
+        ttl.push_str(&format!("ex:s{i} a ex:Src ; ex:e ex:hub .\n"));
+    }
+    for i in 0..4000 {
+        ttl.push_str(&format!("ex:hub ex:e ex:leaf{i} .\n"));
+    }
+    // Enough edges that 50 starts are searched level by level.
+    for i in 0..10_000 {
+        ttl.push_str(&format!("ex:x{i} ex:e ex:y{i} .\n"));
+    }
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let q = "PREFIX ex: <http://example.org/> SELECT (COUNT(*) AS ?n) WHERE { ?s a ex:Src . ?s ex:e+ ?o }";
+    let n = rows(&e, q);
+    assert_eq!(n, rows(&e, &format!("#pragma tt.id-rewrites off\n{q}")));
+    assert!(n[0].contains("200050"), "{n:?}");
+    // 200,050 pairs take about a million ids in the search; under a limit of 1 MiB
+    // (131,072 ids) it gives up before the level and the evaluator counts them streaming.
+    assert_eq!(rows(&e.with_query_memory(1 << 20), q), n);
+}

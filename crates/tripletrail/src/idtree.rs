@@ -316,9 +316,10 @@ impl Eval<'_> {
                 emit(s, s, &mut ids);
             }
         }
+        // Each new pair takes its ids in the rows out, two in `seen` and two in `next`.
+        let per_pair = usize::from(pairs) + 5;
         while !frontier.is_empty() {
-            // The pairs seen take two ids each, as the rows out take theirs.
-            if (self.cancelled)() || ids.len() + 2 * seen.len() > limit {
+            if (self.cancelled)() {
                 return None;
             }
             let mut nodes: Vec<TermId> = frontier.iter().map(|&(_, n)| n).collect();
@@ -337,8 +338,22 @@ impl Eval<'_> {
                 let row = edges.row(r);
                 next_of.entry(row[ca]).or_default().push(row[cb]);
             }
+            // The most pairs this level can add, before any is made: past the limit, the
+            // evaluator's (it streams them). The edges read and `next_of` hold four ids each.
+            let most: usize = frontier
+                .iter()
+                .map(|(_, n)| next_of.get(n).map_or(0, Vec::len))
+                .sum();
+            let held = ids.len() + 2 * seen.len() + 4 * edges.len();
+            if most.saturating_mul(per_pair).saturating_add(held) > limit {
+                return None;
+            }
+            drop(edges);
             let mut next = Vec::new();
-            for (start, n) in frontier {
+            for (i, (start, n)) in frontier.into_iter().enumerate() {
+                if i % 4096 == 4095 && (self.cancelled)() {
+                    return None;
+                }
                 for &m in next_of.get(&n).into_iter().flatten() {
                     if seen.insert((start, m)) {
                         emit(start, m, &mut ids);
@@ -410,10 +425,14 @@ impl Eval<'_> {
                     if seen.insert(m, i) != Some(i) {
                         emit(m, &mut ids);
                         stack.push(m);
+                        // A node with many edges: checked as its targets are added.
+                        if ids.len() > limit {
+                            return None;
+                        }
+                        if ids.len() % 65536 == 0 && (self.cancelled)() {
+                            return None;
+                        }
                     }
-                }
-                if ids.len() > limit {
-                    return None;
                 }
             }
         }
