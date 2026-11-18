@@ -106,7 +106,7 @@ h3 { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
 .dot.bad { background: var(--danger); }
 
 /* ---------- pages ---------- */
-main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+main { padding: 16px; }
 .page { display: flex; flex-direction: column; gap: 12px; }
 .toolbar { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
@@ -151,6 +151,33 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 .btn:focus-visible, .icon-btn:focus-visible, .status-btn:focus-visible, .tabs a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 input[type=text], input[type=password], input:not([type]), select { height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); padding: 0 8px; min-width: 0; }
 input:focus, select:focus { outline: 2px solid var(--focus); outline-offset: -1px; }
+/* Every field outside the top bar as the ones above: the page's surface, not the browser's grey. */
+main :is(input:not([type=checkbox], [type=radio], [type=range], [type=color], [type=file], [type=submit], [type=button], [type=reset]), select, textarea),
+.dlg :is(input:not([type=checkbox], [type=radio], [type=range], [type=color], [type=file], [type=submit], [type=button], [type=reset]), select, textarea) {
+  background-color: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+}
+main :is(input[type=search], input[type=number], input[type=url], input[type=email], input[type=date], input[type=datetime-local]),
+.dlg :is(input[type=search], input[type=number], input[type=url], input[type=email], input[type=date], input[type=datetime-local]) { height: 32px; padding: 0 8px; min-width: 0; }
+main textarea, .dlg textarea { padding: 6px 8px; font: inherit; }
+main :is(input, select, textarea):disabled, .dlg :is(input, select, textarea):disabled { color: var(--muted); cursor: default; }
+textarea:focus { outline: 2px solid var(--focus); outline-offset: -1px; }
+main ::placeholder, .dlg ::placeholder { color: var(--muted); opacity: 1; }
+input[type=checkbox], input[type=radio], input[type=range], progress { accent-color: var(--brand-fill); }
+
+/* copy buttons beside IRIs, and the top bar's Share */
+.copy-btn { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 22px; height: 22px; margin-left: 4px; padding: 0; vertical-align: middle;
+  border: 1px solid transparent; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; }
+.copy-btn:hover { color: var(--text); background: var(--surface-2); border-color: var(--border); }
+.copy-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.copy-btn.done { color: var(--ok); }
+.with-copy { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; }
+.with-copy > :first-child { overflow-wrap: anywhere; min-width: 0; }
+.map-picked .copy-btn { margin-left: auto; align-self: center; }
+.ex-iri.with-copy { display: flex; align-items: flex-start; }
+.share-btn { color: var(--muted); }
+.share-btn:hover { color: var(--text); }
+/* The word "Share" only where the tabs and the search box leave room for it. */
+@media (max-width: 1799px) { .share-btn span { display: none; } }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-2); margin-top: 10px; }
 .field input, .field select { font-size: 14px; color: var(--text); }
 .check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }

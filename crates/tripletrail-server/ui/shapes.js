@@ -28,7 +28,9 @@ window.TripleTrailShapes = (function () {
       fill(page(), el("h2", {}, "Shapes"), el("p", { class: "muted" }, "There is no dataset yet."));
       return;
     }
-    state = { ds, names, outline: null, selected: state && state.ds === ds ? state.selected : null, changes: new Map(), search: "", profile: "", newProfiles: [], formFor: null, form: state ? state.form : null };
+    // The link's shape (`?shape=IRI`), else the one picked before on this dataset.
+    const linked = new URLSearchParams(location.search).get("shape");
+    state = { ds, names, outline: null, selected: linked || (state && state.ds === ds ? state.selected : null), changes: new Map(), search: "", profile: "", newProfiles: [], formFor: null, form: state ? state.form : null };
     await load();
   }
 
@@ -389,7 +391,7 @@ window.TripleTrailShapes = (function () {
         el("button", { type: "button", class: "btn small", "aria-pressed": state.diagram ? "true" : "false",
           onclick: () => { state.diagram = !state.diagram; draw(); } }, state.diagram ? "Hide diagram" : "Diagram")),
       state.diagram ? diagram(s) : null,
-      el("p", { class: "muted small" }, el("code", {}, s.iri), " · ", layerText(s),
+      el("p", { class: "muted small" }, el("code", {}, s.iri), ui.copyButton(s.iri), " · ", layerText(s),
         s.classes.length ? " · targets " : null,
         ...s.classes.flatMap((c, i) => [i ? ", " : null, el("code", { title: c }, short(c))])),
       s.layer !== "own" && canSave ? el("p", { class: "muted small" }, "Saving a change writes the changes to the dataset's own set; the rest of the shape still comes from the ", s.layer, " one.") : null,
@@ -670,6 +672,9 @@ window.TripleTrailShapes = (function () {
 
   function draw() {
     fill(page(), header(), el("div", { class: "shapes-layout" }, sidebar(), details()));
+    // The shape shown is in the page's link, so the link can be shared.
+    const url = "/$/ui/shapes/" + encodeURIComponent(state.ds) + (state.selected ? "?shape=" + encodeURIComponent(state.selected) : "");
+    if (document.body.dataset.page === "shapes" && url !== location.pathname + location.search) history.replaceState(null, "", url + location.hash);
   }
 
   return { render };
