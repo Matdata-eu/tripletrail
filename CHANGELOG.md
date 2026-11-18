@@ -27,6 +27,10 @@ versions may change the store format and the API; the release notes say how to u
 - Web UI: every page uses the full width of the window (the Query, Map, Shapes and admin pages stopped at 1,400 pixels), and the fields outside the top bar (search, number and date boxes, text areas) take the page's colours instead of the browser's grey, most visible in the dark theme.
 - `ORDER BY DESC(tt:cosine(?v, "[…]")) LIMIT k`, or `ORDER BY DESC(?score)` with `?score` bound to that cosine, is answered from the copy of the vectors that `tt:nearest` reads (#236): the query is evaluated again with `?v` kept to the vectors most similar, each one compared, so the answer stays exact and other patterns and filters still apply. It works on the union default graph and for a caller limited to some graphs. Among 100,000 vectors of 768 numbers: 40 ms instead of 6.2 s; at most two rounds, so a filter that keeps one row in a hundred costs about 130 ms instead of 93 ms. A query with its own dataset or under row-level rules, with an `OFFSET` and `LIMIT` past a sixteenth of the vectors, or over a property that also has plain strings in the form of a vector, is evaluated as before. See [vector search](docs/vector-search.md#functions).
 
+### Fixed
+
+- A spatial `FILTER` (`geof:sfWithin`, `geof:distance` and the other relations) over a geometry reached by a property path with an alternative, `?`, `*` or `+` (`?x (a|b/c)/geo:asWKT ?p`) gave every candidate geometry for every row, including those outside, repeated (#48). The parser joins such a path to the rest through a blank node, which the spatial rewrite didn't count as a link. Answers now match the evaluator's.
+
 ## 0.1.0-rc.1 - 2026-11-17
 
 The first release candidate under the name TripleTrail, for trying it in place of Fuseki and Oxigraph.
