@@ -1001,7 +1001,11 @@ mod tests {
         assert!(explainer.derive(t, 100_000, &|| false).unwrap().is_some());
         // Bounded in steps, not wall time, which depends on the machine (a debug build on a
         // shared CI runner took over 5 s): the search takes about 707,000 steps today.
-        assert!(explainer.steps.get() < 1_000_000, "{}", explainer.steps.get());
+        assert!(
+            explainer.steps.get() < 1_000_000,
+            "{}",
+            explainer.steps.get()
+        );
     }
 
     #[test]
