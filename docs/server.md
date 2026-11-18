@@ -2673,7 +2673,9 @@ the dataset's DASH shapes when it has them (#140).
   page's, is OpenStreetMap's standard tiles by default, with their credit. `--map-tiles`
   (`TRIPLETRAIL_MAP_TILES`) names other XYZ raster tiles, with `--map-attribution` (HTML) for
   their credit, and `--map-tiles none` draws no base map, so the pages fetch nothing from
-  elsewhere. Each viewer's browser fetches the tiles of the place it looks at, so the tile
+  elsewhere. `--map-basemap 'TITLE|URL|ATTRIBUTION'` (repeatable; `TRIPLETRAIL_MAP_BASEMAPS`,
+  one per line) adds base maps the Map page's **Base map** menu offers besides it, such as
+  aerial photos; the describe pages keep `--map-tiles`. Each viewer's browser fetches the tiles of the place it looks at, so the tile
   server learns where the viewed resources lie: check its usage policy (OpenStreetMap's
   allows light use, not heavy or commercial traffic), and use your own tile server or `none`
   for private data. The page sends only its origin as `Referer` (`strict-origin`), as tile
@@ -2966,6 +2968,22 @@ dataset, the one the web UI's Map page draws:
   collection lacks is left out for it, and a view shows only the collections the caller
   sees: one that shows none is not listed. The Map page offers them in a **View** list above
   its layers and keeps the one picked in its link (`view={key}`).
+- `metadata."tripletrail:basemaps"` lists the base maps the Map page lets viewers switch
+  between: the server's `--map-tiles` first (`key` `map`, titled OpenStreetMap for its tiles,
+  else Base map), then each `--map-basemap` (`basemap-1`, `basemap-2`…), with `key`, `title`,
+  `tiles` and `attribution`; empty without any.
+
+The Map page draws this style with buttons of its own: an eye per layer to show or hide it
+(and **Show all**/**Hide all**), a magnifier on a layer that is not drawn at this zoom, which
+zooms in to its `minZoom`, and a funnel that opens its filters, with the number of filters
+on. On the map, under the zoom buttons: **Zoom to all the data** (the collections' extents
+from the OGC API), the **Base map** menu (the base maps above, the first also in grey, and
+none), and **Fullscreen**, which takes the layer list and the detail panel along. The feature
+open in the detail panel is outlined: an area with a light fill and an edge, a line with a
+light band and an edge on both sides, a point with a ring. The base map picked goes in the
+page's link (`basemap={key}`, left out for the default) and is remembered in the browser for
+links without one. With `--map-tiles none` the page starts without a base map, and draws one
+only when a viewer picks it.
 
 #### Previews of proposed shapes
 

@@ -195,6 +195,9 @@ pub struct Options {
     /// attribution; without it the map has no base map and fetches nothing from elsewhere.
     pub map_tiles: Option<String>,
     pub map_attribution: Option<String>,
+    /// More base maps the Map page offers besides `map_tiles` (`--map-basemap`): each a
+    /// title, an XYZ raster tile URL template and its attribution (HTML).
+    pub map_basemaps: Vec<(String, String, String)>,
     /// Write one JSON line per request to standard output.
     pub log_requests: bool,
     /// On SIGTERM or Ctrl-C, how long running requests may take before the server exits
@@ -331,6 +334,7 @@ impl Default for Options {
             matgui_url: None,
             map_tiles: None,
             map_attribution: None,
+            map_basemaps: Vec::new(),
             log_requests: false,
             shutdown_grace: Duration::from_secs(30),
             base_iris: Vec::new(),

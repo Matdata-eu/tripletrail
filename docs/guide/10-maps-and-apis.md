@@ -25,12 +25,39 @@ a geometry: here Station and Section.
 - **Search** finds features by the words of their names.
 - **Views**, when the shapes name some, show one theme at a time: see
   [Name views of the map](#name-views-of-the-map).
-- The page's link keeps the view, the filters and the feature open beside the map
-  (`feature=IRI`), so it can be shared: **Share** in the top bar copies it.
+- **Layers**: the eye beside a layer shows or hides it (**Show all** and **Hide all** do every
+  layer). A layer drawn only from a closer zoom is greyed out until then, with a magnifier
+  that zooms in to it. The funnel opens the layer's filters and shows how many are on.
+- **Zoom to all the data**, under the zoom buttons, fits the map to every layer; the button
+  under it picks the **base map**: OpenStreetMap, the same in grey (so coloured features stand
+  out), none, and any the server adds. The last button goes fullscreen, with the layer list.
+- The feature open beside the map is outlined in navy.
+- The page's link keeps the view, the filters, hidden layers, the base map and the feature
+  open beside the map (`feature=IRI`), so it can be shared: **Share** in the top bar copies it.
 
 The map fetches its background from OpenStreetMap, which then learns where viewers look. For
 private data, or heavy use, start the server with `--map-tiles` naming your own tile server,
-or `--map-tiles none`.
+or `--map-tiles none`. `--map-basemap` adds base maps to the menu, each as a title, an XYZ tile
+URL and its credit:
+
+<!-- test: serve -->
+```sh
+tripletrail serve --load network.ttl \
+  --map-basemap 'Aerial|https://tiles.example.org/aerial/{z}/{x}/{y}.jpg|© Example Aerial'
+```
+
+The map's style lists the base maps the menu offers, and the page adds the grey one and none:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/ds/tiles/style.json | grep -o '"title":"[^"]*"' | head -2
+```
+
+<!-- test: output -->
+```text
+"title":"OpenStreetMap"
+"title":"Aerial"
+```
 
 ## Describe pages
 

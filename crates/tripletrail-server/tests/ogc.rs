@@ -583,6 +583,10 @@ fn a_style_draws_each_collection_over_the_tiles() {
     );
     // No base map unless the server names one: a plain background.
     assert!(style["sources"]["basemap"].is_null());
+    assert_eq!(
+        style["metadata"]["tripletrail:basemaps"],
+        serde_json::json!([])
+    );
     assert_eq!(style["layers"][0]["type"], "background");
     // A collection per class with a geometry, for the legend, in its generated colour.
     let legend = style["metadata"]["tripletrail:collections"]
@@ -624,6 +628,11 @@ fn a_style_draws_each_collection_over_the_tiles() {
             threads: 2,
             map_tiles: Some("https://tile.example.org/{z}/{x}/{y}.png".to_owned()),
             map_attribution: Some("© Example".to_owned()),
+            map_basemaps: vec![(
+                "Aerial".to_owned(),
+                "https://aerial.example.org/{z}/{y}/{x}.jpg".to_owned(),
+                "© Aerial".to_owned(),
+            )],
             ..Options::default()
         },
     )
@@ -633,6 +642,17 @@ fn a_style_draws_each_collection_over_the_tiles() {
     let style = get(&format!("{other}/kg/tiles/style.json")).2;
     assert_eq!(style["layers"][0]["id"], "basemap");
     assert_eq!(style["sources"]["basemap"]["attribution"], "© Example");
+    // The base maps the Map page switches between: the server's own, then the others.
+    let basemaps = &style["metadata"]["tripletrail:basemaps"];
+    assert_eq!(basemaps[0]["key"], "map");
+    assert_eq!(basemaps[0]["title"], "Base map");
+    assert_eq!(basemaps[1]["key"], "basemap-1");
+    assert_eq!(basemaps[1]["title"], "Aerial");
+    assert_eq!(
+        basemaps[1]["tiles"],
+        "https://aerial.example.org/{z}/{y}/{x}.jpg"
+    );
+    assert_eq!(basemaps[1]["attribution"], "© Aerial");
 }
 
 /// The features without a geometry are left out of the facets by name when they can be

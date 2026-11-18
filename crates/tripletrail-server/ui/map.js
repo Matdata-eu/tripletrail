@@ -32,6 +32,19 @@ window.TripleTrailMap = (function () {
   /** Colours of a range facet's classes, low (blue) to high (red). */
   const RANGE_COLOURS = ["#313695", "#4575b4", "#74add1", "#66bd63", "#fdae61", "#f46d43", "#d73027", "#a50026"];
   const OTHER_COLOUR = "#8a8f98";
+  /** The outline of the feature open beside the map: the top bar's navy, as no layer has it. */
+  const SELECTED = "#10273f";
+  /** The page remembers the last base map picked in this browser, for links without one. */
+  const BASEMAP_KEY = "tripletrail-map-basemap";
+  /** Icons of the layer list and the map's buttons (24 by 24, drawn with the text colour). */
+  const ICONS = {
+    eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    eyeOff: '<path d="M2 12s3.6-7 10-7c1.6 0 3 .4 4.3 1M22 12s-3.6 7-10 7c-1.6 0-3-.4-4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M3 3l18 18"/>',
+    filter: '<path d="M3 4h18l-7 8.5V19l-4 2v-8.5z"/>',
+    zoomIn: '<circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21M11 8v6M8 11h6"/>',
+    extent: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
+    layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  };
   /** How the values of a boolean facet read. */
   const YES_NO = Object.assign(Object.create(null), { true: "yes", false: "no" });
   let ui = null;
@@ -43,6 +56,19 @@ window.TripleTrailMap = (function () {
   const tilesPath = (rest) => (preview ? "tiles/preview/" + preview + "/" : "tiles/") + rest;
   const page = () => document.getElementById("page-map");
   const el = (...a) => ui.el(...a);
+  /** An icon of ICONS, hidden from screen readers (its button has a label). */
+  function icon(name) {
+    const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    s.setAttribute("viewBox", "0 0 24 24");
+    s.setAttribute("aria-hidden", "true");
+    s.setAttribute("class", "map-icon");
+    s.innerHTML = ICONS[name];
+    return s;
+  }
+  /** The collections on the map, to find the one a feature opened by its IRI lies in. */
+  let drawn = [];
+  /** Whether the map has loaded, so layers can be added to it. */
+  let loaded = false;
 
   function loadLibrary() {
     if (lib) return Promise.resolve(lib);
@@ -114,8 +140,17 @@ window.TripleTrailMap = (function () {
     }
     if (shown !== name) return;
     const collections = (style.metadata && style.metadata["tripletrail:collections"]) || [];
+    drawn = collections;
     // The link's hidden layers and filters, drawn from the start.
     const state = readState(collections);
+    // The base maps to switch between, and the one the link, or this browser last, picked.
+    const basemaps = basemapChoices(style);
+    const stored = (() => { try { return localStorage.getItem(BASEMAP_KEY); } catch (e) { return null; } })();
+    // The server's own first; with `--map-tiles none`, none until a viewer picks one.
+    const first = basemaps.some((b) => b.key === "map") ? "map" : "none";
+    state.basemap = [state.basemap, stored].find((k) => k && basemaps.some((b) => b.key === k)) || first;
+    state.defaultBasemap = first;
+    useBasemap(style, basemaps.find((b) => b.key === state.basemap));
     const tiles = style.sources.tripletrail.tiles[0];
     const q = filterQuery(state.chosen, state.colors);
     if (q) style.sources.tripletrail.tiles = [tiles + "?" + q];
@@ -134,7 +169,12 @@ window.TripleTrailMap = (function () {
       zoom: 1,
       transformRequest: (url) => (url.startsWith(location.origin) ? { url, headers: headers() } : { url }),
     });
+    loaded = false;
+    map.once("load", () => { loaded = true; });
     map.addControl(new lib.NavigationControl(), "top-right");
+    map.addControl(mapButtons(name, basemaps, state), "top-right");
+    // Fullscreen takes the layer list and the detail panel along.
+    map.addControl(new lib.FullscreenControl({ container: canvas.parentElement }), "top-right");
     map.addControl(new lib.ScaleControl(), "bottom-left");
     const ids = new Set(style.layers.filter((l) => l.source === "tripletrail").map((l) => l.id));
     // A view picked: its layers, filters and colours, on the map as it is.
@@ -186,6 +226,81 @@ window.TripleTrailMap = (function () {
     }
   }
 
+  /** The base maps a viewer can pick: the server's (`tripletrail:basemaps`), the first also in
+   *  grey so coloured features stand out, and none (the page's own background). */
+  function basemapChoices(style) {
+    const listed = ((style.metadata && style.metadata["tripletrail:basemaps"]) || []).filter((b) => b && b.key && b.tiles);
+    const out = [];
+    listed.forEach((b, i) => {
+      out.push(b);
+      if (i === 0) out.push({ ...b, key: "grey", title: b.title + " in grey", grey: true });
+    });
+    out.push({ key: "none", title: "No base map", tiles: null, attribution: "" });
+    return out;
+  }
+
+  /** Puts base map `b` under the layers of a style not drawn yet. */
+  function useBasemap(style, b) {
+    delete style.sources.basemap;
+    style.layers = style.layers.filter((l) => l.id !== "basemap");
+    if (!b || !b.tiles) return;
+    style.sources.basemap = basemapSource(b);
+    // Over the plain background, if the style has one, under everything else.
+    const at = style.layers.findIndex((l) => l.type !== "background");
+    style.layers.splice(at < 0 ? style.layers.length : at, 0, basemapLayer(b));
+  }
+  const basemapSource = (b) => ({ type: "raster", tiles: [b.tiles], tileSize: 256, maxzoom: 19, attribution: b.attribution || "" });
+  const basemapLayer = (b) => ({ id: "basemap", type: "raster", source: "basemap", paint: b.grey ? { "raster-saturation": -1, "raster-contrast": -0.1 } : {} });
+
+  /** Swaps the base map under the layers on the map (its credit goes with its source). */
+  function switchBasemap(b, state) {
+    if (map.getLayer("basemap")) map.removeLayer("basemap");
+    if (map.getSource("basemap")) map.removeSource("basemap");
+    if (b.tiles) {
+      map.addSource("basemap", basemapSource(b));
+      const below = map.getStyle().layers.find((l) => l.type !== "background");
+      map.addLayer(basemapLayer(b), below && below.id);
+    }
+    state.basemap = b.key;
+    try { localStorage.setItem(BASEMAP_KEY, b.key); } catch (e) { /* the link still has it */ }
+    writeState(state);
+  }
+
+  /** The map's own buttons, under its zoom: the full extent of the data, and the base map menu. */
+  function mapButtons(ds, basemaps, state) {
+    const box = el("div", { class: "maplibregl-ctrl maplibregl-ctrl-group map-ctrl" });
+    const extent = el("button", { type: "button", class: "map-ctrl-btn", title: "Zoom to all the data", "aria-label": "Zoom to all the data",
+      onclick: () => fit(ds, true) }, icon("extent"));
+    const menu = el("div", { class: "map-basemaps card", role: "menu", "aria-label": "Base map", hidden: true });
+    const open = el("button", { type: "button", class: "map-ctrl-btn", title: "Base map", "aria-label": "Base map", "aria-haspopup": "menu", "aria-expanded": "false" }, icon("layers"));
+    const close = () => { menu.hidden = true; open.setAttribute("aria-expanded", "false"); };
+    const fill = () => menu.replaceChildren(el("div", { class: "map-basemaps-head small muted" }, "Base map"),
+      ...basemaps.map((b) => el("button", { type: "button", role: "menuitemradio", class: "map-basemap", "aria-checked": String(b.key === state.basemap),
+        onclick: () => { switchBasemap(b, state); close(); open.focus(); } }, b.title)));
+    open.addEventListener("click", () => {
+      if (!menu.hidden) return close();
+      fill();
+      menu.hidden = false;
+      open.setAttribute("aria-expanded", "true");
+      const on = menu.querySelector('[aria-checked="true"]') || menu.querySelector("button");
+      if (on) on.focus();
+    });
+    menu.addEventListener("keydown", (e) => {
+      const items = [...menu.querySelectorAll("button")];
+      const i = items.indexOf(document.activeElement);
+      if (e.key === "Escape") { close(); open.focus(); }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+      }
+    });
+    document.addEventListener("pointerdown", (e) => { if (!box.contains(e.target)) close(); });
+    box.append(extent);
+    // With no base map to pick, no menu.
+    if (basemaps.length > 1) box.append(el("div", { class: "map-basemap-wrap" }, open, menu));
+    return { onAdd: () => box, onRemove: () => box.remove() };
+  }
+
   /** The search box: the features whose labels hold the words typed (the server's full-text
    *  search), best first; one chosen goes on the map, its layer shown, and opens beside it. */
   function searchBox(ds, input, list, collections) {
@@ -201,9 +316,9 @@ window.TripleTrailMap = (function () {
       const minZoom = (c && c.minZoom) || 0;
       map.fitBounds([[w, s], [e, n]], { padding: 80, maxZoom: Math.max(15, minZoom), minZoom, duration: 600 });
       // Its layer on, if it was hidden.
-      const box = c && document.querySelector(`.map-entry[data-id="${CSS.escape(c.id)}"] input[type=checkbox]`);
-      if (box && !box.checked) box.click();
-      detail(ds, r.iri, r.label);
+      const eye = c && document.querySelector(`.map-entry[data-id="${CSS.escape(c.id)}"] .map-eye[aria-pressed="false"]`);
+      if (eye) eye.click();
+      detail(ds, r.iri, r.label, r.collection);
     };
     const ask = async () => {
       const q = input.value.trim();
@@ -333,15 +448,16 @@ window.TripleTrailMap = (function () {
         if (set) set.add(value);
       }
     }
-    return { hidden, chosen, colors, view: params.get("view") || "" };
+    return { hidden, chosen, colors, view: params.get("view") || "", basemap: params.get("basemap") || "" };
   }
 
   /** Writes the hidden layers, filters and colourings into the page's link, keeping the
    *  map's hash. */
-  function writeState({ hidden, chosen, colors, view }) {
+  function writeState({ hidden, chosen, colors, view, basemap, defaultBasemap }) {
     const q = new URLSearchParams(filterQuery(chosen, colors));
     if (hidden.size) q.set("hide", [...hidden].join(","));
     if (view) q.set("view", view);
+    if (basemap && basemap !== defaultBasemap) q.set("basemap", basemap);
     if (preview) q.set("preview", preview);
     const open = new URLSearchParams(location.search).get("feature");
     if (open) q.set("feature", open);
@@ -429,20 +545,50 @@ window.TripleTrailMap = (function () {
       }
       return values;
     };
+    // The eye of each layer, to show it as it turns on or off.
+    const eyes = new Map();
     const toggle = (c, on) => {
       for (const kind of ["fill", "line", "point"]) {
         const id = c.id + "-" + kind;
         if (map && map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
       }
       if (on) hidden.delete(c.id); else hidden.add(c.id);
+      const eye = eyes.get(c.id);
+      if (eye) eyeState(eye, c, on);
       writeState(state);
     };
-    target.replaceChildren(...collections.map((c) => {
-      const box = el("input", { type: "checkbox", checked: !hidden.has(c.id), onchange: (e) => toggle(c, e.target.checked) });
+    const eyeState = (eye, c, on) => {
+      eye.setAttribute("aria-pressed", String(on));
+      eye.title = (on ? "Hide " : "Show ") + c.title;
+      eye.setAttribute("aria-label", eye.title);
+      eye.replaceChildren(icon(on ? "eye" : "eyeOff"));
+      eye.closest(".map-layer") && eye.closest(".map-layer").classList.toggle("map-hidden", !on);
+    };
+    const every = (on) => { for (const c of collections) if (hidden.has(c.id) === on) toggle(c, on); };
+    const allNone = el("div", { class: "map-all" },
+      el("button", { type: "button", class: "btn small", onclick: () => every(true), title: "Show every layer" }, "Show all"),
+      el("button", { type: "button", class: "btn small", onclick: () => every(false), title: "Hide every layer" }, "Hide all"));
+    target.replaceChildren(collections.length > 1 ? allNone : null, ...collections.map((c) => {
+      const eye = el("button", { type: "button", class: "map-eye", onclick: () => toggle(c, hidden.has(c.id)) });
+      eyes.set(c.id, eye);
       const title = c.description ? c.title + ": " + c.description : c.title;
-      const count = el("span", { class: "muted small num" }, c.instances != null ? ui.fmtNum(c.instances) : "");
+      const count = el("span", { class: "muted small num map-count" }, c.instances != null ? ui.fmtNum(c.instances) : "");
       const panel = el("div", { class: "map-facets", hidden: true });
-      const open = el("button", { class: "map-filter", type: "button", title: "Filter " + c.title + " by its values", "aria-expanded": "false" }, "Filter");
+      // How many of its facets filter the layer, on its funnel.
+      const badge = el("span", { class: "map-badge", hidden: true });
+      const open = el("button", { class: "map-filter", type: "button", title: "Filter " + c.title + " by its values", "aria-label": "Filter " + c.title, "aria-expanded": "false" },
+        icon("filter"), badge);
+      const marked = () => {
+        const n = Object.keys(chosen[c.id] || {}).length;
+        badge.textContent = n ? String(n) : "";
+        badge.hidden = !n;
+        open.classList.toggle("on", n > 0);
+        open.setAttribute("aria-label", "Filter " + c.title + (n ? `, ${n} filter${n > 1 ? "s" : ""} on` : ""));
+      };
+      marked();
+      // Below the zoom it is drawn from: a magnifier zooms in to it.
+      const zoomTo = c.minZoom ? el("button", { type: "button", class: "map-zoomto", title: `Zoom in to where ${c.title} is drawn (zoom ${c.minZoom})`,
+        "aria-label": `Zoom in to where ${c.title} is drawn`, onclick: () => map && map.easeTo({ zoom: c.minZoom + 0.01 }) }, icon("zoomIn")) : null;
       const load = async () => {
         const params = new URLSearchParams();
         for (const [key, choice] of Object.entries(chosen[c.id] || {})) append(params, "", key, choice);
@@ -471,7 +617,7 @@ window.TripleTrailMap = (function () {
         }
         const filtered = Object.keys(chosen[c.id] || {}).length > 0;
         count.textContent = filtered ? `${ui.fmtNum(out.features)} of ${ui.fmtNum(c.instances)}` : ui.fmtNum(out.features);
-        open.classList.toggle("on", filtered);
+        marked();
         facets(panel, c, out, filtered);
       };
       const facets = (target, c, out, filtered) => {
@@ -610,13 +756,16 @@ window.TripleTrailMap = (function () {
         open.setAttribute("aria-expanded", "true");
         load();
       }
-      return el("div", { class: "map-entry", "data-id": c.id },
+      const row = el("div", { class: "map-entry", "data-id": c.id },
         el("div", { class: "map-layer", "data-min": String(c.minZoom || 0), title },
-          el("label", { class: "map-check" }, box, el("span", { class: "map-swatch", style: "background:" + c.color }), el("span", { class: "map-name" }, c.title)),
+          eye,
+          el("span", { class: "map-swatch", style: "background:" + c.color }), el("span", { class: "map-name" }, c.title),
+          zoomTo,
           count,
-          c.minZoom ? el("span", { class: "muted small map-from" }, "from zoom " + c.minZoom) : null,
           open),
         panel);
+      eyeState(eye, c, !hidden.has(c.id));
+      return row;
     }));
   }
 
@@ -629,7 +778,7 @@ window.TripleTrailMap = (function () {
   }
 
   /** Fits the map to the collections' extents (from the OGC API), or keeps the world. */
-  async function fit(ds) {
+  async function fit(ds, animate) {
     try {
       const out = await getJson(service(ds, "ogc/collections"));
       let b = null;
@@ -638,7 +787,7 @@ window.TripleTrailMap = (function () {
         if (!bbox || bbox.length < 4 || !bbox.every(Number.isFinite)) continue;
         b = b ? [Math.min(b[0], bbox[0]), Math.min(b[1], bbox[1]), Math.max(b[2], bbox[2]), Math.max(b[3], bbox[3])] : bbox.slice(0, 4);
       }
-      if (b && map && shown === ds) map.fitBounds([[b[0], Math.max(b[1], -85)], [b[2], Math.min(b[3], 85)]], { padding: 40, maxZoom: 16, animate: false });
+      if (b && map && shown === ds) map.fitBounds([[b[0], Math.max(b[1], -85)], [b[2], Math.min(b[3], 85)]], { padding: 40, maxZoom: 16, animate: !!animate });
     } catch (e) { /* the world view stays */ }
   }
 
@@ -658,7 +807,7 @@ window.TripleTrailMap = (function () {
       const a = el("a", { href: describeUrl(ds, iri), title: iri, onclick: (ev) => {
         if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button !== 0) return;
         ev.preventDefault();
-        detail(ds, iri, a.textContent);
+        detail(ds, iri, a.textContent, c.id);
       } }, short(iri));
       links.set(iri, a);
       return el("li", {}, el("span", { class: "map-swatch", style: "background:" + c.color, title: c.title }), el("span", {}, a, el("span", { class: "muted small" }, " " + c.title)), ui.copyButton(iri));
@@ -667,7 +816,7 @@ window.TripleTrailMap = (function () {
       seen.size > MAX_PICKED ? el("p", { class: "muted small" }, `and ${seen.size - MAX_PICKED} more: zoom in`) : null);
     new lib.Popup({ maxWidth: "360px" }).setLngLat(e.lngLat).setDOMContent(body).addTo(map);
     // One feature: its page opens beside the map at once.
-    if (seen.size === 1) detail(ds, picked[0][0], short(picked[0][0]));
+    if (seen.size === 1) detail(ds, picked[0][0], short(picked[0][0]), picked[0][1].id);
     try {
       for (const [iri, label] of await labels(ds, picked.map(([iri]) => iri))) {
         const a = links.get(iri);
@@ -691,11 +840,13 @@ window.TripleTrailMap = (function () {
   /** The detail panel: the feature's describe page beside the map, fetched with the caller's
    *  headers (so it works on datasets that need a key), its links to other resources opening
    *  in the panel too. */
-  async function detail(ds, iri, title) {
+  async function detail(ds, iri, title, collection) {
     const panel = document.getElementById("map-detail");
     if (!panel) return;
+    highlight(iri, collection);
     const wrap = panel.parentElement;
     const close = el("button", { class: "icon-btn close", type: "button", title: "Close", "aria-label": "Close", onclick: () => {
+      highlight(null);
       setFeature(null);
       panel.hidden = true;
       wrap.classList.remove("with-detail");
@@ -746,6 +897,39 @@ window.TripleTrailMap = (function () {
         }
       });
     }, { once: true });
+  }
+
+  /** Outlines feature `iri` of collection `collection` on the map:
+   *  an area with a light fill and an outline, a line with a light band and an edge on both
+   *  sides, a point with a ring. Without the collection, the one whose loaded tiles have the
+   *  feature. `null` takes the outline away. */
+  function highlight(iri, collection) {
+    if (!map) return;
+    const run = () => {
+      for (const id of ["sel-fill", "sel-outline", "sel-band", "sel-line", "sel-point"]) if (map.getLayer(id)) map.removeLayer(id);
+      if (!iri) return;
+      const has = ["==", ["get", "iri"], iri];
+      const layer = collection || (drawn.find((c) => map.getSource("tripletrail") &&
+        map.querySourceFeatures("tripletrail", { sourceLayer: c.id, filter: has }).length) || {}).id;
+      if (!layer) return;
+      const of = (types) => ["all", has, ["in", ["geometry-type"], ["literal", types]]];
+      const areas = of(["Polygon", "MultiPolygon"]);
+      const lines = of(["LineString", "MultiLineString"]);
+      const base = { source: "tripletrail", "source-layer": layer };
+      const round = { "line-cap": "round", "line-join": "round" };
+      const width = (plus) => ["interpolate", ["linear"], ["zoom"], 4, 1 + plus, 14, 3 + plus];
+      // The band under the layers' lines, the rest over everything.
+      const firstLine = map.getStyle().layers.find((l) => l.type === "line" && l.source === "tripletrail");
+      map.addLayer({ id: "sel-band", type: "line", ...base, filter: lines, layout: round,
+        paint: { "line-color": SELECTED, "line-opacity": 0.16, "line-width": width(14) } }, firstLine && firstLine.id);
+      map.addLayer({ id: "sel-fill", type: "fill", ...base, filter: areas, paint: { "fill-color": SELECTED, "fill-opacity": 0.16 } });
+      map.addLayer({ id: "sel-outline", type: "line", ...base, filter: areas, layout: round, paint: { "line-color": SELECTED, "line-width": 2.5 } });
+      map.addLayer({ id: "sel-line", type: "line", ...base, filter: lines, layout: round,
+        paint: { "line-color": SELECTED, "line-width": 2.5, "line-gap-width": width(3) } });
+      map.addLayer({ id: "sel-point", type: "circle", ...base, filter: of(["Point", "MultiPoint"]),
+        paint: { "circle-radius": 14, "circle-color": SELECTED, "circle-opacity": 0.16, "circle-stroke-width": 3, "circle-stroke-color": SELECTED } });
+    };
+    if (loaded) run(); else map.once("load", run);
   }
 
   /** The end of an IRI, after its last `/`, `#` or `:`. */
