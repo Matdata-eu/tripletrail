@@ -407,6 +407,7 @@ fn covered(p: &GraphPattern) -> bool {
             expression: None,
         } => covered(left) && covered(right),
         G::Filter { expr, inner } => covered_filter(expr) && covered(inner),
+        G::Path { path, .. } => crate::idtree::closure_path(path).is_some(),
         _ => false,
     }
 }
@@ -420,7 +421,8 @@ fn covered_filter(e: &Expression) -> bool {
 fn worth(p: &GraphPattern) -> bool {
     use GraphPattern as G;
     match p {
-        G::Minus { .. } | G::Filter { .. } => true,
+        // A closure the evaluator would find one start at a time.
+        G::Minus { .. } | G::Filter { .. } | G::Path { .. } => true,
         G::Join { left, right } | G::LeftJoin { left, right, .. } | G::Union { left, right } => {
             worth(left) || worth(right)
         }
