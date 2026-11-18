@@ -542,6 +542,28 @@ fn compare(union_default_graph: bool, name: &str) {
                 check(format!("POST {path} {q}"), send(&pair.a), send(&pair.b));
             }
         }
+        // `search/similar` with its parameters as a form, as the Search page sends them: a
+        // reader of some graphs is answered as by the GET, and a hidden resource finds nothing.
+        for form in [
+            "property=urn:x:emb&vector=%5B1,0%5D&k=3",
+            "property=urn:x:emb&iri=urn:x:rel0&k=2",
+            "property=urn:x:emb&iri=urn:x:sec1",
+        ] {
+            let send = |base: &str| {
+                ask(
+                    base,
+                    "POST",
+                    "/ds/search/similar",
+                    Some(("application/x-www-form-urlencoded", form)),
+                )
+            };
+            let (a, b) = (send(&pair.a), send(&pair.b));
+            assert_eq!(a.0, 200, "POST search/similar {form}: {}", a.2);
+            if form.ends_with("sec1") {
+                assert!(a.2.contains(r#""results":[]"#), "{}", a.2);
+            }
+            check(format!("POST search/similar {form}"), a, b);
+        }
     }
     // Most requests are answered (not refused), so the comparison says something.
     assert!(answered > paths().len() * 3 / 2, "{answered} answered");

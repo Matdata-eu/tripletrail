@@ -2008,6 +2008,11 @@ fn route(
         }
     };
     let asked = segments.first().copied().unwrap_or_default();
+    // `search/similar` reads as a GET also when its parameters come as a form.
+    let reads = matches!(method, Method::Get | Method::Head)
+        || (service == "search"
+            && method == Method::Post
+            && segments.get(2..) == Some(&["similar"][..]));
     // A caller that may read only some graphs gets the services that keep to them.
     let partial_ok = matches!(
         service,
@@ -2017,7 +2022,7 @@ fn route(
         || (matches!(
             service,
             "get" | "describe" | "ogc" | "tiles" | "api" | "search"
-        ) && matches!(method, Method::Get | Method::Head))
+        ) && reads)
         // REST writes go through the engine, which checks each graph written (#201).
         || service == "api";
     // Row rules apply to queries, explain, descriptions, Graph Store reads, OGC and tiles
@@ -2029,7 +2034,7 @@ fn route(
         || (matches!(
             service,
             "describe" | "get" | "ogc" | "tiles" | "api" | "search"
-        ) && matches!(method, Method::Get | Method::Head));
+        ) && reads);
     check_access(
         state,
         context,
@@ -2225,15 +2230,40 @@ fn route(
             );
         }
         "search" => {
-            if !matches!(method, Method::Get | Method::Head) {
-                return Err(HttpError(405, format!("{method} is not allowed here")));
-            }
             let what = match segments.get(2..) {
                 Some(
                     [w @ ("labels" | "classes" | "results" | "sparql" | "values" | "similar")],
                 ) => *w,
                 _ => return Err(HttpError(404, "Not found".to_owned())),
             };
+            let mut params = params;
+            match method {
+                Method::Get | Method::Head => {}
+                // A long query vector (768 numbers make 17 KB) does not fit in a URL behind
+                // most proxies: `similar` also takes its parameters as a form.
+                Method::Post if what == "similar" => {
+                    let kind = request_header(request, "Content-Type")
+                        .and_then(|t| t.split(';').next())
+                        .map(str::trim);
+                    if !kind.is_some_and(|k| {
+                        k.eq_ignore_ascii_case("application/x-www-form-urlencoded")
+                    }) {
+                        return Err(HttpError(
+                            415,
+                            "POST takes Content-Type: application/x-www-form-urlencoded".to_owned(),
+                        ));
+                    }
+                    let body = read_body(request, state.options.max_body)?;
+                    params = Params(
+                        params
+                            .0
+                            .into_iter()
+                            .chain(form_urlencoded::parse(body.as_bytes()).into_owned())
+                            .collect(),
+                    );
+                }
+                _ => return Err(HttpError(405, format!("{method} is not allowed here"))),
+            }
             context.operation = Some(Operation::Read);
             let entry = context.dataset.clone().expect("set above");
             // With `preview=`, the shapes of a preview in place of the dataset's own.

@@ -2713,7 +2713,8 @@ magnifier icon that opens it.
 
 ### Similar resources
 
-`GET /{ds}/search/similar?property=…&vector=[…]` (or `&iri=…`) gives the `k` resources
+`GET /{ds}/search/similar?property=…&vector=[…]` (or `&iri=…`), or the same parameters as a
+`POST` form for a long vector, gives the `k` resources
 nearest a vector, with their scores and descriptions in JSON-LD, for retrieval (GraphRAG): see
 [vector search](vector-search.md#retrieval-for-graphrag).
 
