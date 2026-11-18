@@ -58,7 +58,7 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
 - **Counts on term ids.** Counts the stored counts can't answer are computed on term ids
   without building SPARQL solutions (#167): a basic graph pattern is joined in the store
   (merge, hash or index nested-loop joins, `Snapshot::count_ids`), and joins, `OPTIONAL`,
-  `MINUS`, `UNION`, `FILTER (NOT) EXISTS` and filters over them run on tables of ids (`crates/tripletrail/src/idtree.rs`). A small left side passes its values to the right
+  `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, transitive paths and filters over them run on tables of ids (`crates/tripletrail/src/idtree.rs`). A small left side passes its values to the right
   side, which then looks them up instead of scanning (`Snapshot::join_ids_from`). Shapes whose
   result on ids isn't certain (a shared variable that may be unbound, `=` between different
   literals, a filtered `OPTIONAL`) are evaluated as usual. Filters on ids: `BOUND`, `!`,
@@ -102,6 +102,18 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   BSBM 1M, the Sparqloscope MINUS / EXISTS / UNION queries returning their rows instead of a
   count: geometric mean 70 → 39 ms (`minus-join-small-large` 55 → 2 ms,
   `exists-join-3-star-2` 84 → 17 ms).
+  Transitive paths are in the tables too (#11): `?s <p>+ ?o`, `?s ^<p>+ ?o`, and `<p>*`
+  with one end constant, are the pairs of a search over the predicate's edges on ids, each
+  end once per start, as SPARQL's paths give them. The search starts from a constant end;
+  else, joined with other patterns, from the values they give (the path comes after them in
+  the join), backwards when they bind the object; else from every node with an edge. A few
+  starts are searched by looking up their edges level by level, many by reading all the
+  predicate's edges once. A part with a path joined with patterns outside it (a `VALUES`
+  block, say) is left to the evaluator, which also starts from those values. On a tree of
+  200,000 nodes (1.48 million pairs): `GROUP BY ?o` with `COUNT` over `?s <p>+ ?o`
+  1.05 → 0.19 s, the path joined with a class and counted 1.61 → 0.05 s, and
+  `?s ex:id "rare" . ?s <p>+ ?o` stays at about 1 ms. A path with the same variable at both
+  ends, `*` between two free variables, or other path expressions are left to the evaluator.
   `ORDER BY ?a DESC(?b) ... LIMIT n` (with `OFFSET`, `DISTINCT` or `REDUCED`) over a pattern
   the tables cover is ordered on ids too: IRIs and simple strings by their string ranks
   (#171), integers and booleans by value, unbound values first, and only the first

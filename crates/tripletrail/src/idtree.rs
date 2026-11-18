@@ -11,8 +11,9 @@
 //! evaluated as usual.
 
 use oxigraph::sparql::Variable;
+use spargebra::algebra::PropertyPathExpression;
 use spargebra::algebra::{Expression, Function, GraphPattern};
-use spargebra::term::NamedNodePattern;
+use spargebra::term::{NamedNodePattern, TermPattern};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use tripletrail_store::{GraphSelector, IdSlot, IdTriple, Kind, Snapshot, TermId};
@@ -28,6 +29,60 @@ const LOOKUP: f64 = 40.0;
 /// A key found by walking a sorted scan forward costs about as much as scanning this many
 /// quads.
 const WALK: f64 = 4.0;
+/// The predicate of `<p>+`, `^<p>+` (also `(^<p>)+`) and `<p>*` forms, whether it is
+/// followed backwards, and whether a zero-length path counts.
+pub(crate) fn closure_path(
+    path: &PropertyPathExpression,
+) -> Option<(&spargebra::term::NamedNode, bool, bool)> {
+    use PropertyPathExpression as P;
+    let (inner, zero, outer_reverse) = match path {
+        P::OneOrMore(p) => (&**p, false, false),
+        P::ZeroOrMore(p) => (&**p, true, false),
+        P::Reverse(p) => match &**p {
+            P::OneOrMore(p) => (&**p, false, true),
+            P::ZeroOrMore(p) => (&**p, true, true),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    match inner {
+        P::NamedNode(n) => Some((n, outer_reverse, zero)),
+        P::Reverse(p) => match &**p {
+            P::NamedNode(n) => Some((n, !outer_reverse, zero)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The operands of a tree of joins, in order.
+fn joined_parts<'p>(p: &'p GraphPattern, out: &mut Vec<&'p GraphPattern>) {
+    match p {
+        GraphPattern::Join { left, right } => {
+            joined_parts(left, out);
+            joined_parts(right, out);
+        }
+        other => out.push(other),
+    }
+}
+
+/// Whether `p` has a path, outside an `EXISTS`.
+pub(crate) fn has_path(p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::Path { .. } => true,
+        GraphPattern::Join { left, right }
+        | GraphPattern::LeftJoin { left, right, .. }
+        | GraphPattern::Minus { left, right }
+        | GraphPattern::Union { left, right } => has_path(left) || has_path(right),
+        GraphPattern::Filter { inner, .. } => has_path(inner),
+        _ => false,
+    }
+}
+
+/// A start searched by looking its edges up costs about as much as reading this many of
+/// the predicate's edges: fewer starts than the edges over this are searched level by level.
+const LEVEL_COST: f64 = 64.0;
+
 /// The id of an unbound value: 0 is the default graph, never a subject, predicate or object.
 const UNBOUND: TermId = TermId(0);
 
@@ -76,10 +131,17 @@ impl Eval<'_> {
         }
         let t = match p {
             GraphPattern::Bgp { patterns } => self.bgp(patterns)?,
-            GraphPattern::Join { left, right } => {
-                let l = self.eval(left)?;
-                let r = self.right(&l, right)?;
-                join(&l, &r, self.cancelled)?
+            GraphPattern::Join { .. } => {
+                // The parts joined, paths last: they start from the values the others give.
+                let mut parts = Vec::new();
+                joined_parts(p, &mut parts);
+                parts.sort_by_key(|p| matches!(p, GraphPattern::Path { .. }));
+                let mut t = self.eval(parts[0])?;
+                for part in &parts[1..] {
+                    let r = self.right(&t, part)?;
+                    t = join(&t, &r, self.cancelled)?;
+                }
+                t
             }
             GraphPattern::LeftJoin {
                 left,
@@ -113,9 +175,268 @@ impl Eval<'_> {
                     self.filter(expr, t)?
                 }
             }
+            GraphPattern::Path {
+                subject,
+                path,
+                object,
+            } => self.path(subject, path, object, None)?,
             _ => return None,
         };
         (t.ids.len() <= max_ids()).then_some(t)
+    }
+
+    /// `?s <p>+ ?o`, `?s ^<p>+ ?o`, and with a constant end `<p>*` too (#11): the pairs of
+    /// the transitive closure of the predicate's edges, each end once per start (as SPARQL's
+    /// paths give them). The starts are a constant end, else the values `seed` (the rows the
+    /// path is joined with) gives one end, searched from that end, else every node with an
+    /// edge. A few starts are searched by looking their edges up level by level; many, by
+    /// reading all the predicate's edges once.
+    fn path(
+        &self,
+        subject: &TermPattern,
+        path: &PropertyPathExpression,
+        object: &TermPattern,
+        seed: Option<&Table>,
+    ) -> Option<Table> {
+        let (predicate, reverse, zero) = closure_path(path)?;
+        let end = |t: &TermPattern| match t {
+            TermPattern::Variable(v) => Some(Err(v.clone())),
+            TermPattern::NamedNode(n) => Some(Ok(self.snapshot.term_id(n.as_ref().into())?)),
+            TermPattern::Literal(l) => Some(Ok(self.snapshot.term_id(l.as_ref().into())?)),
+            _ => None,
+        };
+        // The direction the edges are followed in: from the subject, unless the subject is
+        // the variable and the object the constant.
+        let (mut from, mut to) = (end(subject)?, end(object)?);
+        let mut forward = !reverse;
+        if from.is_err() && to.is_ok() {
+            std::mem::swap(&mut from, &mut to);
+            forward = !forward;
+        }
+        let mut to = match (to, &from) {
+            (Err(v), Err(u)) if v != *u => v,
+            (Err(v), Ok(_)) => v,
+            // The same variable at both ends, or both ends constant: the evaluator's.
+            _ => return None,
+        };
+        // A seed that binds an end in every row gives the starts, from that end.
+        let bound = |v: &Variable| {
+            let t = seed?;
+            let c = t.col(v).filter(|&c| !t.maybe[c])?;
+            let mut values: Vec<TermId> = (0..t.len()).map(|r| t.row(r)[c]).collect();
+            values.sort_unstable();
+            values.dedup();
+            Some(values)
+        };
+        let starts: Option<Vec<TermId>> = match &mut from {
+            Ok(id) => Some(vec![*id]),
+            Err(u) => match bound(u) {
+                Some(values) => Some(values),
+                None => match bound(&to) {
+                    Some(values) => {
+                        std::mem::swap(u, &mut to);
+                        forward = !forward;
+                        Some(values)
+                    }
+                    None => None,
+                },
+            },
+        };
+        if zero && starts.is_none() {
+            // A zero-length path between two free variables: every term of the graph.
+            return None;
+        }
+        let ids = match starts {
+            Some(starts) if (starts.len() as f64) * LEVEL_COST < self.edge_estimate(predicate) => {
+                self.closure_by_levels(predicate, forward, zero, &starts, from.is_err())?
+            }
+            starts => self.closure_of_all(predicate, forward, zero, starts, from.is_err())?,
+        };
+        let vars = match from {
+            Ok(_) => vec![to],
+            Err(v) => vec![v, to],
+        };
+        Some(Table {
+            ones: ids.len() / vars.len(),
+            maybe: vec![false; vars.len()],
+            vars,
+            ids,
+        })
+    }
+
+    fn edge_estimate(&self, predicate: &spargebra::term::NamedNode) -> f64 {
+        match self.snapshot.term_id(predicate.as_ref().into()) {
+            Some(p) => self.snapshot.estimate_ids(None, Some(p), None, self.graph) as f64,
+            None => 0.0,
+        }
+    }
+
+    /// The pattern of an edge followed from `__path_a` to `__path_b`.
+    fn edge(
+        predicate: &spargebra::term::NamedNode,
+        forward: bool,
+    ) -> (spargebra::term::TriplePattern, Variable, Variable) {
+        let (a, b) = (
+            Variable::new_unchecked("__path_a"),
+            Variable::new_unchecked("__path_b"),
+        );
+        let (s, o) = if forward { (&a, &b) } else { (&b, &a) };
+        let t = spargebra::term::TriplePattern {
+            subject: s.clone().into(),
+            predicate: NamedNodePattern::NamedNode(predicate.clone()),
+            object: o.clone().into(),
+        };
+        (t, a, b)
+    }
+
+    /// The closure from a few starts: the edges of each level's nodes looked up by their
+    /// values. Rows are (start, end), or the ends alone without `pairs`.
+    fn closure_by_levels(
+        &self,
+        predicate: &spargebra::term::NamedNode,
+        forward: bool,
+        zero: bool,
+        starts: &[TermId],
+        pairs: bool,
+    ) -> Option<Vec<TermId>> {
+        let (pattern, a, b) = Self::edge(predicate, forward);
+        let limit = max_ids();
+        let mut ids = Vec::new();
+        let mut seen: std::collections::HashSet<(TermId, TermId)> = Default::default();
+        let emit = |start: TermId, end: TermId, ids: &mut Vec<TermId>| {
+            if pairs {
+                ids.push(start);
+            }
+            ids.push(end);
+        };
+        let mut frontier: Vec<(TermId, TermId)> = starts.iter().map(|&s| (s, s)).collect();
+        if zero {
+            for &s in starts {
+                seen.insert((s, s));
+                emit(s, s, &mut ids);
+            }
+        }
+        // Each new pair takes its ids in the rows out, two in `seen` and two in `next`.
+        let per_pair = usize::from(pairs) + 5;
+        while !frontier.is_empty() {
+            if (self.cancelled)() {
+                return None;
+            }
+            let mut nodes: Vec<TermId> = frontier.iter().map(|&(_, n)| n).collect();
+            nodes.sort_unstable();
+            nodes.dedup();
+            let level = Table {
+                vars: vec![a.clone()],
+                ones: nodes.len(),
+                ids: nodes,
+                maybe: vec![false],
+            };
+            let edges = self.bgp_from(std::slice::from_ref(&pattern), Some(&level))?;
+            let (ca, cb) = (edges.col(&a)?, edges.col(&b)?);
+            let mut next_of: HashMap<TermId, Vec<TermId>> = HashMap::new();
+            for r in 0..edges.len() {
+                let row = edges.row(r);
+                next_of.entry(row[ca]).or_default().push(row[cb]);
+            }
+            // The most pairs this level can add, before any is made: past the limit, the
+            // evaluator's (it streams them). The edges read and `next_of` hold four ids each.
+            let most: usize = frontier
+                .iter()
+                .map(|(_, n)| next_of.get(n).map_or(0, Vec::len))
+                .sum();
+            let held = ids.len() + 2 * seen.len() + 4 * edges.len();
+            if most.saturating_mul(per_pair).saturating_add(held) > limit {
+                return None;
+            }
+            drop(edges);
+            let mut next = Vec::new();
+            for (i, (start, n)) in frontier.into_iter().enumerate() {
+                if i % 4096 == 4095 && (self.cancelled)() {
+                    return None;
+                }
+                for &m in next_of.get(&n).into_iter().flatten() {
+                    if seen.insert((start, m)) {
+                        emit(start, m, &mut ids);
+                        next.push((start, m));
+                    }
+                }
+            }
+            frontier = next;
+        }
+        Some(ids)
+    }
+
+    /// The closure from `starts`, or from every node with an edge, over all the predicate's
+    /// edges read once.
+    fn closure_of_all(
+        &self,
+        predicate: &spargebra::term::NamedNode,
+        forward: bool,
+        zero: bool,
+        starts: Option<Vec<TermId>>,
+        pairs_out: bool,
+    ) -> Option<Vec<TermId>> {
+        let (pattern, a, b) = Self::edge(predicate, forward);
+        let edges = self.bgp(std::slice::from_ref(&pattern))?;
+        let (ca, cb) = (edges.col(&a)?, edges.col(&b)?);
+        let mut pairs: Vec<(TermId, TermId)> = (0..edges.len())
+            .map(|r| {
+                let row = edges.row(r);
+                (row[ca], row[cb])
+            })
+            .collect();
+        drop(edges);
+        pairs.sort_unstable();
+        pairs.dedup();
+        let next = |n: TermId| {
+            let start = pairs.partition_point(|&(x, _)| x < n);
+            pairs[start..]
+                .iter()
+                .take_while(move |&&(x, _)| x == n)
+                .map(|&(_, y)| y)
+        };
+        let starts: Vec<TermId> = starts.unwrap_or_else(|| {
+            let mut s: Vec<TermId> = pairs.iter().map(|&(x, _)| x).collect();
+            s.dedup();
+            s
+        });
+        let limit = max_ids();
+        let mut ids: Vec<TermId> = Vec::new();
+        let mut seen: HashMap<TermId, usize> = HashMap::new();
+        let mut stack: Vec<TermId> = Vec::new();
+        for (i, &start) in starts.iter().enumerate() {
+            if i % 4096 == 0 && (self.cancelled)() {
+                return None;
+            }
+            let emit = |end: TermId, ids: &mut Vec<TermId>| {
+                if pairs_out {
+                    ids.push(start);
+                }
+                ids.push(end);
+            };
+            if zero {
+                seen.insert(start, i);
+                emit(start, &mut ids);
+            }
+            stack.clear();
+            stack.push(start);
+            while let Some(n) = stack.pop() {
+                for m in next(n) {
+                    if seen.insert(m, i) != Some(i) {
+                        emit(m, &mut ids);
+                        stack.push(m);
+                        // A node with many edges: checked as its targets are added.
+                        if ids.len() > limit {
+                            return None;
+                        }
+                        if ids.len().is_multiple_of(65536) && (self.cancelled)() {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        Some(ids)
     }
 
     /// The solutions of `p`, the right side of an operator over `t`'s rows: those of a basic
@@ -124,6 +445,14 @@ impl Eval<'_> {
     fn right(&self, t: &Table, p: &GraphPattern) -> Option<Table> {
         match p {
             GraphPattern::Bgp { patterns } => self.bgp_from(patterns, Some(t)),
+            GraphPattern::Path {
+                subject,
+                path,
+                object,
+            } => {
+                let r = self.path(subject, path, object, Some(t))?;
+                (r.ids.len() <= max_ids()).then_some(r)
+            }
             _ => self.eval(p),
         }
     }
@@ -131,6 +460,9 @@ impl Eval<'_> {
     /// The quads all the triple patterns of `p` match, each on its own: about what the
     /// evaluator reads for it.
     pub(crate) fn input_estimate(&self, p: &GraphPattern) -> f64 {
+        if has_path(p) {
+            return f64::INFINITY;
+        }
         let mut total = 0.0;
         let mut add = |patterns: &[spargebra::term::TriplePattern]| {
             if let Some(compiled) = self.snapshot.compile_bgp(patterns, &[]) {
@@ -1734,6 +2066,11 @@ impl Eval<'_> {
         right_vars: &[Variable],
         how: Keyed,
     ) -> Option<u64> {
+        // A path is searched from the values the other side gives (`eval`), which may be few:
+        // counting each side on its own would search it from every node.
+        if has_path(left) || has_path(right) {
+            return None;
+        }
         let shared: Vec<Variable> = in_scope(left)
             .into_iter()
             .filter(|v| right_vars.contains(v))
