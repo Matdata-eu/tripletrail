@@ -353,7 +353,8 @@ window.TripleTrailSearch = (function () {
           params.vector = JSON.stringify(await AI.embed(c, model.value.trim(), q));
         }
         status.textContent = "Searching…";
-        const r = await ui.api("GET", "/" + encodeURIComponent(ds) + "/search/similar", { params });
+        // A form: a vector of hundreds of numbers is too long for a URL behind most proxies.
+        const r = await ui.api("POST", "/" + encodeURIComponent(ds) + "/search/similar", { form: params });
         if (mine !== similarAsked) return;
         status.textContent = r.results.length ? "" : "Nothing found: is the property's vector as long as the model's?";
         resultsTable(ds, results, r.results);

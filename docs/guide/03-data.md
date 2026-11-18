@@ -373,7 +373,21 @@ curl -s -G http://localhost:7878/rail/search/similar \
 ```
 
 Each result also has its `score` and its `description`; `describe=false` leaves the
-descriptions out. The web UI's Search page asks the same with a text, turned into a vector in
+descriptions out. A real embedding has hundreds of numbers, too long for a URL behind most
+proxies, so send the same parameters as a form, with `POST`:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/rail/search/similar \
+  --data-urlencode property=https://example.org/rail#embedding \
+  --data-urlencode 'vector=[1, 0, 0.1]' -d k=1 -d describe=false | grep -o '"iri":"[^"]*"'
+```
+
+<!-- test: output -->
+```text
+"iri":"https://example.org/rail#BRG"
+```
+ The web UI's Search page asks the same with a text, turned into a vector in
 your browser by your own AI service: see [Find similar](10-maps-and-apis.md#find-similar).
 
 See [vector search](../vector-search.md) for the details.

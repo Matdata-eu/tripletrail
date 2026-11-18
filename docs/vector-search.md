@@ -178,6 +178,11 @@ context an application hands a language model.
   the length, then from the graph.
 - `describe=false` leaves the descriptions out.
 
+The same parameters can be sent as a form, `POST` with
+`Content-Type: application/x-www-form-urlencoded`: a vector of 768 numbers takes about 17 KB of
+URL, more than most proxies take (nginx refuses a request line past 8 KB with 414). Another
+content type is a 415.
+
 The answer is JSON: `{"property", "k", "results": [{"iri", "score", "description"}]}`, best
 first, each resource once with its best score: a resource with several vectors does not
 take the place of others. Each `description` is the resource's concise bounded description in JSON-LD (its
@@ -193,6 +198,10 @@ key. The web UI's Search page does it in the browser with the user's own AI serv
 
 ```sh
 curl -s -G http://localhost:7878/rail/search/similar \
+  --data-urlencode property=https://example.org/rail#embedding \
+  --data-urlencode 'vector=[0.9, 0.1, 0.2]' -d k=5
+# The same as a form, for a long vector:
+curl -s http://localhost:7878/rail/search/similar \
   --data-urlencode property=https://example.org/rail#embedding \
   --data-urlencode 'vector=[0.9, 0.1, 0.2]' -d k=5
 ```

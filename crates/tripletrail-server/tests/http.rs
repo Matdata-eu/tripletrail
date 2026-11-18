@@ -1999,6 +1999,27 @@ ex:twice rdfs:label "Two vectors" ; ex:embedding "[1, 0, 0.1]"^^tt:vector , "[1,
     ] {
         assert_eq!(get(&bad), Err(400), "{bad:?}");
     }
+    // As a form: a long vector does not fit in a URL behind most proxies. 768 numbers are
+    // longer than this dataset's vectors, so they find nothing, without a 414.
+    let post = |form: &[(&str, &str)]| match ureq::post(&base).send_form(form) {
+        Ok(r) => Ok(serde_json::from_str::<serde_json::Value>(&body(r)).unwrap()),
+        Err(ureq::Error::Status(code, _)) => Err(code),
+        Err(e) => panic!("{e}"),
+    };
+    let found = post(&[property, ("vector", "[1, 0, 0.1]"), ("k", "1")]).unwrap();
+    assert_eq!(found["results"][0]["iri"], "http://example.com/twice");
+    let long = format!("[{}]", vec!["0.0123456789"; 768].join(", "));
+    let found = post(&[property, ("vector", &long)]).unwrap();
+    assert_eq!(found["results"], serde_json::json!([]));
+    assert_eq!(post(&[("vector", "[1, 0, 0]")]), Err(400));
+    let json = ureq::post(&base)
+        .set("Content-Type", "application/json")
+        .send_string("{}");
+    assert!(matches!(json, Err(ureq::Error::Status(415, _))));
+    // Only `similar` takes a POST.
+    let classes = base.replace("similar", "classes");
+    let posted = ureq::post(&classes).send_form(&[]);
+    assert!(matches!(posted, Err(ureq::Error::Status(405, _))));
 }
 
 /// `iri=` reads the resource's vector in the named graphs too, as the search reads theirs,
