@@ -13,8 +13,8 @@ use crate::{
 };
 use json_event_parser::{JsonEvent, WriterJsonSerializer};
 use oxiri::Iri;
-#[cfg(feature = "sparql-12")]
 use oxrdf::vocab::xsd;
+#[cfg(feature = "sparql-12")]
 use oxrdf::{BaseDirection, NamedOrBlankNode};
 use oxrdf::{BlankNode, GraphName, Literal, NamedNode, Term, Triple, Variable};
 use oxsdatatypes::{DateTime, DayTimeDuration, Decimal, Double, Float, Integer};
