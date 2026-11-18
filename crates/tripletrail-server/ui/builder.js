@@ -283,7 +283,7 @@ window.TripleTrailSearch = (function () {
       ? el("table", { class: "grid" },
         el("thead", {}, el("tr", {}, el("th", {}, r.title), r.columns.map((c) => el("th", {}, c.title)))),
         el("tbody", {}, r.rows.map((row) => el("tr", {},
-          el("td", { class: "name" }, el("a", { href: row.describe, title: row.iri }, row.label || short(row.iri)), " ",
+          el("td", { class: "name" }, el("a", { href: row.describe, title: row.iri }, row.label || short(row.iri)), ui.copyButton(row.iri),
             el("a", { class: "muted small", href: "/$/ui/explore/" + encodeURIComponent(shown.ds) + "?iri=" + encodeURIComponent(row.iri), "data-route": true,
               title: "Walk the graph from " + (row.label || row.iri) }, "explore")),
           r.columns.map((c) => cell(row.values[c.key], c, row.moreValues && row.moreValues[c.key]))))))
@@ -294,8 +294,7 @@ window.TripleTrailSearch = (function () {
 
   async function copyLink() {
     writeModel();
-    try { await navigator.clipboard.writeText(location.href); ui.toast("Link copied"); }
-    catch (e) { ui.toast("Copy the address bar's link to share this search"); }
+    await ui.copyText(location.href, "Link");
   }
   async function openInQuery() {
     let q;
