@@ -1,0 +1,136 @@
+name: Helm chart
+
+# Lints and renders deploy/helm/tripletrail on pull requests that change it. Started by hand
+# (Actions tab), it also installs the chart on a kind cluster with the published image
+# (`main` by default) and runs `helm test`; with "publish" ticked it then pushes the chart to
+# oci://ghcr.io/matdata-eu/charts/tripletrail (version from Chart.yaml). With the repository
+# variable COSIGN_SIGN set to `true` it also signs the chart with cosign: off until the
+# repository is public (#150), because keyless signing writes the repository name, workflow,
+# ref and commit SHA to Sigstore's public transparency log, for good.
+#
+#
+#   helm install mg oci://ghcr.io/matdata-eu/charts/tripletrail --version <version>
+
+on:
+  pull_request:
+    paths: ["deploy/helm/**", ".github/workflows/helm.yml"]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Image tag of ghcr.io/matdata-eu/tripletrail to install
+        default: main
+      publish:
+        description: Push the chart to ghcr.io after helm test passes
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - run: helm lint --strict deploy/helm/tripletrail
+      # Every optional part on, so each template renders at least once.
+      - name: Render with every option
+        run: |
+          helm template t deploy/helm/tripletrail \
+            --set adminToken.value=x --set updateToken.existingSecret=u \
+            --set authConfig.enabled=true --set limits.enabled=true \
+            --set 'attach[0]=dim=/data/dim:ro' --set 'aliases[0]=kg=dim' \
+            --set ingress.enabled=true --set metrics.serviceMonitor.enabled=true \
+            --set persistence.existingClaim=data > all.yaml
+          helm template t deploy/helm/tripletrail --set persistence.enabled=false > minimal.yaml
+          grep -q 'kind: ServiceMonitor' all.yaml
+          grep -q 'TRIPLETRAIL_LIMITS' all.yaml
+          ! grep -q 'kind: PersistentVolumeClaim' minimal.yaml
+
+  kind:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: tripletrail-chart
+      # The repository is private, so is its image: pull it here and hand it to kind.
+      - name: Load the image
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker pull "ghcr.io/matdata-eu/tripletrail:${{ inputs.image_tag }}"
+          kind load docker-image "ghcr.io/matdata-eu/tripletrail:${{ inputs.image_tag }}" --name tripletrail-chart
+      - name: Install
+        run: |
+          helm install mg deploy/helm/tripletrail --wait --timeout 5m \
+            --set image.tag="${{ inputs.image_tag }}" --set image.pullPolicy=Never \
+            --set adminToken.value=chart-test --set persistence.size=1Gi
+      - run: helm test mg --logs
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl get pods -o wide
+          kubectl describe pods
+          kubectl logs deploy/mg-tripletrail --tail=200 || true
+      # On a self-hosted runner the cluster and the image pulled for it go with the job, also
+      # after a failure, instead of staying in its Docker.
+      - name: Remove the cluster and the pulled image
+        if: always() && runner.environment != 'github-hosted'
+        run: |
+          kind delete cluster --name tripletrail-chart 2>/dev/null || true
+          docker image rm -f "ghcr.io/matdata-eu/tripletrail:${{ inputs.image_tag }}" 2>/dev/null || true
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+      # For cosign's keyless signing (only with COSIGN_SIGN).
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - uses: sigstore/cosign-installer@v3
+        if: vars.COSIGN_SIGN == 'true'
+      - name: Package and push
+        id: push
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package deploy/helm/tripletrail -d dist
+          chart=$(ls dist/tripletrail-*.tgz)
+          helm push "$chart" oci://ghcr.io/matdata-eu/charts 2>&1 | tee push.log
+          digest=$(sed -n 's/^Digest: //p' push.log)
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Pushed $(basename "$chart") as ghcr.io/matdata-eu/charts/tripletrail@$digest" >> "$GITHUB_STEP_SUMMARY"
+      # Off until the repository is public: see the top of this file.
+      - name: Sign
+        if: vars.COSIGN_SIGN == 'true'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          echo "$TOKEN" | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
+          cosign sign --yes "ghcr.io/matdata-eu/charts/tripletrail@$DIGEST"
+          echo "Signed ghcr.io/matdata-eu/charts/tripletrail@$DIGEST" >> "$GITHUB_STEP_SUMMARY"

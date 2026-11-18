@@ -1,0 +1,170 @@
+//! FILTERs and `SUM` on the values of inline numbers and dates (issue #170) give the same
+//! solutions as the evaluator: on the tripletrail store they run on ids, on Oxigraph's store
+//! through the evaluator. (Oxigraph's store keeps decimals in canonical form, so the
+//! filter tests compare the subjects, and whole computed decimals are compared as "3.0".)
+
+use oxigraph::io::RdfFormat;
+use oxigraph::sparql::QueryResults;
+use oxigraph::store::Store;
+use tripletrail::Engine;
+
+fn rows(engine: &Engine, query: &str) -> Vec<String> {
+    let QueryResults::Solutions(solutions) = engine.query(query).unwrap() else {
+        panic!("not a SELECT")
+    };
+    let mut out: Vec<String> = solutions
+        .map(|s| {
+            let s = s.unwrap();
+            // Oxigraph's store writes a computed whole decimal as "3", TripleTrail as Jena does
+            // ("3.0", #513): compared in Jena's form.
+            let mut cells: Vec<String> = s
+                .iter()
+                .map(|(v, t)| match t {
+                    oxigraph::model::Term::Literal(l)
+                        if l.datatype() == oxigraph::model::vocab::xsd::DECIMAL
+                            && !l.value().contains('.') =>
+                    {
+                        format!("{v}=\"{}.0\"^^<{}>", l.value(), l.datatype().as_str())
+                    }
+                    t => format!("{v}={t}"),
+                })
+                .collect();
+            cells.sort();
+            cells.join(" ")
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+fn data() -> String {
+    let mut ttl = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    for i in 0..2000_i64 {
+        let s = format!("ex:s{i}");
+        ttl.push_str(&format!("{s} a ex:C{} .\n", i % 4));
+        ttl.push_str(&format!("{s} ex:int {} .\n", (i * 37) % 101 - 50));
+        let frac = ["", ".5", ".25", ".125", ".0", ".50"][i as usize % 6];
+        ttl.push_str(&format!(
+            "{s} ex:dec \"{}{}{frac}\"^^xsd:decimal .\n",
+            if i % 3 == 0 { "-" } else { "" },
+            (i * 13) % 977
+        ));
+        let (y, m, d) = (1995 + i % 20, 1 + i % 12, 1 + i % 28);
+        ttl.push_str(&format!("{s} ex:date \"{y}-{m:02}-{d:02}\"^^xsd:date .\n"));
+        let tz = ["", "Z", "+02:00", "-05:30"][i as usize % 4];
+        ttl.push_str(&format!(
+            "{s} ex:when \"{y}-{m:02}-{d:02}T{:02}:{:02}:{:02}{tz}\"^^xsd:dateTime .\n",
+            i % 24,
+            i % 60,
+            (i * 7) % 60
+        ));
+        // Values that are not inline or not numbers: the ids give up or say error.
+        let odd = match i % 9 {
+            0 => "\"7\"^^xsd:int".to_owned(),
+            1 => "\"1.5E2\"^^xsd:double".to_owned(),
+            2 => "\"text\"".to_owned(),
+            3 => "ex:iri".to_owned(),
+            4 => "\"2.5\"^^xsd:double".to_owned(),
+            _ => format!("{}", i % 13),
+        };
+        ttl.push_str(&format!("{s} ex:mixed {odd} .\n"));
+        if i % 5 == 0 {
+            ttl.push_str(&format!("{s} ex:maybe {} .\n", i % 17));
+        }
+    }
+    ttl
+}
+
+fn engines() -> (Engine, Engine) {
+    let ours = Engine::new_tripletrail();
+    ours.load(RdfFormat::Turtle, data().as_bytes()).unwrap();
+    let reference = Engine::from_store(Store::new().unwrap());
+    reference
+        .load(RdfFormat::Turtle, data().as_bytes())
+        .unwrap();
+    (ours, reference)
+}
+
+const P: &str = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> ";
+
+#[test]
+fn filters_on_numbers_and_dates_match_the_evaluator() {
+    let (ours, reference) = engines();
+    let filters = [
+        "?v > 10",
+        "?v >= -3 && ?v < 20",
+        "?v = 7",
+        "?v = 7.0",
+        "?v != 7",
+        "?v * 2 > 30",
+        "?v + 1.5 <= 0",
+        "ABS(?v) < 5",
+        "-?v > 10",
+        "ROUND(?v) = 3",
+        "CEIL(?v) > FLOOR(?v)",
+        "?v > \"100.25\"^^xsd:decimal",
+        "?v < 1.5E2",
+        "YEAR(?v) = 2005",
+        "MONTH(?v) >= 6 && DAY(?v) < 10",
+        "HOURS(?v) = 13",
+        "MINUTES(?v) < 5",
+        "?v >= \"2005-06-01\"^^xsd:date",
+        "?v < \"2005-06-01T00:00:00Z\"^^xsd:dateTime",
+        "?v < \"2005-06-01T00:00:00\"^^xsd:dateTime",
+        "?v > ?w",
+    ];
+    for p in [
+        "ex:int", "ex:dec", "ex:date", "ex:when", "ex:mixed", "ex:maybe",
+    ] {
+        for f in filters {
+            let q = format!(
+                "{P}SELECT ?s WHERE {{ ?s a ex:C1 . ?s {p} ?v OPTIONAL {{ ?s ex:maybe ?w }} FILTER({f}) }}"
+            );
+            assert_eq!(rows(&ours, &q), rows(&reference, &q), "{q}");
+            let count = format!(
+                "{P}SELECT (COUNT(*) AS ?n) WHERE {{ ?s {p} ?v OPTIONAL {{ ?s ex:maybe ?w }} FILTER({f}) }}"
+            );
+            assert_eq!(rows(&ours, &count), rows(&reference, &count), "{count}");
+        }
+    }
+}
+
+#[test]
+fn sums_match_the_evaluator() {
+    let (ours, reference) = engines();
+    let sums = [
+        "?v",
+        "ABS(?v)",
+        "CEIL(?v)",
+        "FLOOR(?v)",
+        "ROUND(?v)",
+        "?v + ?v",
+        "?v * 3",
+        "?v - 0.75",
+        "?v > 0",
+        "YEAR(?v)",
+        "MONTH(?v)",
+        "DAY(?v)",
+        "HOURS(?v)",
+    ];
+    for p in [
+        "ex:int", "ex:dec", "ex:date", "ex:when", "ex:mixed", "ex:maybe",
+    ] {
+        for e in sums {
+            for q in [
+                format!("{P}SELECT (SUM({e}) AS ?sum) WHERE {{ ?s {p} ?v }}"),
+                format!(
+                    "{P}SELECT ?c (SUM({e}) AS ?sum) (COUNT(*) AS ?n) WHERE {{ ?s {p} ?v ; a ?c }} GROUP BY ?c"
+                ),
+                format!(
+                    "{P}SELECT (SUM({e}) AS ?sum) WHERE {{ ?s a ex:C2 OPTIONAL {{ ?s {p} ?v }} }}"
+                ),
+                format!("{P}SELECT (SUM({e}) AS ?sum) WHERE {{ ?s {p} ?v FILTER(false) }}"),
+            ] {
+                assert_eq!(rows(&ours, &q), rows(&reference, &q), "{q}");
+            }
+        }
+    }
+}

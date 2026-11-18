@@ -1,0 +1,19 @@
+# Test files from SPARQL Anything
+
+The files in this folder come from SPARQL Anything
+(<https://github.com/SPARQL-Anything/sparql.anything>, commit `22b918f`, November 2026),
+Copyright the SPARQL Anything contributors, under the Apache License 2.0 (see `LICENSE`).
+They are copied unchanged from the test resources of its modules:
+
+- `spreadsheet/`: `sparql-anything-spreadsheet/src/test/resources` (`1`, `2`, `NullString`,
+  `NoNullString`, `FormulaEvaluator`, `HeaderRow` `.xls` with their `.nq`/`.trig`, and
+  `Book1.xlsx` with `Book1.nq`).
+- `yaml/`: `sparql-anything-yaml/src/test/resources` (`Foo`, `Map`, `DuplicateKeys` `.yaml`
+  with their `.ttl`, and `test.yaml`).
+- `archive/`: `sparql-anything-archive/src/test/resources` (`test.tar`, `test.tgz`,
+  `test.zip`, and the folder `test` as `folder`).
+- `markdown/`: `sparql-anything-markdown/src/test/resources` (every `.md` with its `.ttl`).
+- `html/`: `sparql-anything-html/src/test/resources` (`HTML1`, `HTML2`, `DIRTY1`, `Base`
+  `.html` with their `.ttl`, `BN.html` with `BN.nq`, and `XML.xml` with `XML.ttl`).
+
+Only the files are reused; TripleTrail's Facade-X code is written independently.

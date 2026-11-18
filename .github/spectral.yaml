@@ -1,0 +1,3 @@
+# Spectral rules for the OpenAPI definitions of the REST API (#143) and OGC API Features: the built-in OpenAPI ruleset,
+# every warning an error. Run by .github/scripts/lint-openapi.sh.
+extends: ["spectral:oas"]

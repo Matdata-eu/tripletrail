@@ -1,0 +1,35 @@
+[
+  {
+    "version": "0.1.0-rc.1",
+    "date": "2026-11-17",
+    "new": [
+      "The project is now called TripleTrail: the binary, packages, image, namespaces (tt:, tts:, ttsh:, ttfx:, ttfn:) and settings (TRIPLETRAIL_*) carry the new name.",
+      "Fuseki parity: full-text search with jena-text's text:query and your own indexed properties, the SHACL and RDF Patch services, compaction and Fuseki's admin endpoints; tripletrail config import-fuseki translates a Fuseki configuration.",
+      "Maps and APIs: OGC API Features and vector tiles, a map page, a REST API and GraphQL generated from your shapes.",
+      "Describe pages, the Workbench and a search builder in the web UI, laid out by your SHACL shapes.",
+      "Facade-X and RML: query CSV, JSON, XML and spreadsheets as RDF, and run RML mappings.",
+      "Access control: users, groups and per-graph rights, with Basic auth, OpenID Connect sign-in and an audit log.",
+      "RDFS and OWL RL entailment into a graph kept up to date with every write, and SHACL rules."
+    ],
+    "improved": [
+      "Faster queries, writes and loads across the board; full-text queries written for Blazegraph and Stardog run unchanged."
+    ]
+  },
+  {
+    "version": "0.0.1",
+    "date": "2026-11-07",
+    "new": [
+      "tripletrail serve replaces Fuseki: the SPARQL 1.1 Protocol and the Graph Store Protocol on Fuseki's URLs, and Fuseki's admin API under /$/ (datasets, backups, tasks, statistics, server).",
+      "A web UI: manage datasets and query them with MatGUI, with a table, map, chart and graph view. MatGUI is built in, so it works without internet access.",
+      "Read-only datasets: attach a published release memory-mapped, so it opens at once and shares memory with the page cache.",
+      "Aliases: point a stable name at a dataset version, swap it to a new release without downtime and roll back the same way.",
+      "Snapshots to a new dataset directory, backups to compressed N-Quads, and restore from a backup.",
+      "Explain shows TripleTrail's plan with row counts and timings, and where the spatial and range indexes were used.",
+      "A Docker image (ghcr.io/matdata-eu/tripletrail) with a health check, /$/ready for load balancers, graceful shutdown and a JSON request log.",
+      "A short tour, About and this list of what is new in each release."
+    ],
+    "improved": [
+      "FILTERs on a numeric range, such as a kilometre post between two values, are answered from a value-ordered index instead of a scan."
+    ]
+  }
+]

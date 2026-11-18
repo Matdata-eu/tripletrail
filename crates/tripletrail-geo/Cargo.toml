@@ -1,0 +1,24 @@
+[package]
+name = "tripletrail-geo"
+description = "GeoSPARQL 1.1 and PostGIS-style ST_* functions for Oxigraph's SPARQL evaluator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+oxigraph.workspace = true
+tripletrail-routing.workspace = true
+geo.workspace = true
+wkt.workspace = true
+serde_json.workspace = true
+zmij = "1"
+geo-traits.workspace = true
+quick-xml.workspace = true
+rstar = "0.12"
+robust = "1.2"
+h3o = { version = "0.11", features = ["geo"] }
+proj4rs = { version = "0.3", default-features = false }
+# The EPSG registry as proj4 strings and WKT, for the codes national.rs has no entry for (CC0-1.0).
+crs-definitions = { version = "0.6", default-features = false, features = ["proj4", "wkt"] }

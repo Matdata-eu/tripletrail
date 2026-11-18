@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TripleTrail</title>
+<link rel="icon" href="/$/ui/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="{{MATGUI}}yasgui.min.css">
+<link rel="stylesheet" href="/$/ui/app.css">
+<script>
+  // Apply the stored theme before anything paints (same key and values as MatGUI).
+  (function () {
+    var pref = "auto";
+    try { pref = localStorage.getItem("tripletrail-theme") || "auto"; } catch (e) {}
+    var dark = pref === "dark" || (pref === "auto" && window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  })();
+</script>
+<script src="/$/ui/ai.js" defer></script>
+<script src="/$/ui/workbench.js" defer></script>
+<script src="/$/ui/access.js" defer></script>
+<script src="/$/ui/shapes.js" defer></script>
+<script src="/$/ui/map.js" defer></script>
+<script src="/$/ui/search.js" defer></script>
+<script src="/$/ui/explore.js" defer></script>
+<script src="/$/ui/builder.js" defer></script>
+<script src="/$/ui/app.js" defer data-matgui="{{MATGUI}}"></script>
+<script src="/$/ui/guide.js" defer data-matgui="{{MATGUI}}" data-version="{{VERSION}}"></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" data-route href="/$/ui/datasets"><span class="logo" aria-hidden="true"></span><span><b>TripleTrail</b> server</span></a>
+  <nav class="tabs" aria-label="Pages">
+    <a href="/$/ui/datasets" data-route data-page="datasets">Datasets</a>
+    <a href="/$/ui/query" data-route data-page="query">Query</a>
+    <a href="/$/ui/map" data-route data-page="map">Map</a>
+    <a href="/$/ui/search" data-route data-page="search">Search</a>
+    <a href="/$/ui/explore" data-route data-page="explore">Explore</a>
+    <a href="/$/ui/shapes" data-route data-page="shapes">Shapes</a>
+    <a href="/$/ui/workbench" data-route data-page="workbench">Workbench</a>
+    <a href="/$/ui/access" data-route data-page="access">Access</a>
+    <a href="/$/ui/tasks" data-route data-page="tasks">Tasks &amp; backups</a>
+    <a href="/$/ui/server" data-route data-page="server">Server</a>
+  </nav>
+  <div class="top-search" id="top-search" role="search" hidden>
+    <svg class="top-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+    <input type="search" placeholder="Search by name  /" aria-label="Search resources by name" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="top-search-list">
+    <select aria-label="Dataset to search" title="Dataset to search"></select>
+    <div class="top-search-list" id="top-search-list" role="listbox" aria-label="Resources found" hidden></div>
+  </div>
+  <div class="top-right">
+    <button class="status-btn" id="status-btn" type="button" title="Readiness"><span class="dot" id="status-dot"></span><span id="status-text">…</span></button>
+    <button class="icon-btn" id="token-btn" type="button" title="Admin token" aria-label="Admin token">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3m-3 3 3 3m-6 0 2 2"/></svg>
+    </button>
+    <button class="icon-btn" id="help-btn" type="button" title="Help: a short tour of the server" aria-label="Help">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.1 6.2a1.95 1.95 0 1 1 2.7 1.8c-.5.2-.8.6-.8 1.1v.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.6" r="1" fill="currentColor"/></svg>
+    </button>
+    <button class="icon-btn" id="about-btn" type="button" title="About, credits and feedback" aria-label="About, credits and feedback">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.2v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.9" r="1" fill="currentColor"/></svg>
+    </button>
+    <button class="icon-btn" id="theme-btn" type="button" title="Theme: auto" aria-label="Theme">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg>
+    </button>
+  </div>
+</header>
+<div id="view-as-banner" class="view-as-banner" role="status" hidden></div>
+
+<main id="main">
+  <section class="page" id="page-datasets" hidden>
+    <dl class="ds-stats" id="overview"></dl>
+    <div class="toolbar">
+      <h1>Datasets</h1>
+      <span class="grow"></span>
+      <button class="btn" id="refresh-btn" type="button">Refresh</button>
+      <button class="btn primary" id="new-btn" type="button">New dataset</button>
+    </div>
+    <div class="card table-wrap">
+      <table class="grid" id="datasets-table">
+        <thead><tr><th>Name</th><th>Mode</th><th class="num">Triples</th><th class="num">Size on disk</th><th class="num">Requests</th><th>Location / target</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty muted" id="datasets-empty" hidden>No datasets yet. Create one, or attach a dataset directory.</p>
+    </div>
+  </section>
+
+  <section class="page page-query" id="page-query" hidden>
+    <div class="query-bar">
+      <label>Dataset <select id="query-ds"></select></label>
+      <span class="chip" id="query-mode"></span>
+      <span class="grow"></span>
+      <button class="btn" id="explain-btn" type="button" title="Run the query and show its plan with row counts and timings">Explain</button>
+    </div>
+    <div id="yasgui"><p class="muted loading">Loading MatGUI…</p></div>
+  </section>
+
+  <section class="page page-map" id="page-map" hidden></section>
+  <section class="page page-search" id="page-search" hidden></section>
+  <section class="page page-explore" id="page-explore" hidden></section>
+  <section class="page page-shapes" id="page-shapes" hidden></section>
+  <section class="page page-workbench" id="page-workbench" hidden></section>
+  <section class="page" id="page-access" hidden></section>
+
+  <section class="page" id="page-tasks" hidden>
+    <div class="toolbar"><h1>Tasks</h1><span class="grow"></span><button class="btn" id="tasks-refresh" type="button">Refresh</button></div>
+    <div class="card table-wrap">
+      <table class="grid" id="tasks-table">
+        <thead><tr><th>Task</th><th>Dataset</th><th>Started</th><th>Finished</th><th class="num">Quads</th><th>Result</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty muted" id="tasks-empty" hidden>No tasks have run since the server started.</p>
+    </div>
+    <div class="toolbar"><h1>Backups</h1><span class="muted small" id="backup-dir"></span></div>
+    <div class="card table-wrap">
+      <table class="grid" id="backups-table">
+        <thead><tr><th>File</th><th class="num">Size</th><th>Written</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty muted" id="backups-empty" hidden>No backups yet.</p>
+    </div>
+  </section>
+
+  <section class="page" id="page-server" hidden>
+    <div class="toolbar"><h1>Server</h1></div>
+    <dl class="ds-stats" id="server-stats"></dl>
+    <div class="card"><dl class="kv" id="server-kv"></dl></div>
+    <p class="muted small">MatGUI is used under the MIT license (<a href="{{MATGUI}}LICENSE" target="_blank" rel="noopener">license</a>); the Workbench uses CodeMirror (<a href="/$/ui/vendor/codemirror/LICENSES.txt" target="_blank" rel="noopener">licenses</a>) and Tabulator (<a href="/$/ui/vendor/tabulator/LICENSE" target="_blank" rel="noopener">license</a>), both MIT. TripleTrail {{VERSION}}.</p>
+  </section>
+</main>
+
+<dialog class="dlg" id="ds-dialog">
+  <div class="dlg-head"><h2 id="ds-title"></h2><button class="icon-btn close" type="button" data-close aria-label="Close">✕</button></div>
+  <div class="dlg-body">
+    <dl class="ds-stats" id="ds-stats"></dl>
+    <dl class="kv" id="ds-kv"></dl>
+    <div class="actions" id="ds-actions"></div>
+    <div id="ds-swap" hidden>
+      <h3>Swap alias</h3>
+      <p class="muted small">New requests go to the chosen dataset at once; requests already running finish on the old one.</p>
+      <div class="row">
+        <select id="swap-to"></select>
+        <label class="check"><input type="checkbox" id="swap-release"> Detach the old target when it is idle</label>
+        <button class="btn primary" id="swap-btn" type="button">Swap</button>
+        <button class="btn" id="rollback-btn" type="button">Roll back</button>
+      </div>
+    </div>
+    <div id="ds-upload" hidden>
+      <h3>Upload data</h3>
+      <div class="row">
+        <input type="file" id="upload-file">
+        <input type="text" id="upload-graph" placeholder="Graph IRI (empty: default graph)">
+        <select id="upload-method"><option value="POST">Add</option><option value="PUT">Replace graph</option></select>
+        <button class="btn primary" id="upload-btn" type="button">Upload</button>
+      </div>
+      <progress id="upload-progress" max="1" value="0" hidden></progress>
+      <p class="small" id="upload-msg"></p>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="dlg" id="new-dialog">
+  <form method="dialog" id="new-form">
+    <div class="dlg-head"><h2>New dataset</h2><button class="icon-btn close" type="button" data-close aria-label="Close">✕</button></div>
+    <div class="dlg-body">
+      <div class="seg" role="radiogroup" id="new-kind">
+        <label><input type="radio" name="kind" value="attach" checked> Attach a directory</label>
+        <label><input type="radio" name="kind" value="disk"> New on disk</label>
+        <label><input type="radio" name="kind" value="mem"> New in memory</label>
+        <label><input type="radio" name="kind" value="alias"> Alias</label>
+      </div>
+      <label class="field">Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" placeholder="network_20261107"></label>
+      <label class="field" data-for="attach">Directory <input name="location" placeholder="/data/network_20261107"></label>
+      <label class="field" data-for="attach">Mode <select name="mode"><option value="read-only">Read-only, memory-mapped</option><option value="read-write">Read-write</option></select></label>
+      <label class="field" data-for="alias">Points at <select name="alias-of"></select></label>
+      <label class="field" data-for="disk mem">Restore from backup <select name="from"><option value="">(empty)</option></select></label>
+      <p class="error small" id="new-error"></p>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit" id="new-submit">Create</button></div>
+  </form>
+</dialog>
+
+<dialog class="dlg" id="token-dialog">
+  <form method="dialog" id="token-form">
+    <div class="dlg-head"><h2>Admin token</h2><button class="icon-btn close" type="button" data-close aria-label="Close">✕</button></div>
+    <div class="dlg-body">
+      <div id="sso-box" hidden>
+        <p class="small" id="sso-who"></p>
+        <div class="row" id="sso-buttons"></div>
+        <p class="muted small">Or use a token:</p>
+      </div>
+      <p class="muted small" id="token-why">Changes to datasets need the server's admin token. It is kept in this browser only.</p>
+      <label class="field">Token <input name="token" type="password" autocomplete="current-password"></label>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" id="token-clear">Forget</button><button class="btn primary" type="submit">Save</button></div>
+  </form>
+</dialog>
+
+<dialog class="dlg wide" id="explain-dialog">
+  <div class="dlg-head"><h2>Query plan</h2><button class="icon-btn close" type="button" data-close aria-label="Close">✕</button></div>
+  <div class="dlg-body"><dl class="ds-stats" id="explain-stats"></dl><div id="explain-tree" class="tree"></div></div>
+</dialog>
+
+<dialog class="dlg" id="confirm-dialog">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="confirm-title"></h2></div>
+    <div class="dlg-body"><p id="confirm-text"></p><label class="check" id="confirm-extra" hidden><input type="checkbox" id="confirm-check"> <span></span></label></div>
+    <div class="dlg-foot"><button class="btn" value="cancel">Cancel</button><button class="btn danger" value="ok" id="confirm-ok">OK</button></div>
+  </form>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<noscript><p class="noscript">The TripleTrail UI needs JavaScript. The SPARQL endpoints work without it.</p></noscript>
+</body>
+</html>

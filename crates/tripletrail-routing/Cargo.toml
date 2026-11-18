@@ -1,0 +1,10 @@
+[package]
+name = "tripletrail-routing"
+description = "Data-model agnostic routing core: pgRouting-shaped edge sets, CSR graphs and shortest-path algorithms"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]

@@ -1,0 +1,16 @@
+[package]
+name = "tripletrail-spatial"
+description = "Spatial index over geo:asWKT geometries and query rewriting of spatial FILTERs into index lookups"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+oxigraph.workspace = true
+spargebra.workspace = true
+geo.workspace = true
+rstar = "0.12"
+tripletrail-geo.workspace = true
+tripletrail-store.workspace = true

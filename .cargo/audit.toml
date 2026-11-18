@@ -1,0 +1,7 @@
+# Advisories cargo audit (CI job `audit`) does not fail on, each with the issue that removes it.
+[advisories]
+ignore = [
+    # pyo3 0.24 in the Python binding; fixed in 0.29: #132.
+    "RUSTSEC-2026-0176",
+    "RUSTSEC-2026-0177",
+]

@@ -1,0 +1,38 @@
+[package]
+name = "tripletrail-python"
+description = "Python binding of TripleTrail: an RDF store, built on Oxigraph, with GeoSPARQL, PostGIS-style functions and pgRouting-style routing"
+version = "0.0.1"
+edition = "2024"
+repository = "https://github.com/Matdata-eu/tripletrail"
+license = "Apache-2.0"
+publish = false
+
+# Built by maturin, outside the main workspace (it links against Python).
+[workspace]
+
+[lib]
+name = "tripletrail_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+tripletrail = { path = "../crates/tripletrail" }
+# RML, R2RML and YARRRML mappings: Engine.run_mapping.
+tripletrail-rml = { path = "../crates/tripletrail-rml" }
+# RDF 1.2 (triple terms, base directions) as in the tripletrail crate, always on.
+oxigraph = { version = "0.5.13", default-features = false, features = ["rdf-12"] }
+pyo3 = { version = "0.30.1", features = ["extension-module", "abi3-py39"] }
+
+[features]
+default = ["rocksdb", "geoparquet"]
+# GeoParquet: Engine.export_geoparquet and Engine.load_geoparquet.
+geoparquet = ["tripletrail/geoparquet"]
+# On-disk stores: Engine(path=...).
+rocksdb = ["oxigraph/rocksdb"]
+
+# As in the main workspace: Oxigraph's SPARQL optimizer with the LATERAL planning fix.
+[patch.crates-io]
+spargebra = { path = "../vendor/spargebra" }
+sparopt = { path = "../vendor/sparopt" }
+spareval = { path = "../vendor/spareval" }
+oxrdfxml = { path = "../vendor/oxrdfxml" }
+sparesults = { path = "../vendor/sparesults" }

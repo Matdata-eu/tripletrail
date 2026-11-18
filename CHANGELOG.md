@@ -1,0 +1,1240 @@
+# Changelog
+
+All notable changes to TripleTrail are listed here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org) from the first release on. Until 1.0, minor
+versions may change the store format and the API; the release notes say how to upgrade.
+
+## [Unreleased]
+
+### Added
+
+- `GET /{ds}/search/similar` (#219): retrieval for GraphRAG. Give a property and a query vector (`vector=[…]`, computed by the application with its own embedding model) or a resource (`iri=`), and get the `k` nearest resources (10 by default, at most 100) with their scores and their concise bounded descriptions in JSON-LD; `describe=false` leaves the descriptions out. A caller limited to some graphs or rows finds and sees only what it may read. See [vector search](docs/vector-search.md#retrieval-for-graphrag).
+- Hybrid search in one SPARQL query, tested: `tt:search`, a spatial filter and `ORDER BY DESC(tt:cosine(…)) LIMIT k`, answered from the vector index. See [vector search](docs/vector-search.md#hybrid-search).
+
+### Changed
+
+- `ORDER BY DESC(tt:cosine(?v, "[…]")) LIMIT k`, or `ORDER BY DESC(?score)` with `?score` bound to that cosine, is answered from the copy of the vectors that `tt:nearest` reads (#236): the query is evaluated again with `?v` kept to the vectors most similar, each one compared, so the answer stays exact and other patterns and filters still apply. It works on the union default graph and for a caller limited to some graphs. Among 100,000 vectors of 768 numbers: 40 ms instead of 6.2 s; at most two rounds, so a filter that keeps one row in a hundred costs about 130 ms instead of 93 ms. A query with its own dataset or under row-level rules, with an `OFFSET` and `LIMIT` past a sixteenth of the vectors, or over a property that also has plain strings in the form of a vector, is evaluated as before. See [vector search](docs/vector-search.md#functions).
+
+## 0.1.0-rc.1 - 2026-11-17
+
+The first release candidate under the name TripleTrail, for trying it in place of Fuseki and Oxigraph.
+
+
+### Fuseki parity
+
+- `MIN` and `MAX` over values of different kinds answer as Jena (#517): values are ordered by kind first (IRIs, plain strings, language-tagged strings by tag, numbers, booleans, dates and times, durations, other datatypes last), then by value, and equal values by their text. `MAX` of `3.0`, `"3"^^xsd:decimal`, `3` and `3.0e0` is now `3.0e0` (was `3.0`), and `MIN` of those and a plain `"3"` is `"3"` (was `2.50` beside them). `ORDER BY` is unchanged.
+- A dataset's own full-text properties (#188): `tripletrail serve --text-properties kg=IRI` (once per property, `*=IRI` for every dataset), or `text-properties:` in a dataset of the `--config` file, adds properties whose literals `tt:search` and `text:query` index, as the fields of a jena-text `text:entityMap`; `*` reaches datasets created over the admin API too, and `tripletrail query`/`update` take `--text-properties IRI`. Before, only `rdfs:label`, `rdfs:comment`, `skos:prefLabel`, `skos:altLabel` and the Dublin Core titles and descriptions were indexed, and `text:query` on another property answered 400. `tripletrail config import-fuseki` carries an entity map's fields over as `text-properties` instead of listing them as not carried over. `Engine::set_text_properties`.
+- `tripletrail import-jena-rules FILE` (#831): a rule file of Jena's `GenericRuleReasoner` as SHACL-AF SPARQL rules (Turtle), for `tripletrail infer` and a dataset's shapes. The body's triple patterns and builtins (comparisons, `noValue`, arithmetic, `strConcat`, `uriConcat`, `regex`, `makeTemp`, `now`, …) become the `WHERE`, the head's triples the `CONSTRUCT`; backward rules run forward. Rules SPARQL can't say (functors, builtins in the head, `table`) are left out and listed with the reason.
+- RDF/JSON and TriX (#831): Jena's `application/rdf+json` (`.rj`) and `application/trix` (`.trix`) are read and written by the Graph Store (`GET`, `PUT`, `POST`, multipart parts), CONSTRUCT and DESCRIBE answers, `tripletrail load`, `serve --load`, `convert`, `dump` and `query`/`update --data`. RDF/JSON holds one graph; TriX a graph or a dataset. RDF 1.2 triple terms are written as Jena does (`"type": "triple"` and a nested `<triple>`). Jena's binary RDF too: RDF Thrift (`application/rdf+thrift`, `.trdf`) and RDF Protobuf (`application/rdf+protobuf`, `.prdf`), read in every form Jena writes (prefix names, value forms, repeats), and SELECT results as `application/sparql-results+thrift` and `+protobuf`. Written by hand on Jena's schemas, with no new dependency. TriX and the binary formats stream as they are written; RDF/JSON, grouped by subject, holds at most 1,000,000 triples.
+- Blank nodes belong to their file (#840): `tripletrail load`, `serve --load`, Graph Store uploads (`PUT`/`POST /{ds}/data`, each part of a multipart one) and `Engine::load` give each document its own blank nodes, as Jena's loaders and Fuseki do. Before, `_:b1` in two files, or in two uploads into one dataset, was one blank node. A label is stored as a 32-digit hash of it, keyed per load, so dumping and loading again never lengthens labels; the parallel N-Triples/N-Quads loader uses one key per load, so a label that two parts of one large file share stays one node. `Engine::load_with_blank_nodes(…, BlankNodes::Keep)` keeps the labels; the Python `Engine.load` keeps them as pyoxigraph does, and takes `rename_blank_nodes=True`.
+- `tripletrail serve --config tripletrail.yaml` (#826): the server's options and its datasets (name, path, read-only, union default graph, RDFS or OWL 2 RL, aliases) from a YAML file, as a Fuseki assembler file gives them. Flags and `TRIPLETRAIL_*` variables win over the file; `/$/server` gives the file in use (`configFile`).
+- `tripletrail config import-fuseki config.ttl` (#826): a Fuseki configuration translated to such a file (services, union default graph, RDFS or OWL reasoner, query timeout, data files), with what it can't carry over listed at the end.
+- `POST /$/compact/{ds}`, `/$/validate/query|update|data|iri|langtag`, `POST /$/sleep` and `GET /$/logs` (#831): Fuseki's compaction (a task that folds the log now), its syntax checks in its JSON shape, and its small admin endpoints.
+- `POST /{ds}/patch` (#831): Fuseki's RDF Patch service, the patch applied as one update.
+- `POST /{ds}/shacl?graph=&target=` (#829): Fuseki's SHACL service, validating a dataset (a graph, or its named graphs as one, as Jena's union graph) against shapes sent in the body and answering the W3C report as RDF.
+- Full-text queries written for Blazegraph and Stardog run unchanged (#188): `?o bds:search "words"` with `bds:relevance`, `bds:rank`, `bds:maxRank`, `bds:minRank`, `bds:matchAllTerms` and `bds:prefixMatch`, and Stardog's `?literal textMatch ("query" limit)`, on the same index as `tt:search`. Both match literals, one row per literal. Options that would answer differently (`bds:minRelevance`, a Stardog score threshold, `bds:matchExact`) are refused with a 400. All the full-text forms (`tt:search`, `text:query`, `bds:search`, `textMatch`) now work in the `WHERE` of an update, in its first operation that changes data; before, an update matched them as data and changed nothing.
+- `tt:search` and `text:query` take the query string from a variable bound by the rest of the query (#188), as Jena does: `VALUES ?q { "zuid" "noord" } ?s text:query (rdfs:label ?q)`, a `BIND` or a triple pattern; each distinct string is searched with its own limit, read in what the caller may see. Before, a variable query string answered 400.
+- `text:query` reads more of Lucene's syntax (#830): `AND`, `NOT`, `+word`, `-word` and phrases of several words, and takes Jena's `lang:` and `highlight:` options; with `lang:`, words match their other forms in that language (Snowball stemmers for 18 languages, as Jena's multilingual index). Other Lucene syntax is still refused rather than read differently.
+
+### Command line
+
+- Offline tools for Jena users (#828): `tripletrail query` (`arq`, `tdb2.tdbquery`), `tripletrail update` (`tdb2.tdbupdate`), `tripletrail dump` (`tdb2.tdbdump`) and `tripletrail convert` (`riot`, with `--validate` and `--count`) run on data files or on a dataset folder, without a server. See [offline tools](docs/server.md#offline-tools) and [coming from Fuseki](docs/guide/11-fuseki.md#without-a-server).
+
+### Spatial
+
+- A WKT literal with a signed NaN X or Y (`POINT(+nan 1)`) is invalid, as one with `nan` already was. Before, it parsed, and the WKT written back from it did not. `st:ST_H3Cells` and `geof:asDGGS` on a polygon with a latitude past ±90° are an error at once; before, they tried to cover most of the globe. Both found by the fuzz targets.
+- A query with bound variables, RDF4J's `$name` parameters or the Python API's `substitutions`, keeps the GeoSPARQL rewrite. Before, it was evaluated as written: a relation triple such as `?f geo:sfWithin ?area` with `?area` bound matched only asserted triples (usually none), and computed properties such as `geo:hasMetricLength` matched nothing. The shortcuts that answer a whole query or aggregate from the store (nearest neighbours, counts, range scans) still stay off for such a query.
+- jena-geosparql's spatial property functions (#827): `spatial:nearby`, `withinCircle`, `withinBox`, `intersectBox`, `north`, `south`, `east`, `west` and their `…Geom` forms (`spatial:` = `http://jena.apache.org/spatial#`) find features as in Fuseki, from TripleTrail's own spatial index (a few milliseconds among 200,000 features). Before, such a query matched nothing. Compared with Jena 5.2 on 44 queries over random points, lines and polygons, the answers are the same, `withinBox` included (#838): when it searches for features it tests their bounding boxes, as Jena does, and a bound subject must lie within the box. New `st:ST_EnvelopesIntersect` tests whether two bounding boxes meet, from the spatial index. `spatialf:distance` now gives Jena's distance on geographic geometries: the haversine distance between the nearest points of the two in longitude and latitude, not the geodesic one. See [spatial](docs/spatial.md#jenas-spatial-search-spatial) and [coming from Fuseki](docs/guide/11-fuseki.md#spatial-search).
+
+### Enterprise edition
+
+- TripleTrail Enterprise build and licence keys (#734): `cargo build -p tripletrail-server --features enterprise` (or `docker build --build-arg EDITION=enterprise`) adds the proprietary `crates/tripletrail-enterprise`; the default build is unchanged and CI checks it never contains that code. The enterprise build reads a signed offline licence (`--license-file`, `TRIPLETRAIL_LICENSE_FILE`, `TRIPLETRAIL_LICENSE`; Ed25519, no phone-home), warns 30 days before expiry, keeps working for a 30-day grace period after it, and never refuses to start. `tripletrail license inspect` and `GET /$/license` show a licence's standing; `tripletrail --version` and `/$/server` (`edition`) name the edition. `tripletrail-license-issuer` makes signing keys and issues licences and is never shipped. See [TripleTrail Enterprise](docs/enterprise.md).
+- Proposed shape changes (#145, licence feature `review`): on a dataset whose shapes come from git, `POST /$/datasets/{ds}/shapes/proposals` takes the shapes editor's changes and a title, commits the changed files on a new branch onto the pulled commit through GitHub's or GitLab's REST API, and opens a pull or merge request against the bound branch; `GET …/shapes/proposals` lists them. The binding takes `forge`, `api`, `project` and `reviewTokenFile`; a pull now records each file's path in the repository.
+- A proposal says what it changes for each reader and profile (`effects`: node shapes added, removed and changed, with their rows by key or path), in its answer and its pull request's description; `POST …/shapes/proposals?dry=true` shows the files and effects without asking the forge (#145).
+- A proposal validates all of the dataset with the shapes as they are and as proposed, both on one snapshot of the store (writes go on meanwhile), in the background and one at a time (`queued`, `running`, `done`, `failed`, or `interrupted` by a restart). It keeps the result as its `validation` (results before and after, new and gone, new ones by shape; results are counted as they come, and past 4 million distinct ones only by shape) and comments with the counts on the pull request; the new results themselves (data) go there only with the binding's `reviewResults: true`. `validate=false` skips it, and a dry run validates with `validate=true`, within the request's time limit (#145).
+- The Shapes page proposes changes on a set bound to git (#145): **Propose…** takes a title and a description, shows what the changes do for each reader, and opens the pull request; **Proposals** lists them with their status and validation. The note that a bound set's shapes come from the repository shows again.
+- `GET …/shapes/proposals?refresh=true` asks the forge whether the open proposals' pull requests were merged or closed and keeps it (`status`, `checked`, `statusError`), for the dataset's admins, at most once a minute for each proposal and one refresh at a time; the Shapes page's **Proposals** list refreshes when it opens. A proposal's link is kept only when the forge gives an http(s) URL (#145).
+- `datasets.<name>.shapeEditors` in the auth configuration names agents or groups (an SSO group, say) that may propose changes to the dataset's shapes, dry-run them and refresh the proposals without being its admins; they change nothing else (#145).
+
+### Web UI
+
+- Shapes page (#145): browse a dataset's shapes by class with their layer (generated, pack, own), change names per language, order, groups, keys, `dash:hidden`, `tts:hiddenFrom`/`onlyFor` and `sh:deactivated` in a table, preview the Turtle, edit an own file with live checks, and roll back to a kept version. New `GET …/shapes/outline` and `POST …/shapes/edit` (`dry=true` exports the changed files, also for a set bound to git or a read-only dataset). Editing a generated or pack shape writes a shape that refines it (new `tts:refines true`), holding only the changes, so the rest and properties the data gains later still come from below; it also refines a pack shape that replaces the generated one later. **Preview on map** draws the unsaved changes (`dry=true&all=true` gives the whole set). Profiles on the Shapes page: put a shape in profiles (`profiles` setting, `tts:inProfile`), make a new profile (`"profiles": [{iri, label}]` in the edit), and show one profile's shapes; the outline lists the profiles. **Preview a describe page** shows one instance's page with the unsaved changes (`/{ds}/describe?iri=…&preview={id}`). Forms built from editor shapes (SHACL with `dash:editor`, `GET …/shapes/form`) change every setting of a node or property shape, with the new settings `color`, `minZoom`, `drawOrder`, `facet` and `time`. **Preview search** and **Preview the REST API** open those pages with the unsaved shapes (`preview=` on `/{ds}/search/…` and reads of `/{ds}/api/…`). **Diagram** draws a shape with the shapes it links to and those linking to it; the outline gives each property's `class` or `datatype`.
+- Path search over every predicate (#819): `SERVICE <http://w3id.org/tripletrail/path>` without `path:predicate` or a sub-select follows every link between IRIs, read from the indexes as the search goes, less those of `path:exceptPredicate`. Between one source and one target the shortest path is searched from both ends at once, so it reads the neighbourhoods of the two ends instead of the whole dataset. The Explore page's *Path from here* uses it, where it built a network of every triple first. See [paths over any predicates](docs/routing.md#paths-over-any-predicates).
+- Search page: a shown property with several values lists them all (the first 10, resources in label order, then how many more) instead of the smallest one, read apart so that columns no longer multiply the search's rows (#142).
+- Search page: **Search this area** from a layer of the Map page finds that class within the area the map shows (#142); the search model takes `"area": [minLon, minLat, maxLon, maxLat]`.
+- Workbench **AI**: a `set_profile` tool puts a class's shape in a profile or takes it out (#146), and `get_dataset_shapes` takes a profile and keeps a class's property shapes.
+- Workbench **Preview on map** (#146): the Map page drawn with proposed shapes, the AI's file or the workspace's `shapes/`, before Apply or Promote; `POST /{ds}/tiles/preview` answers a style, tiles, search and facets under `/{ds}/tiles/preview/{id}/`, kept for an hour.
+- Workbench **AI** tab (#146): ask for shape changes in plain words with your own key (OpenAI-compatible services, Anthropic, or a local model in Ollama or LM Studio), the same setting as the Query page's assistant. The model reads the dataset's profile and shapes and checks the files it proposes. Each one is shown as a diff to apply to the workspace and then promote. Keys and requests stay in the browser, and data values are sent only when allowed. `POST /$/datasets/{name}/shapes/validate` now also works on an in-memory dataset without `--location`, and `/$/ui/tts.ttl` serves the `tts:` vocabulary. See [the Workbench](docs/server.md#workbench).
+- **Configure with AI** on the Map and Search pages (#146): opens a Workbench workspace with a copy of the dataset's own shapes and the AI tab ready on that dataset (`/$/ui/workbench?configure={name}`), so promoting keeps the shapes the assistant left alone.
+- Explore page (#226), `/$/ui/explore/{ds}?iri=…`: the graph around a resource, opened node by node, with large link sets grouped per predicate and shown 50 at a time, a panel with the selected node's values and links, pinning, hiding, filters on predicates and classes, a shareable link, and SVG and CONSTRUCT exports. The Map page's detail panel and the Search page's results link to it. See [the web UI](docs/server.md#web-ui).
+- Explore page: shortest path between two resources (#226). *Path from here*, then another node or an IRI, adds the path (at most 8 links, either direction), highlighted and kept in the page's link. Labels stay readable when zoomed out, and the page fits a phone.
+- Explore page: *Map* shows the nodes that have a geometry on a map beside the graph (#226), with selection shared both ways and kept in the link (`map=1`).
+
+### User-defined functions
+
+- SHACL-AF `sh:SPARQLFunction`s (#235): functions declared in a shapes graph (`sh:parameter` with `sh:order` and `sh:optional`, `sh:select` or `sh:ask` body, `sh:prefixes`) can be called by their IRIs in that graph's constraints and rules (`tripletrail validate`, `tripletrail infer`), and in any query or update with `tripletrail serve --functions file.ttl`, `Engine.with_functions(...)` in Python or `Engine::with_functions_from` in Rust. A body that is one expression (`SELECT ($km * 1000 AS ?m) WHERE {}`) is inlined into the calling query; other bodies run with the parameters pre-bound and give the first row's value. A function that calls itself, directly or through others, is refused. Callers limited to some graphs or rows may call only inlined functions (403 otherwise, as for `SERVICE`), and a body that hits the timeout fails its query. A `BIND` or `FILTER` expression left without a value by a cancelled query now ends the query with the cancellation. See [validation and reasoning](docs/validation-and-reasoning.md#user-defined-functions).
+
+### Canonicalization and diff
+
+- `tripletrail canon` writes a dataset (files or an on-disk dataset) in RDFC-1.0 canonical N-Quads and prints its SHA-256; `tripletrail diff` gives what changed between two releases, blank nodes matched through their canonical labels, as a JSON summary per graph, predicate and class, or an RDF Patch (#191). `POST /$/digest/{name}` computes a dataset's digest and `POST /$/diff/{name}?to=` compares two datasets, as tasks; Python has `Engine.canonical_digest()`, `Engine.canonicalize()` and `tripletrail.diff(a, b)`; `tripletrail::canon` in Rust. The W3C RDFC-1.0 test suite passes (SHA-384 aside); poisoned datasets, and long chains of alike blank nodes such as an RDF list of one value repeated, are refused within seconds (20,000 steps per blank node, 5 million units of work in all with copies of the labelling state counted by size, a search at most 200 levels deep).
+
+### Validation
+
+- Writes go on while `POST /{ds}/shacl` or `/$/datasets/{name}/validate` runs (#942): the validation reads its snapshot of the store without holding the dictionary lock for the run, so an update with new terms no longer waits for it to end (on a large production knowledge graph, a minute). The validation itself takes a little longer.
+- SHACL rules run on several cores (#891): rules that read nothing the rules before them may write run together, and their triples are merged in rule order, so every rule sees what it would see run one at a time and the answers are unchanged. A rule copying a triple matched inside an `OPTIONAL` (`OPTIONAL { ?b ?p ?v }` constructing `?b ?p ?v`) no longer counts as writing any predicate, which kept every later rule waiting. On a large production knowledge graph (4 cores) the rules take 28.7 s instead of 46.8 s, and 14.2 s instead of 30.3 s in order (`ordered: true`, as that graph's pipeline runs them), with the same 1.2 M triples. `--query-threads 1` runs them one at a time.
+- SHACL validation reports have `sh:detail` (#109): a result of `sh:node`, `sh:and`, `sh:or`, `sh:xone` or `sh:qualifiedMinCount` links to the value node's results against the nested shapes it fails, nested as deep as the shapes go, at most about 1,000 per focus node and shape. Details are not counted as results. The server's JSON results give them as `details`. The W3C SHACL tests still pass, as they leave `sh:detail` out of the comparison. See [validation and reasoning](docs/validation-and-reasoning.md).
+
+### Facade-X and RML
+
+- Facade-X `html.parser=xml` (#156): the HTML triplifier reads the file with an XML parser, keeping names as written and adding no `html` or `body`, and writes `innerHTML` as SPARQL Anything does in that mode. See [Facade-X](docs/facade-x.md).
+- RML-star (#159): subject and object maps with `rml:quotedTriplesMap` (with or without `rml:joinCondition`) and `rml:NonAssertedTriplesMap`. Quoted triples are written as RDF 1.2 reifiers, `_:r rdf:reifies <<( s p o )>>`, one blank node per triple. The RML-star test cases pass, 8 of them once a stray Markdown line is removed from their data. See [R2RML and RML](docs/rml.md#quoted-triples-rml-star).
+- Python: `Engine.run_mapping(mapping=None, *, path=None, yarrrml=False, base_dir=None, allowed=None, to_graph=None)` (#159) runs an RML, R2RML or YARRRML mapping over files and adds its quads to the store in batches as they are made, returning how many it made. See [the Python package](python/README.md#rml-mappings).
+- `tripletrail lift` runs a mapping in bounded memory (#159): its triples are streamed to the output, which drops duplicates through temporary files, instead of being held all at once, and CSV file sources are held as their rows' text rather than as JSON objects. A 1,000,000-row CSV mapping now takes 8 s and 357 MiB, where it took 34 s and 5.3 GB. Benchmark against Morph-KGC in [bench/rml](https://github.com/Matdata-eu/tripletrail-bench/tree/main/bench/rml).
+- Facade-X `spreadsheet.composite-values=true` (#156), the last spreadsheet option it refused: each cell becomes a container typed by its kind (`xyz:STRING`, `xyz:NUMERIC`, `xyz:FORMULA`, …) with its value as `rdf:_1`, and from xlsx and xlsm files its hyperlink (`xyz:address`, `xyz:label`) and comment (`xyz:author`, `xyz:threadedComment`), as SPARQL Anything gives them. See [Facade-X](docs/facade-x.md).
+- `tripletrail lift --as-sparql` (#159) writes an RML, R2RML or YARRRML mapping as the Facade-X CONSTRUCT query that gives the same triples (CSV and JSON sources, term maps, classes, datatypes, languages and joins), to standard output, `--output` or `--output-dir`; other features are refused by name. New function `tt:encodeForIri`, R2RML's IRI-safe encoding. See [R2RML and RML](docs/rml.md#mappings-as-sparql).
+- Facade-X reads the CSV formats with a backslash escape, as SPARQL Anything does through Apache Commons CSV: `csv.format=MySQL`, `PostgreSQLText`, `Oracle` and `InformixUnload`, so MySQL `SELECT … INTO OUTFILE` and PostgreSQL `COPY … TO` text dumps lift as they are.
+- `tripletrail direct-mapping` (#159): the W3C Direct Mapping of a PostgreSQL schema, with no mapping document. Rows are named by their primary keys (blank nodes without one), columns become properties with their natural literals, and foreign keys become links. `--mapping` writes the R2RML mapping that does this, to edit and run with `tripletrail lift`. In Rust: `DatabaseLoader::direct_tables` and `tripletrail_rml::direct::r2rml`. See [RML](docs/rml.md#direct-mapping).
+- On `tripletrail serve`, a query may no longer raise a Facade-X source's size limits above their defaults (`yaml.max-alias-nodes`, `spreadsheet.max-cells`, `spreadsheet.max-bytes`): a caller could otherwise lift a YAML alias bomb from `content=`. `FxConfig::fixed_limits`; `lift` keeps letting the options raise them.
+- `tripletrail serve --fx-connection NAME=URL` lets queries read PostgreSQL live through Facade-X (#216): any caller may run read-only `table=` and `sql=` queries on the named connections, limited by the connection's role, `--fx-timeout` (30 s, enforced by TripleTrail as well as PostgreSQL), `--fx-max-rows` (100,000) and `--fx-max-bytes` (100 MB). Rows stream in through `COPY … TO STDOUT`, so the caps hold while reading. The session is reset after each call (`DISCARD ALL`). Off by default; files and URLs are never read on a server. A connection that was closed is opened again and the call retried once.
+- Facade-X database sources keep up to `--fx-sessions` (default 4) PostgreSQL sessions per connection, so calls no longer run one at a time (#683).
+- A LIMIT on a Facade-X database source becomes SQL `LIMIT` (#216): inside the SERVICE, or on a query that is just the SERVICE, for patterns about one row. Rows a FILTER drops make it ask again for twice as many.
+- `tripletrail serve --fx-cache-seconds N` reuses a Facade-X database result for the same connection and statement for N seconds (#216); off by default.
+- `tripletrail serve --fx-graph IRI=SERVICE` names a virtual graph (#216): `GRAPH <IRI> { … }` in a query reads that Facade-X SERVICE, so clients query a database table without writing `SERVICE`. `Engine::with_fx_graphs`.
+- `explain` lists the database queries Facade-X SERVICE calls made: connection, the SQL sent with its parameters, rows and time (#216). Explain now applies bind joins as the query does.
+- Facade-X database sources joined to local values on a column are bind joins (#216): one query per 1,000 distinct values, with the values as a `WHERE`, instead of reading the whole table.
+- Facade-X database sources pass GeoSPARQL `sfIntersects`, `sfWithin` and the other simple-feature FILTERs on a PostGIS `geometry` column to PostgreSQL as a bounding-box overlap (`&&`) for rows in the constant's CRS, which a GiST index serves when the column is declared with its SRID (#216). PostGIS SRID 4258 geometries are written latitude first, as TripleTrail reads EPSG:4258.
+- Facade-X database sources pass a SERVICE pattern's FILTERs to PostgreSQL as a `WHERE` when the pattern is about one row and PostgreSQL compares as SPARQL does: number comparisons, and equality of text and booleans (#216).
+- Facade-X database sources: a `sql=` query that ends with a line comment works when only some columns are read, and `geo.x`/`geo.y` from `double precision` columns write plain numbers (`POINT(10.75 59.91)`). PostgreSQL `infinity` dates and timestamps, and dates before the common era (`0044-03-15 BC`), are strings in Facade-X and RML, since XSD has no such value.
+- Facade-X sources may be PostgreSQL tables and queries (`table=`, `sql=`, #216), read from `tripletrail lift --database` or a named `--connection` (`database=<name>`), never from a database the query names. Rows are containers with a key per column and natural literals; the query runs read-only, as one statement, through a cursor, and at most `database.max-rows` rows (1,000,000) are read. Only the columns the pattern can match are selected.
+- PostGIS `geometry` and `geography` columns are `geo:wktLiteral`s with their SRID's CRS, in Facade-X and RML database sources alike (#159).
+- Facade-X reads HTML (`.html`, `.htm`, `text/html`, #156) as SPARQL Anything does. Elements are `xhtml:<tag>` containers with their attributes, their children as slots, and Jsoup-style `whatwg:innerHTML` and `whatwg:innerText`. `html.selector` takes a CSS subset. The page is parsed by html5ever (MIT/Apache-2.0), a tag may have at most 10,000 attributes, elements nest at most 512 deep, and innerHTML and innerText hold at most 256 MiB in all.
+- `tripletrail pipeline run` takes `--allow-url`, `--url-timeout` and `--url-max-bytes`, so its lift steps may read URLs as `tripletrail lift` does. Workspace pipelines on a server still read none.
+- RML spreadsheet sources skip rows of only empty and error cells, so such a row is never the header, and give a time without a date as `xsd:time` text (`13:05:00`).
+- RML sources may be spreadsheets (`.xlsx`, `.xlsm`, `.xlsb`, `.xls`, `.ods`, #159), read with the CSV reference formulation as RMLMapper and Morph-KGC do: `rml:iterator` names the sheet (by default the first), and its first non-empty row names the columns.
+- An RML logical target that is a URL is refused; it was written as a relative path such as `./http:/host/out.nt`.
+- RML sources may be `http(s)://` URLs, read under `tripletrail lift --allow-url` as Facade-X locations are.
+- Facade-X reads `location=https://…` (#156), off unless URL prefixes are allowed (`tripletrail lift --allow-url`, with `--url-timeout` and `--url-max-bytes`); redirects are followed only within the allowlist. SPARQL Anything's `http.method`, `http.payload`, `http.header.*`, `http.query.*`, `http.auth.*` and `http.redirect` options are read, and a URL without an extension is read by its `Content-Type`. The allowlist is the one of `SERVICE <https://…>` (#192), now in `tripletrail_fx::remote`.
+- Facade-X `.xls` files are scanned before calamine reads them (#454): a 26 KB file whose DIMENSIONS record names billions of rows, or whose directory sector chain loops, aborted the process; these, sheets whose cells span a box over `spreadsheet.max-cells`, and cells naming more than `spreadsheet.max-bytes` of shared strings (calamine copies the string into each), are now refused.
+- An RML logical target may not be an input of the run: a query or mapping file of the run, a file any of its mappings reads, or a file named like a query, mapping or pipeline file. Since pipeline lift steps overwrite their targets, a mistyped `rml:path` could otherwise replace a source.
+- Facade-X ods files whose cell text, with repeated cells and runs of spaces (`<text:s text:c="N"/>`) written out, comes to more than `spreadsheet.max-bytes` are refused before calamine reads them: files of under 2 KB asked for 2 GB to 900 GB and aborted the process (#454).
+- Facade-X spreadsheets have memory limits (#454): xlsx and xlsb sheets are read cell by cell instead of as calamine's ranges, which hold a sheet's whole bounding box, so a 1.5 KB xlsx with cells in A1 and XFD1048576 no longer asks for 17 billion cells and aborts the process. A workbook gives at most `spreadsheet.max-cells` cells (1 million by default, about 400 MB; empty cells between a row's cells and empty rows included, counted before any is made), and an xlsx, xlsm or ods file may unpack to at most `spreadsheet.max-bytes` (1 GiB by default). An ods file is scanned first, so that repeated rows and columns calamine would write out (750 bytes asked for 3.3 GB) count against the limit. Legacy `.xls` files are still read whole by calamine.
+- `tripletrail lift --overwrite-targets` replaces RML logical target files that exist, for reruns without `--output-dir`; a pipeline's `lift` step always does, so rerunning a pipeline whose mappings have logical targets works again.
+- RML fixes from review (#159): without `--output-dir`, `tripletrail lift` refuses a logical target file that exists and that the run did not write, instead of overwriting a file next to the sources; target files are written only after the mapping's default output succeeds; a gather map joining a parent whose subjects are gathered collections no longer copies the parent's collections into its own output. New user guide `docs/rml.md` for sources, logical targets, functions, collections and limits; named collections are gathered per triples map. Facade-X YAML refuses an alias whose copy would nest sequences and mappings more than 512 deep.
+- Facade-X `slice=true` streams its answers (#156): slices are read and evaluated on a thread of their own and handed over one slice at a time through a short queue, so the answers of a large file are not all held either. A lift of a 1M-row, 90 MB CSV that keeps every row took 946 MB instead of 1,384 MB, with the same output.
+- Facade-X reads Shapefiles, KML and GPX (#156, TripleTrail's own formats): one feature per record, placemark, waypoint, route or track, with its attributes as keys and `geo:hasGeometry` to a geometry with `geo:asWKT`, so a file joins GeoSPARQL data in one query. Shapefile attributes keep their dBase types; `geo.crs` sets the CRS. New dependency `shapefile` (MIT, with `dbase`, MIT). KML and GPX elements may nest at most 512 deep. Coordinates that are not finite numbers are an error; empty segments, rings and parts are dropped, a one-point line is that point (beside other lines, in a GEOMETRYCOLLECTION with them), and a feature with nothing left has no geometry. And a Shapefile's `.shx` or `.dbf` that links outside the allowed directories is denied.
+- Facade-X `slice=true` for CSV (#156): the SERVICE pattern runs on `slice.rows` rows at a time (10,000 by default), so the file's triples are never all in memory. On a 1M-row, 90 MB CSV a selective lift took 154 MB instead of 2.2 GB (7.8 s instead of 11.3 s); a lift that keeps every row still holds its answers. SPARQL Anything runs one row at a time (`slice.rows=1`), which answers differently only for patterns that join rows.
+- Facade-X reads Markdown (#156): `.md` files become the CommonMark tree SPARQL Anything gives (headings, paragraphs, lists, emphasis, links, images, code, HTML, tables, YAML front matter, link reference definitions), and SPARQL Anything's Markdown test files give the same graphs (28 of 28). New dependency `pulldown-cmark` (MIT). Blocks and inlines may nest at most 256 deep, since each node's IRI names its ancestors.
+- Facade-X refuses XML elements and YAML sequences or mappings nested more than 512 deep, as JSON already did. A container's IRI names all its ancestors, so the graph grew with the square of the nesting: 140 KB of nested XML elements took 4.6 GB and 27 s, and deeply nested YAML block sequences overflowed the stack and aborted the process.
+- Facade-X reads archives and folders (#156): a `.zip`, `.tar`, `.tar.gz` or `.tgz` file, or a directory, gives the list of names it holds (`archive.matches` filters them), and `from-archive` reads a file from inside an archive, as in SPARQL Anything. New direct dependency `regex` (MIT or Apache-2.0; already in the lock). `from-archive` decompresses at most 4 GiB of one entry, and a listing gives at most a million names. A folder listing names symbolic links as themselves and never the files they point to, a `.tar.gz` listing decompresses at most 16 GiB, and a missing location outside the allowed directories is denied like an existing one.
+- RML collections and containers (RML-CC, #159): gather maps make `rdf:List`, `rdf:Bag`, `rdf:Seq` and `rdf:Alt` from term maps, referencing object maps and nested gather maps, with the append and Cartesian product strategies, empty ones on request, and named ones gathered across records per graph. A gather list that never ends is a mapping error, and a Cartesian product of more than 100,000 collections for one record a data error. The KG-Construct RML-CC cases pass (35 of 35).
+- RML logical targets (RML-IO, #159): quads of term maps with `rml:logicalTarget` go to that target's file instead of the default output, in N-Quads, N-Triples, Turtle, TriG, N3, RDF/XML, JSON-LD or RDF/JSON, UTF-8 or UTF-16, and plain, gzip, zip, tar.gz or tar.xz. `tripletrail lift` writes them under `--output-dir` (else the base directory) and refuses paths that leave it. RML-IO 70 of 73 (RMLTTC0002q expects `33` as `"3.3E1"`; TripleTrail keeps lexical forms).
+- RML mappings read XML sources (#159), with an XPath iterator and XPath references, and follow RML-IO for file sources: `rml:compression` (gzip, zip, tar.gz, tar.xz), `rml:encoding` UTF-16, `rml:null`, and in the RML-IO vocabulary an empty CSV cell is an empty string unless `rml:null` says otherwise. A reference to a CSV column the header lacks is an error. The KG-Construct RML-IO source cases pass (all but SPARQL endpoints and an unconfigured database). New dependencies `tar` (MIT or Apache-2.0) and `lzma-rs` (MIT).
+- RML mappings call functions (RML-FNML, #159): `rml:functionExecution` and legacy `fnml:functionValue` in any term map, nested calls, and `rml:condition`. Built in: common GREL string functions, IDLab's comparison and null functions, and TripleTrail geometry functions `ttfx:point` and `ttfx:wkt` that make `geo:wktLiteral`s from coordinate columns. A triples map without a logical source runs once. A term map made of itself (through a function input, condition, datatype or language map), or nested more than 64 deep, is a mapping error, and so is a mapping that reads more than 100,000 term maps, counting each use of a shared one. The KG-Construct RML-FNML cases pass (22 of 22).
+- `tripletrail lift` writes each query's output in bounded memory (#389). Past 64 MB, the output goes to a temporary file. Past 14.7 million distinct triples, the duplicate filter keeps sorted runs of hashes on disk instead of growing its set. The output is unchanged: each triple once, in the order the query made them. A 1.65M-triple lift takes the same time and gives the same file.
+- Facade-X geometry, TripleTrail's own options (#156 part 3): `geo=true` gives GeoJSON geometries `geo:asWKT` (coordinates as written) and features `geo:hasGeometry`; `geo.wkt` or `geo.x`/`geo.y`/`geo.z` turn CSV columns into WKT points; `geo.crs=EPSG:<code>` puts the CRS in the literal. Without them the graph is SPARQL Anything's.
+- Facade-X reads YAML and spreadsheets (#156): `.yaml`/`.yml` like JSON, with YAML 1.2 typing, `yaml.allow-duplicate-keys` and a limit on the nodes aliases make (`yaml.max-alias-nodes`); `.xlsx`, `.xlsm`, `.xlsb`, `.xls` and `.ods` as one graph per sheet, with `spreadsheet.headers`, `spreadsheet.headers-row`, `spreadsheet.evaluate-formulas` and `spreadsheet.ignore-columns-with-no-header`. SPARQL Anything's spreadsheet and YAML test files give the same graphs. New dependency `calamine` (MIT).
+
+### Query engine
+
+- Joins written as filters (#185): `FILTER(?a = ?b)` between two parts of a pattern that share no variable is answered as a join on that variable, when the pattern shows that `?a` or `?b` is never a literal (a subject or predicate of one of its triple patterns, or the object of a predicate whose objects are all IRIs or blank nodes, from the counts kept per predicate), or with `sameTerm(?a, ?b)`. Before, the parts were joined as a cross product and every pair was filtered. On the railway knowledge graph, the ETL update that links line sections to their parent line on the same net element went from 6.8 s to 0.13 s, with the 55 post-process `WHERE` clauses giving the same answers. Literals of equal value that are different terms (`1` and `1.0`) still match, and an update does not rely on the counts for predicates its own operations write.
+- Embedding vectors (#236): literals of the datatype `tt:vector` (a JSON array of numbers, `"[0.1, 0.2]"^^tt:vector`) and the functions `tt:cosine`, `tt:dot` and `tt:l2` over two of them, so a query ranks resources by similarity: `ORDER BY DESC(tt:cosine(?v, $q)) LIMIT 10`.
+- `?s tt:nearest (property query k ?score ?vector)` (#236): the `k` resources whose vector of the property is nearest the query vector by cosine, exact, from a copy of the property's vectors kept in memory and brought up to date after writes (100,000 vectors of 768 numbers: 90 ms a search). The query vector can be a variable bound by the rest of the query, so a query finds what is like a given resource. A caller limited to some graphs or rows finds only the vectors they may read. The copies count in the dataset's memory as the part `vectorIndexes`. See [vector search](docs/vector-search.md).
+- `tt:nearest` follows a graph past 20,000 vectors of one length (#236): an HNSW index of TripleTrail's own, built on a thread of its own on the first search, using half the cores. Until it is ready searches stay exact; then they are approximate and fast: among a million vectors of 768 numbers, 8 ms a search instead of 290 ms (exact comparing is also three times faster than before). Vectors written afterwards are compared one by one until the graph is extended. `serve --vector-graph-min N` (`TRIPLETRAIL_VECTOR_GRAPH_MIN`) moves the threshold, and `0` keeps every search exact; or rank with `tt:cosine`. See [vector search](docs/vector-search.md#exact-then-approximate).
+- A constant subject of `tt:nearest` (`ex:BRG tt:nearest (… k)`) matches only when it is among the best `k` of all the vectors (#236). Before, it matched whenever it had a vector.
+- `tt:nearest`'s graph is walked with the vectors in 8 bits, compared in whole numbers, and what it finds ranked again with the full vectors (#236): among a million vectors of 768 numbers, recall@20 went from 0.84 to 0.95 at 9 ms a search, and from 0.975 to 0.997 at 3.4 ms among 100,000. For a dataset on disk the graph is saved in `<dataset>.networks/vectors/` and read again after a restart instead of being built again (up to 40 minutes on two cores for a million); vectors written since are compared one by one.
+- A numeric `FILTER` on a variable that a rewrite's table binds (`tt:search`'s score, say: `?s tt:search ("zuid" ?score) FILTER(?score > 0)`) kept no rows: the range pass (#71) looked for the table's column among the store's triples. It now leaves those columns alone.
+- Blazegraph query hints (#238): `hint:` triples (`<http://www.bigdata.com/queryHints#>`), as Wikidata queries write them, are taken out of a query or update before it runs. Before, they were matched as data, so such a query answered nothing. `hint:optimizer "None"` keeps the written join order, as `#pragma tt.optimizer off` does, and `/explain` lists it; the other hints are ignored. Virtuoso's `DEFINE` clauses before the prologue are taken out too: `DEFINE sql:select-option "order"` keeps the written order, and an `input:` one, which would change the answers, is refused with 400.
+- `BNODE(str)` gives the same blank node for the same string within one solution and a new one in each other solution, as the SPARQL spec and Jena do (#224). Before, it gave one blank node per string for the whole query. The conformance runner also keeps the named graphs of a TriG update result. SPARQL 1.1 Query and SPARQL 1.2 now pass every test (W3C bnode01 and update-1).
+- The query memory is one total per query (#874): the evaluator's hash joins, sorts, `DISTINCT`, groups, aggregate values and path closures count together against the limit, each until it lets its rows go, where before each had the whole limit to itself, so a query with several large operators could hold several times the limit. A `DISTINCT` under an `ORDER BY` over 1,000 rows (about 136 KB each) now fails at 200 KB. Queries running at once on one engine keep a total each. Without a limit nothing changes.
+- A count of a property path answered from the id tables (`COUNT(*) { ?a :p+ ?b }`, also after `:q/` or a join on one triple) keeps to the query memory (#874): when the path's edges would pass the limit, about 48 bytes an edge, the count goes to the evaluator, whose closures count against it (503 past it). Without a limit nothing changes.
+- The values an aggregate keeps count against the query memory (#874): the text `GROUP_CONCAT` builds and the values `COUNT(DISTINCT …)`, `SUM(DISTINCT …)` and the other `DISTINCT` aggregates have seen, with a 503 past the limit, where before only the groups counted. One `GROUP_CONCAT` of 5,000 values fails at 32 KiB. A `GROUP BY` with `GROUP_CONCAT` and `COUNT(DISTINCT)` over 300,000 rows takes 1.31 s against 1.27 s on main (debug build); answers unchanged.
+- A `GROUP BY` answered from the id tables (such as `COUNT(*)` per subject) keeps to the query memory (#874): when its groups would pass the limit, the query goes to the evaluator, whose metered `GROUP BY` answers 503, where before the groups were held whatever the limit. The groups stop being gathered once they pass the limit, and `--query-memory 1GB` (the id joins' default) counts as a limit too. `tripletrail::set_query_memory(0)` now restores the default 1 GiB for id joins instead of evaluating every id join row by row.
+- Property paths (`+`, `*`) keep to the query memory and the timeout (#874): the nodes a closure reaches count against the limit (503 past it), and the walk checks the timeout every 1,024 nodes, where only its quad reads noticed it before. No change in speed (1.1 million pairs: 6.0–6.3 s against 6.2–7.2 s on main, debug build).
+- `ORDER BY … LIMIT k` (with or without `OFFSET`) keeps only the first rows as it reads, instead of sorting all of them (#874): an ORDER BY over a computed key with `LIMIT 10` over 300,000 rows took 2.0 s instead of 5.6 s (debug build), with the same rows, and it fits a small query memory. Rows that sort equal come in the order the query produced them.
+- Query memory per dataset and per query (#189): a dataset's `queryMemory` limit bounds the joins of its queries as `--query-memory` does (an id join past it is evaluated row by row; a hash join, the rows `ORDER BY` sorts, the rows `DISTINCT` has seen or the groups of a `GROUP BY` in the evaluator past it fail the query; a `GROUP BY` answered from the id tables, such as a plain `COUNT(*)` per key, is not counted yet, #874), and a SPARQL request may ask for less with `query-memory=16MB`. In Rust, `Engine::with_query_memory(bytes)` limits the queries of one engine handle. A query past its limit answers 503, as with `--query-memory`.
+- Prepared queries (#186): `Engine::prepare_query` parses a query once and `Engine::query_prepared` runs it with new values bound to its variables (`QueryOptions::substitutions`); in Python, `Engine.prepare(q)` gives a `PreparedQuery` that `Engine.query(prepared, substitutions=…)` runs. Caller values reach the query as bindings, never as text.
+- Query hints (#238): `#pragma tt.optimizer off` (or `tt.join-order fixed`), `tt.spatial-rewrite off`, `tt.range-rewrite off`, `tt.id-rewrites off`, `tt.result-cache off` and `tt.timeout 30s` comment lines change how one query or update runs, without changing its answers. `/explain` lists them under `hints`, and the request and slow query logs write them. An unknown `tt.` hint is a 400. A timeout hint never goes past the server's or the dataset's timeout.
+- On Oxigraph's store (`--store oxigraph`), the union default graph and `FROM` with several graphs give each triple once, as on the TripleTrail store and in Fuseki (#778). A triple stored in several named graphs was matched once per graph, so counts, joins and property paths over the union were too high. Each triple is kept from one graph, checked with a lookup, so the scan holds no set of the triples it has seen and its memory stays constant (#799).
+- Checkpoints save the bounding box of each geometry whose binary record is longer than 64 bytes next to the records (geometries file format `OXGSGEO3`), so spatial joins on ids and the spatial index read boxes instead of whole records (#754). OSM Europe's 33 million landuse polygons have about 30 GB of records but about 1.2 GB of boxes; the file grows by about 4% (OSM Norway: 254 → 265 MB). Older pieces are still read, taking boxes from their records until they are written again. While a checkpoint writes the file, the boxes wait in a file beside it, not on the heap (up to about 7 GB for OSM Europe's 1B triples).
+- `COUNT` of `MINUS`, `EXISTS`, `NOT EXISTS` and `OPTIONAL` with one triple on the right and many keys on the left reads the right side's counts per key from one sorted scan walked forward, instead of reading all its matches (#165). RINF `*-2-large-large-with-large-result` (labels against `rdf:type`): 13 → 5.5–6 ms (QLever 3.9–13.4 ms); answers unchanged.
+- `COUNT` of `MINUS`, `EXISTS`, `NOT EXISTS` and `OPTIONAL` whose right side is one triple with far fewer matches than the left side's one triple reads the right side's keys first and looks up the left side's counts of those keys only, instead of reading every left match (#165). RINF, answers unchanged: `exists-join-large-small` 10.6 → 1.2 ms, `minus-join-large-small` 10.9 → 1.4 ms, `optional-join-large-small` 10.9 → 1.7 ms (QLever 5.6, 11.1, 11.2 ms); `minus-join-large-large` 13.8 → 7.8 ms, `exists-join-large-large` 12.8 → 8.1 ms, `optional-join-large-large` 11.9 → 8.8 ms.
+- With `--union-default-graph`, a store without named graphs answers queries as on its default graph, which is then the same graph, with the id-level counts, joins and ranges, instead of evaluating every query on the union in the generic evaluator (#808). RINF (no named graphs), mean of 101 queries: 77 → 8.4 ms, the same as without the option; answers unchanged.
+- With `--union-default-graph`, a store with named graphs also answers queries on the union with the id-level counts, joins and ranges (#808). They read every graph and skip the copies of a triple in later graphs. The copies are found by one scan of the store (about 0.1 s for 1.7 million quads), made by the first query whose triple patterns match at least an eighth of the quads, and then kept up to date by each write from the subjects it changed, so a write costs a scan of those subjects only. Lookups and DESCRIBE never wait for them. Past 4 million copies, queries go to the generic evaluator as before. They count in the dataset's memory as the new part `unionCopies` (`/$/stats`, `/$/metrics`, `maxMemory`). RINF with 100,000 of its triples copied into a named graph, mean of 101 queries: 83 → 17 ms; 3 million quads in three graphs, a join count after a one-triple write: 0.33 → 0.017 s, a lookup after a write unchanged at 0.5 ms; answers unchanged.
+- `COUNT` of `MINUS`, `EXISTS`, `NOT EXISTS` and `OPTIONAL` whose right side is a star of triples on the key (`?s a ?t . ?s :validity ?v`, no other variable shared) counts each triple for the left side's keys only and multiplies the counts, instead of joining the right side's rows (#165). RINF, mean of three runs, answers unchanged: `minus-join-3-star-2` 8.8 → 6.5 ms, `exists-join-3-star-2` 8.3 → 7.1 ms (QLever 5.4 ms).
+- `COUNT` of `MINUS`, `EXISTS`, `NOT EXISTS` and `OPTIONAL` whose right side is a chain of two triples (`?b :on ?c . ?c a ?d`, the key in the first only) counts the second triple once per value of the shared variable and sums those counts over the first triple's matches, instead of building the joined rows and sorting them by key; only when the first triple has about as many matches as the left side has keys (#165). RINF, mean of three runs, answers unchanged: `minus-join-3-chain-2` 13.9 → 9.9 ms, `exists-join-3-chain-2` 11.7 → 8.8 ms, `optional-join-3-chain-2` 12.6 → 8.8 ms (QLever 5.4, 11.3, 11.6 ms).
+- `COUNT` of a join, `MINUS`, `EXISTS`, `NOT EXISTS` or `OPTIONAL` with a `UNION` of single triples on one side and far fewer matches on the other looks up each `UNION` side's counts of the other side's keys only, instead of reading every match of every side (#165). RINF, mean of three runs, answers unchanged: `union-constraint-large-join` 17.0 → 8.2 ms, `union-constraint-from-star` 15.8 → 8.8 ms (QLever 11.3 and 19.0 ms).
+- `COUNT(*)` of a star whose other triples have many quads per remaining centre value walks one sorted scan of each forward, from value to value, instead of reading all their quads (#165): RINF `join-2-large-large` 14.4 → 8.9 ms (QLever 7.0 ms); answers unchanged.
+- `SUM(STRLEN(...))` of `STRBEFORE`, `STRAFTER`, `UCASE` or `LCASE` of a string variable adds up on ids too (#165): RINF `strbefore` 18.2 → 6.6 ms, `strafter` 18.1 → 5.9 ms (QLever 6.5 and 10.5 ms).
+- `COUNT` over a transitive path (`?s rdf:rest+ ?o`, `?s era:hasSequence/rdf:rest+ ?o`, also written as a triple and a path) reads the path's edges once and counts each start's reachable nodes by a search on ids, instead of evaluating the path's rows (#165); a path from one fixed subject stays with the evaluator. RINF: `transitive-path-plus` 34 → 8.3 ms, `transitive-path-large-join-and-plus` 51 → 6.7 ms, `transitive-path-small-join-and-plus` 46 → 6.8 ms (QLever 30–45 ms); answers unchanged.
+- Grouped counts on RINF (#165), answers unchanged: a star grouped by a variable of its smallest triple (`?s era:inCountry ?c ; a ?t GROUP BY ?c`) reads that triple once and walks one sorted scan of each other triple forward, instead of seeking every subject twice: `group-by-count-object-wrong-sort-order` 22 → 4.6 ms (QLever 4.6 ms). Groups of one key are kept in flat lists, not two allocations a group: `group-by-count-object-low-multiplicity` (70,000 groups) 12.4 → 3.5 ms (QLever 4.6 ms).
+- Filters between variables and on text, measured on the RINF Sparqloscope queries (#165); answers unchanged:
+  - `FILTER(?a = ?b)` (and `sameTerm`) joins on ids, also pushed into each branch of a `UNION`, and `?x p ?x` is read by a leapfrog over two indexes: `union-constraint-filter-restrictive` 18.9 → 1.3 ms (maplib 2.6 ms).
+  - `FILTER(?a != ?b)` counts as all rows less the equal ones, and `COUNT(?v)` of a variable bound in every row counts like `COUNT(*)`, without building the rows: `filter-many-results` 20 → 0.7 ms (QLever 7.3 ms).
+  - `CONTAINS`, `STRENDS`, `STRSTARTS` and `REGEX` on stored strings read each value from its dictionary key instead of decoding the term: `regex-3-contains` 12 → 4.4 ms (QLever 7.5 ms).
+  - `SUM(STRLEN(?o))` and `SUM(xsd:integer(STRSTARTS(?o, "a")))` (any of those text tests) add up on ids, from the dictionary keys: `strlen` 15 → 5.6 ms, `strstarts` 17.6 → 5.0 ms, `strends` 17.2 → 4.8 ms (QLever 4.4–4.5 ms).
+- Spatial joins on term ids parse only the geometries that pair (#754): the sides' geometries enter the sweep as bounding boxes read from the saved records, and are parsed when a box pairs. Before, every geometry of both sides was parsed first, which at OSM Europe scale (33 million landuse polygons) took more memory and time than the timeout. These joins no longer wait for the spatial index either. OSM Norway track × landuse: 320 → 190 ms warm, 750 → 230 ms cold, 330 MB less memory; answers unchanged.
+- More projected CRSs in transforms (#740): `geof:transform`, `st:ST_Transform`, `spatialf:transformSRS` and `st:srs` now also know the projected CRSs the `crs-definitions` crate (CC0-1.0) has outside the national table (about 4,500 codes), through `proj4rs`, with the datum shift each PROJ.4 definition gives; NAD27 uses its mean shift (about 10 m). Other longitude/latitude CRSs, CRSs with south or west axes, geocentric CRSs and grid-based ones still return nothing, in transforms and in `st:srs` alike. Before, any code outside the built-in list returned nothing.
+- National CRSs (#740): `geof:transform`, `st:ST_Transform`, `spatialf:transformSRS` and the SRS catalogue (`st:srs`, `postgis_srs_search`) now know 65 national and regional CRSs, through `proj4rs` (MIT/Apache-2.0, pure Rust), with their datum shifts: Belgian Lambert 72 and 2008 (EPSG:31370, 3812), Lambert-93, RD New, Gauss-Krüger, LV95, British National Grid and more (list in [spatial](docs/spatial.md#jena-spatialf)). They agree with PROJ to within 1 cm. Before, these returned nothing.
+
+- Grouped counts over a spatial join (`GROUP BY ?region` with `COUNT(?x)`) read the join's result table whole instead of looking each row up: bench v2 large `join_op_region` 86 → 36 ms (PostGIS 50 ms); answers unchanged.
+
+- Spatial joins read their result rows whole: a pattern that reads only the join's result table gives its rows in one pass, and `COUNT` over a spatial join counts them without building rows, instead of one lookup with an allocation per row; the join groups each side's rows by geometry in flat arrays instead of hash maps of vectors. bench v2 large (4 cores): `join_signal_ne_20m` 1092 → 470 ms, `join_op_region` 102 → 86 ms; answers unchanged.
+
+- Paths over any predicates (#234): bounded property paths `p{n}`, `p{n,m}`, `p{n,}` and `p{,m}`, as in Jena, and `SERVICE <http://w3id.org/tripletrail/path>`, which returns paths as rows (`path:source`, `path:target`, `path:predicate` or an edge sub-select, `path:direction`, `path:graph`, `path:minLength`/`path:maxLength`, `path:mode` shortest, simple or all, `path:maxPaths`), with each path's number, start, end and length and each edge's step, from, label and to. Hop counts are the shortest mode's ends and lengths. See [routing](docs/routing.md#paths-over-any-predicates). The sub-selects of the `path:`, `win:` and `st:` SERVICEs now stop at the query's timeout; before, a slow one ran to its end.
+
+- Window functions (#237): `SERVICE <http://w3id.org/tripletrail/window>` over a sub-select's rows, with `win:partitionBy`, `win:orderBy`/`win:orderByDesc` and `win:rows` frames: `win:rowNumber`, `win:rank`, `win:denseRank`, `win:percentRank`, `win:cumeDist`, `win:ntile`, `win:lag`, `win:lead`, `win:firstValue`, `win:lastValue`, and running or sliding `win:sum`, `win:avg`, `win:min`, `win:max` and `win:count`. Results match PostgreSQL's; sliding sums and averages of floats and doubles add only the frame's values. See [the function matrix](docs/function-matrix.md).
+
+- Statistical aggregates (#190): `tt:median`, `tt:percentile(?x, p)`, `tt:variance`, `tt:varPop`, `tt:stddev`, `tt:stddevPop`, `tt:mode`, `tt:first`, `tt:last` and `tt:topK(?x, k)`, with Jena's `agg:` names (`agg:median`, `agg:mode`, `agg:stdev`, `agg:var_pop`, …). Exact on integers and decimals (a double when the exact variance overflows, as for 1.7e15, 1.8e15, 1.9e15); see [the function matrix](docs/function-matrix.md). A custom aggregate with `DISTINCT` now parses.
+
+- Spatial joins of polygons (#703): a pair whose boundaries don't meet gets its DE-9IM matrix from the positions of its rings' vertices, without `relate`; a large polygon (256 coordinates or more) keeps its topology graph for the next pairs on the same thread; and sides in a named graph (`GRAPH <g> { ... }`) are joined on term ids like default-graph sides, so the rows no longer carry copies of the geometry literals. Geographica on GAG and CLC: `Within_CLC_GAG` 19.6 → 1.2 s, `Overlaps_GAG_CLC` 62 → 11 s with 1.5 instead of 10 GB of memory (4 cores), same rows; its 17,005 rows are those GEOS gives.
+- `FILTER(STR(?x) = "text")` and `IN` lists (`STR(?x) IN ("true")`, `?x IN (1, 2)`) run on term ids (#657): an `xsd:string` or IRI matches by id, another literal by its lexical form, decoded once per id. The Map's filtered facet counts on 400,000 features take 40 instead of 137 ms, `STR(?x) IN (...)` over 400,000 strings 20 instead of 266 ms.
+- Areas computed ahead on every core (#703): when a projection or `BIND` asks for `geof:metricArea`, `geof:area`, `geof:metricSize` or `geof:size` of a variable bound by a single triple pattern (default graph or `GRAPH <g>`), and not under a `LIMIT` without an `ORDER BY`, the areas of its geometries (1,024 or more) are computed in parallel before the query runs, and a geometry the store keeps parsed keeps its area. Geographica `Area_CLC` (44,834 polygons): 4.2 → 1.3 s on 4 cores, 0.17 s when run again, same answers.
+- Functions that return a geometry write its WKT faster: the coordinates are formatted with `zmij` (MIT, already a dependency of `serde_json`) instead of `Display`, with the same text byte for byte (shortest digits, ties rounded up as `Display` does). On 44,834 CORINE polygons: `geof:boundary` 3.1 → 2.0 s, `geof:convexHull` 0.81 → 0.62 s, `geof:asGeoJSON` 2.9 → 1.9 s, `geof:buffer` 21.3 → 19.4 s, same results.
+- Spatial joins on the sweep line switch to bands of `y` when many boxes are open at once: a short box then tests only the open boxes of the bands it meets, not every open box (on a rail grid a whole north-south line's elements are open together). Tall boxes stay in a plain list and the sweep stays plain while few boxes are open, so lines and points cost what they did. Bench v2 large `join_signal_ne_20m` (313k signals × 344k elements within 20 m): 1.44 → 1.09 s, the sweep from 36% of the CPU to 2%. Same answers; Geographica joins unchanged.
+- `FILTER(LANG(?o) = "en")` reads the tag from the dictionary key with one lock of the dictionary per chunk of rows, instead of locking it and decoding the literal for each row (RINF `filter-language-en`: 9.5 to 3.1 ms, QLever 6.5 ms) (#185, #170).
+- Cyclic basic graph patterns no longer join a key of few values first: the join order counts the rows each step makes, so `?s ex:p ?o . ?s a ?c . ?o a ?c` joins `ex:p` before pairing everything of a class (0.8 s to 16 ms on 190k triples). The right side of an `OPTIONAL`, `MINUS` or join is looked up per value of the left's rows when it would be large on its own (`?s ex:p ?o OPTIONAL { ?s a ?c . ?o a ?c }`: 843 to 24 ms) (#185).
+- `COUNT(*)` over `OPTIONAL`, `MINUS`, `FILTER (NOT) EXISTS` and joins whose sides share one variable is counted per value of that variable, from each side's counts, without building the rows (#185, #165); `UNION` adds its sides' counts. A side that is one triple pattern is counted from its index runs, or looked up for each value when the other side has few; other sides from their rows on ids. On RINF (Norway, 1.6M triples), Sparqloscope's `optional-join-3-chain-1` takes 7.5 instead of 39 ms, `optional-join-2-large-large-with-large-result` 13.5 instead of 34 ms, `union-no-constraint` 1.1 instead of 16 ms, and the geometric mean of the 102 queries 4.4 instead of 5.2 ms (warm, same answers).
+- Chains of `BIND`s in an update's `WHERE` with at least three costly calls (`REPLACE`, `REGEX` or extension functions), at least one of them an extension function such as `spatialf:transformSRS` (casts don't count), are computed on every core (#292): the rows under the chain are evaluated first, then the chain over chunks of them on the query pool, each by the usual evaluator, and the update reads the computed rows directly. Only chains whose every row is needed are taken (not under a `LIMIT`, in an `OPTIONAL`, a join or `EXISTS`), not with `EXISTS`, `NOW()` or `BNODE()` in the chain, and only while the rows under the chain hold at most a 256th of the join memory in values (4M by default, 2M at least; the rail KG GPS update reads about 340,000 rows of 6); queries are left as they were, as they stream their rows. On 315,000 rail-KG-shaped points, the GPS locations update takes 15.9 instead of 20 s and writes the same quads, with a peak of 2.0 instead of 1.4 GB. Chains of only `REPLACE`s and casts are left to the evaluator: three `REPLACE`s and a `CONCAT` over 420,000 rows took 9.7 s in chunks against 7.0 s.
+- `GET /$/metrics` has `tripletrail_update_bind_chains_total` by outcome: chains of an update `WHERE` computed in parallel (#292), and those left to the evaluator because the rows under them held too many values or a blank node.
+- Full-text search (#188): `?s tt:search ("query" ?score ?literal limit)` finds the resources whose labels, comments or titles contain the query's words. Results are ranked with BM25, and the pattern joins the rest of the query like any other. The index sits on term ids, over the literals of `rdfs:label`, `rdfs:comment`, `skos:prefLabel`, `skos:altLabel` and the Dublin Core title and description properties. It is built on the first search, which takes 0.8 s for the 560,000 labels of the rail KG, and a search then takes milliseconds. After a write, the first search patches in the labels added and removed instead of building the index again: about 40 ms on the rail KG, whatever the size of the write up to a quarter of the index.
+- Jena's `text:query` (#188) on the full-text index: `(?s ?score ?literal) text:query (rdfs:label "query" 10)`, with the property and limit optional. Lucene syntax other than plain words, `OR` and a trailing `*` (`AND`, `NOT`, `+word`, `-word`, phrases, fields, fuzzy and wildcard queries) is refused rather than read differently.
+- Language-tagged strings get string ranks too (#171, #165): `MIN`/`MAX`, `ORDER BY ... LIMIT` and prefix filters (`STRSTARTS`, `REGEX "^..."`) over language-tagged labels run on ids, ordered by value and then language tag, as the evaluator orders them. On RINF 0076's `rdfs:label`s (66,000, all language-tagged), `MIN` takes 2 instead of 30 ms, `REGEX(?o, "^C")` 1.8 instead of 9.5 ms and `ORDER BY ?label LIMIT 10` 3 instead of 330 ms. Strings with a base direction keep the evaluator's path.
+- A query no longer registers its custom functions again (#186): the engine registers the geo, Jena, XPath, `tt:` and Facade-X functions once and each query shares them, which took 0.3 ms per query, most of a small query's time. Over HTTP, `ASK {}` takes 0.28 instead of 0.85 ms and an OGC-style bbox page 0.85 instead of 1.33 ms. Long geo functions still stop with their query's timeout. The routing and `st:` SERVICEs share one evaluator too.
+- The server no longer starts two threads per query (#186): queries run on reused threads with the same 256 MB stack, and one timer thread cancels every query at its timeout. Starting a thread took about a fifth of the server's time on small queries. Over HTTP, `ASK {}` takes 0.21 instead of 0.39 ms, a point lookup 0.26 instead of 0.54 ms, and with 8 clients an OGC-style bbox query answers 8,600 instead of 3,300 times a second. A query thread waits 30 s for the next query before it ends (at most 64 wait), so the stack a deep query used is given back then instead of at once.
+- Query results are serialized on the thread that sends them, as the client reads them (#186), instead of on another thread that wrote them into a pipe. A result that fits in 64 KB is sent with a `Content-Length` instead of in chunks, and an error in it becomes the response status. Server CPU per query: 77 instead of 114 µs for `ASK {}` and 312 instead of 355 µs for an OGC-style bbox query; with 8 clients, 13,300 instead of 8,400 to 11,300 bbox queries a second. A timeout once the rows are being sent still ends the body early.
+- A filter that equates a variable of one side of a join with a value computed from the other (`FILTER(?oid = STRAFTER(STR(?object), STR(src:)))`) is now the join key: the value is computed on its side and joined on, or looked up, instead of joining every row with every row first (#531). The rail KG `area_locations` rule, 60% of the Trasé uplift, spent most of its time there: on rail-KG-shaped data (133,000 focus nodes) it went from 131.8 s to 29.4 s, with the same triples.
+- `xsd:double` of a double keeps its text too, as Jena (`xsd:double(3.0e0)` is "3.0e0"), so `COUNT(DISTINCT xsd:double(?y))` and `GROUP BY` on the same cast see the same terms (#517). A cast whose text is already the canonical form gives the double itself, so `COUNT(DISTINCT)` counts `xsd:double(3)` and a stored `"3"^^xsd:double` once.
+- Casts of a double or float to `xsd:integer` and `xsd:decimal` are exact, as in Jena: `xsd:integer(xsd:double("2573.0"))` gave 2572, because Oxigraph multiplies by 10^18 in floating point. The rail KG uplift mints IRIs with this cast (#513). Computed decimals are written as Jena writes them: a whole number keeps `.0` (`STR(1.5 + 1.5)` is "3.0", not "3"), and, as Jena casts by lexical form when it is valid, `xsd:decimal` and `xsd:double` of a string, an integer or a decimal keep its text (`xsd:decimal(3)` is "3", `xsd:double(1.5 + 1.5)` is "3.0"); unary plus, `MIN`, `MAX` and the arguments of extension functions see a stored literal as written. Stored decimals keep the form they were written in, and `xsd:string` of a decimal stays canonical, as the W3C cast tests expect. The rail KG uplift mints net element IRIs from computed decimals and joins them with lifted ids ending in `_0.0`.
+- Planning a long chain of triple patterns that each share a variable with the next (`?x0 :p ?x1 . ?x1 :p ?x2 ...`) no longer re-infers the types of the whole chain at every step (#509). 8,000 patterns took 25 s and 2.7 GB to plan past a 5 s timeout; the query now ends at the timeout (5.1 s) and the server peaks at 0.5 GB. 2,000 patterns plan and answer in 0.5 s. With lookup joins on (the default since #512), building the evaluator of such a chain searched the whole chain for lookup variables at every join, and 8,000 patterns ran for minutes; that search is now linear per join, skips sides of more than 64 triple patterns, and stops at the timeout, as does the choice of the first operand, so a chain or star of 8,000 ends at the 5 s timeout.
+- `dateTime + duration` works with the duration first too: the optimizer orders the operands of `+`, and `xsd:dateTime(?c) + STRDT(?shift, xsd:dayTimeDuration)` was unbound (the rail KG's Oslo `time:inXSDDate` dates were missing). `spatialf:transformSRS` writes X and Y with 6 decimals and keeps Z, as Jena; the rail KG mints coordinate IRIs from it.
+- Lookup joins (`--lookup-joins`, #494) are on by default; `--lookup-joins false` or `TRIPLETRAIL_LOOKUP_JOINS=false` turns them off (`1`/`0`, `yes`/`no` and `on`/`off` work too, and an empty variable counts as not set). The other commands (`infer`, `lift`, `validate`, ...) read the variable as well; the Python package has them on. On the full rail KG ETL with them on, the triple counts of all 27 step graphs were the same as without, and the uplift took the same time (1,177 s against 1,172 s).
+- Joins and `OPTIONAL`s on a variable made by `BIND` (`BIND(IRI(CONCAT(...)) AS ?seq) ?link :seq ?seq`) look the other side up per row, instead of a hash join on another, weak key or on no key at all (#484, #486, #494). The conditions of an `OPTIONAL` that only read its own side are applied inside it, before its parts are joined (#485). On rail-KG-shaped data (1.75 M triples): the `MissingTurnout` rule 9.7 s → 0.01 s (Fuseki 0.06 s), `Farbarhet` 11.6 s → 0.06 s (Fuseki 0.12 s), `area_locations` 3.9 s → 1.6 s (Fuseki 2.2 s).
+- `--lookup-joins` (`TRIPLETRAIL_LOOKUP_JOINS`, off by default) is a run-time safety net for joins without keys or with weak keys (#494): when one side is a basic graph pattern and the other side's rows bind one of its non-key variables (an IRI made by `BIND`), the pattern is looked up per row instead of building a product. The rail KG reproductions of #484 and #486 went from 20.5 s to 8 ms and from 23.5 s to 92 ms. The answers are unchanged, including on 18 rail KG queries and the W3C suites with the setting on.
+- A deeply nested or very long query no longer crashes the server (#483). `FILTER(!(!(…)))` 1,000 levels deep, or 3,000 triple patterns, `UNION`s or `FILTER`s in one group, overflowed a query thread's 2 MB stack, which aborts the whole process. Query threads, and the command line, now get 256 MB of address space for their stack (only what a query uses is touched). A query nested more than 1,000 levels deep, or with more than 10,000 patterns and expressions, is refused with a 400 that says so: about 2,500 `?x = c ||` terms, 4,000 `UNION` branches or 10,000 triple patterns. The values of `VALUES`, `IN` lists of constants and the data of `INSERT DATA` do not count. Planning gives up looking for a better join order at the query's timeout, and parts that share no variable no longer plan in n³ steps (9,000 held a core for over 10 minutes). Programs that use the engine as a library should run queries on threads with a stack of `tripletrail::complexity::QUERY_STACK`. Planning a join of many triple patterns no longer takes minutes: the greedy join order kept estimating the whole join again for each candidate (900 patterns: over a minute, now 0.3 s; 3,000 patterns: 5 s).
+- `NOW()` gives the local time with its offset and milliseconds (`2026-11-12T00:41:35.123+01:00`), as Jena does, instead of UTC. Rail KG rules take today's date from `SUBSTR(STR(NOW()), 1, 10)`: between midnight and 01:00 CET TripleTrail saw the previous day, so date filters against Trasé validity dates differed from Fuseki around midnight.
+- A hash join of the evaluator notices the timeout while it collects its built side, and makes the rows of one probe row one at a time instead of buffering all its matches (#476). `--query-memory` now also limits the rows one hash join holds: past it, the query fails at once with 503. Four subqueries joined on a 7-valued key over 1,000 subjects ended 0.9 to 1.4 s after a 3 to 5 s timeout and held 2.9 GB; now they end 0.3 to 0.6 s after it, at 2.4 GB, and with `--query-memory 256M` fail after 0.26 s at 245 MB. Without the option, nothing changes for queries that finish. Row order is the same as before.
+- The memory that one query's joins on term ids may take is a setting, `--query-memory` (`TRIPLETRAIL_QUERY_MEMORY`), instead of a fixed 1 GB (#479). Past it the query is evaluated row by row, so a lower value bounds what a cross join takes before its timeout: a 6-way cross join on 20 triples peaked at 1.1 GB, and peaks at 300 MB with `256M`. The default stays 1 GB.
+- The spatial planner estimates `VALUES ?c { … } ?f a ?c` as the instances of the listed classes, not one row per class (#463), so a constant spatial test over them injects its candidates instead of testing every instance: 20 classes of 5,000 points, 0.9 instead of 190 ms.
+- A cross product (`?a ?b ?c . ?d ?e ?f . ?g ?h ?i`) stops at the query's timeout and holds at most about 1 GB (#467). Before, the id joins checked for the timeout and their size only between input rows, so one input row could build millions of rows, and the evaluator's cross join never checked the timeout: on 3,000 triples such a query passed 4 GB in 3 s and ran past its timeout. A `COUNT(*)` of a cross product is now counted without its rows (27 billion in 0.4 s).
+- A `+` or `*` property path joined to many rows walks once per distinct start instead of once per row (`?s rdf:type/rdfs:subClassOf+ ?o`, the Sparqloscope `transitive-path-*-join-and-plus` queries): on BSBM 1M, 17 instead of 47 ms.
+- `GROUP BY` counts over a star of triple patterns with multi-valued properties (`?s a ?c ; ex:f ?f ; ex:t ?t GROUP BY ?c`) are computed from each pattern's matches per subject, without building the join's rows (#179): over 200,000 subjects with 3 × 5 × 4 values each, 42 instead of 464 ms by class and 47 instead of 730 ms by tag.
+- `GROUP BY` counts over a star whose grouped key has few values but whose other patterns have many (`?s ex:in ?k ; a ?c ; ex:f ?f ; ex:t ?t GROUP BY ?k`) seek the other patterns' matches per subject of the smallest pattern, instead of giving up when the join would pass the join memory (#179): 0.03 s instead of 28 s for 300 subjects with 30 × 30 × 10 values each and a 1 MiB join memory. A timeout stops these counts while they seek, too.
+- `GROUP BY … ORDER BY … LIMIT` keeps only the first groups also when the order uses group keys, not just counts (`ORDER BY DESC(?c) ?s LIMIT 20`): over 1M subjects that took 0.21 instead of 3.8 s, and `ORDER BY ?key LIMIT 20` over 333,000 groups 167 instead of 970 ms.
+- That cut now also works when only the first sort keys are counts or group keys (`ORDER BY DESC(?n) STR(?v) LIMIT 49`, `ORDER BY DESC(?c) ?low` with `MIN`), or when a later group key mixes numbers, strings and IRIs: the keys before it make the cut, the groups tied on them are all kept, and the order is the same as before (#657). On 400,000 features with 130,000 track ids, the map's facet query took 65 instead of 670 ms.
+- GROUP BY with many groups is faster: the groups are found on several cores (#185), without an allocation per group, and handed to the rest of the query as ids instead of decoded values. 333,000 groups of 1M rows took 507 instead of 771 ms, grouping by blank nodes 75 instead of 784 ms, and MAX of integers per group 78 instead of 141 ms (it no longer decodes them).
+- The SPARQL parser follows the grammar more closely (seven W3C tests that failed now pass): `TRUE` and `False` are booleans, a SELECT expression may use one before it (`(COUNT(?v) AS ?n) (?n + 1 AS ?m)`), CONSTRUCT may have GROUP BY, and nested aggregates, `?x<?a&&?b>?y` and a literal or triple term as the subject of a triple term in an expression are rejected.
+- `SELECT *` gives the columns in the order the pattern has them (`?s ?p ?o`), as Jena does, instead of sorted by name (W3C csv01 to csv04). This needs a patched copy of Oxigraph's parser, `vendor/spargebra` (see its `TRIPLETRAIL.md`).
+- A FILTER over a large id table runs on several cores (#185), its rows in the same order: a selective filter over 1M joined rows took 49 instead of 60 ms on 4 cores.
+- `=` between two triple terms compares their parts by value again when a filter runs on ids: `<<( :a :b 123 )>> = <<( :a :b 123.0 )>>` is true (W3C eval-triple-terms op-2). The conformance runner treats only a top-level `ORDER BY` as ordering the result (order-1, order-2). SPARQL 1.2 266 of 271.
+- `=` and `!=` between a date or time with a timezone and one without, less than 14 hours apart, are an error instead of unequal, as XSD orders them (W3C open-world date-2; SPARQL 1.0 485 of 487).
+- `GROUP_CONCAT` gives a simple literal, also when every value has the same language tag, as Jena does (W3C agg-groupconcat-04 and 06; SPARQL 1.1 Query 351 of 353).
+- `MINUS` in `GRAPH ?g` no longer removes a row because of the graph variable alone (#427): a right row whose shared variables are unbound, as from an `OPTIONAL`, now removes nothing.
+- Literals keep their datatype and lexical form (#379): `STRDT(?x, xsd:dateTimeStamp)`, `"5"^^xsd:long` in a query and casts such as `xsd:long(...)` give that datatype instead of the base one (`xsd:dateTime`, `xsd:integer`), and `DATATYPE`, `LANG` and `STR` of a literal from the data give its own datatype and lexical form (`"01"^^xsd:integer` is `"01"`). They still compare and compute by value. New cast `xsd:dateTimeStamp(...)`. This needs a patched copy of Oxigraph's evaluator, `vendor/spareval` (see its `TRIPLETRAIL.md`).
+- `MINUS` in `GRAPH ?g` no longer removes rows when its sides share no variable but the graph variable (W3C test graph-minus, SPARQL 1.1 Query 349 of 353).
+- GeoSPARQL results as other engines write them (#372): an empty `wktLiteral` or `gmlLiteral` is
+  an empty geometry (so `geof:sfEquals` of two is true), set operations on areas no longer carry
+  the integer-grid noise of `geo`'s boolean operations (`-83.60000000018627`), give a `POLYGON`
+  for one part and write shells clockwise as GEOS does, `geof:convexHull` starts at the lowest
+  point clockwise as JTS does, and a GML argument gives a GML result (in the input's GML
+  namespace). GeoSPARQL compliance benchmark 68.1 % → 76.0 % (148 of 206).
+- `geof:area`, `geof:metricArea` and `geof:metricSize` in a geographic CRS gave the Earth's surface
+  minus the polygon for a clockwise shell (`geo`'s geodesic area takes it for the outside): each
+  polygon is now oriented first, so the area is the same whichever way its rings wind.
+- The joins, `OPTIONAL`, `MINUS` and `(NOT) EXISTS` evaluated on term ids (#167) index their
+  right side without an allocation per row (a map of `Vec` keys with SipHash took about 60 % of
+  their time), and probe tables of 64k rows or more on several cores, in chunks put back in
+  order, so the rows and their order are those of one core (#185). The query's own thread works
+  the chunks, and a thread pool for queries only helps, so busy cores (the store's background
+  work after writes) slow a query to one core's speed at worst. New server setting
+  `--query-threads` (`TRIPLETRAIL_QUERY_THREADS`, the pool's threads: 0 = as many as cores, 1 =
+  none). Sparqloscope on BSBM
+  1M: geometric mean 6.1 → 4.4 ms; `optional-join-large-large` 60 → 14 ms, `minus-join-large-large`
+  38 → 7 ms; all answers identical.
+- On Oxigraph's store (`--store oxigraph`) too, a zero-length path from or to a term that is in no triple matches that term: `SELECT (COUNT(*) AS ?n) { <x> :p* ?o }` gives 1, not 0, as on the TripleTrail store and in Jena (#814).
+- A zero-length path also matches its constant end when the store knows that term only as a
+  predicate or a graph name, or as an inline number, for `^(p*)` and `^p?`, and inside
+  `EXISTS`.
+- `xsd:decimal` of a double or a float is the decimal it prints as, as on Jena (#380):
+  `xsd:decimal(xsd:double("0.518134715"))` is `0.518134715`, not `0.518134714999999936`, so
+  `ROUND(... * 100000000)` gives `0.51813472` as on Fuseki. Most of the 140,000 coordinate
+  triples that differed between the rail KGs published by Fuseki and TripleTrail came from this.
+  The cast costs about 0.75 µs more per row (200,000 rows: 0.16 → 0.31 s).
+- A zero-length path (`*`, `?`) matches its constant end when that term is in no triple of
+  the store: `?s ex:p* ex:o` binds `?s = ex:o`. The evaluator only follows paths from nodes
+  of the dataset, so it gave no row. Four more W3C tests pass (zero_or_more_set_start/end,
+  zero_or_one_set_start/end).
+- Constant expressions are evaluated once, when the query is planned (#375), not only `STR`
+  of a constant: `CONCAT`, `LCASE`, arithmetic, comparisons and the other deterministic built-ins.
+  `REPLACE(STR(?x), CONCAT(STR(ex:), "_"), "")` compiled its pattern for every row: 200,000
+  rows 12.1 s → 0.24 s, and a copy of the rail KG GPS positioning rule 47.5 s → 17.2 s.
+- A triple pattern on an IRI made by `BIND` is looked up per row of the part that makes it
+  (#374). When the looked-up class was estimated smaller than that part, the two were joined
+  on no key, every row with every row: the rail KG rules that build a linear coordinate's IRI
+  from a km took 434 s and 762 s against 1.3 s and 10 s on Fuseki. Their shape on 80,000
+  rows: 75.6 s → 0.24 s.
+- A default graph made of several graphs, the union default graph or `FROM` with more than
+  one graph, gives each triple once, as an RDF merge (#376). A triple in two graphs came back
+  twice, which made `COUNT`, `GROUP BY` and joins wrong. The store now scans all graphs in
+  one pass and skips a triple it has just returned. `GRAPH ?g` still sees each graph's copy.
+- Triple patterns without variables (`:s :p :o`) keep every row or none (#366). The id
+  evaluator and the store's joins read them as rows without columns, which counted as none:
+  `FILTER EXISTS { :s :p :o }` was always false, `NOT EXISTS` always true, and
+  `COUNT(*)` over two such triples was 0. One more W3C test passes (exists02).
+- `GRAPH` follows the SPARQL algebra (#364): the graph variable is not in scope inside
+  `GRAPH ?g { ... }` (a `FILTER` on `?g` inside sees it unbound, as in Jena), it ranges over
+  every named graph even when the inside matches no triple there (`VALUES`, a nested `GRAPH`),
+  `GRAPH <g>` is empty when `<g>` is no graph of the dataset, and a sub-select inside is
+  evaluated once per named graph. Plain `GRAPH ?g { ?s ?p ?o ... }` is planned as before.
+  12 more W3C tests pass.
+- A spatial join whose side is a subselect with `ORDER BY`, `LIMIT`, `OFFSET` or `REDUCED`
+  (`{ SELECT ?a WHERE { ?x geo:asWKT ?a } LIMIT 300 } ?y geo:asWKT ?b FILTER(geof:distance(?a,
+  ?b, uom:metre) < 5)`) is answered through the spatial index: the side is evaluated and its
+  geometries probe the index (#359). Before, the rewrite did not see that the subselect binds
+  a geometry and left the join to a nested loop over all pairs, which timed out on the rail KG.
+  On 100,000 lines, 300 probes take 8.4 ms instead of 78 s (distance) and 3.5 ms instead of
+  22 s (`sfIntersects`).
+- The metric distance between two lines (`geof:distance` in metres, `st:ST_DWithin`,
+  `st:ST_DistanceSphere` on geographic coordinates) is measured where they come closest. Before, it
+  was Euclidean in one tangent plane at the middle of both, whose longitude scale drifts
+  away from its centre (about 1 % a degree of latitude at 50°N), so on long tracks pairs
+  near 5 m flipped: `osm_track_track_5m` gave 489,220 pairs against QLever's 489,314
+  (#350). That plane now only picks the segment pairs that may be closest, each measured
+  again in the plane at its own closest points and on the ellipsoid beyond 50 m. Areas are
+  first measured as before, which stays the answer when they meet or in a box small enough
+  for the plane to be within a millimetre (buildings); otherwise between their rings in the
+  same way. Segment pairs are found through an R-tree when there are many. Near pairs of
+  40- and 30-vertex lines take 17 µs instead of 70 µs; polygon pairs take the same time as
+  before.
+- `GROUP BY` of one variable of a single triple pattern, with `COUNT(*)`, `COUNT(?v)` or
+  `COUNT(DISTINCT ?key)` (`?f a ?c GROUP BY ?c`), is counted per value from the quads in
+  key order without a row per quad: each value's first 256 quads are read, the rest of its
+  count comes from the block index, and a seek skips them (#349). On 3M typed subjects in
+  300 classes the class counts take 2.8 ms instead of 193 ms, and 1M `building` values in
+  20 kinds 0.5 ms instead of 57 ms.
+
+### Storage
+
+- A server that shuts down gracefully stops its read replicas first: a replica finishes the read of the leader's log it is applying, then applies no other and copies no new base, so nothing writes into its folder while the datasets are checkpointed or after the server has stopped.
+- mimalloc is the memory allocator of the `tripletrail` binary (#934), in place of glibc's. An `INSERT … WHERE` evaluates its `WHERE` on one thread and writes the rows on another, and glibc's malloc contended on its locks when the second thread freed what the first allocated. On a railway knowledge graph of 12.5M quads, an `INSERT` of 7.4M triples the store already held took 46 s and now takes 12 s; the 56 post-processing updates of its ETL take 72 s instead of 85 s, and its SHACL rules (`tripletrail infer`) 55 s instead of 63 s, with the same output. Peak memory is the same for updates and loads; `infer` peaks about 10 % higher (4.8 GB instead of 4.4 GB). `cargo build --no-default-features` (or leaving out the `mimalloc` feature) keeps the system allocator.
+- OWL 2 RL entailment follows chains of `owl:someValuesFrom` and `owl:allValuesFrom` restrictions in linear time (#756). After the first pass, cls-svf1, cls-avf and cls-int1 join only each round's new triples with the rest, instead of reading every restriction again in every round. A chain of 2,000 restrictions takes 0.6 s instead of 214 s, with the same output, which was also checked on 125 random OWL 2 RL datasets. Kept OWL 2 RL entailment (`serve --owl-rl`) uses the same joins for inserts.
+- RDF/XML uploads and the XML answers of remote `SERVICE` endpoints are parsed with quick-xml 0.41 (#133), no longer 0.37 with its two denial-of-service advisories (RUSTSEC-2026-0194, a quadratic check of attribute names; RUSTSEC-2026-0195, unbounded namespace declarations). Oxigraph's oxrdfxml and sparesults are vendored for this until they move upstream. DOCTYPE entities in RDF/XML are capped at 1 MiB each, so nested declarations cannot take all the memory. Text with entity references (`a &amp; b`) is read as one literal, as before. Two answers change with the new parser: a newline inside an RDF/XML attribute value becomes a space, as XML attribute-value normalisation says (it was kept as a newline), and a property whose text mixes plain text and CDATA is read as one literal (it was refused with 400 "Unexpected text event").
+- Store format versions (#221): each dataset directory keeps its format in a `FORMAT` file (1 today, written on open when missing). A TripleTrail refuses a store of a newer format, or a store file with a newer version of a known magic number, with "... is in format N, written by a newer TripleTrail: this one (VERSION) reads up to format M" and before it replays or cuts the write-ahead log, where it used to say "corrupt store file" or could drop log entries it took for a torn end. Store backups and replication bases carry the file, so restores, copies and replicas refuse a newer one too; a replica stops applying the log of a leader of a newer format (`X-TripleTrail-Store-Format` on each log read). Older formats still open as they are. `tripletrail_store::STORE_FORMAT`. See [upgrading](docs/server.md#upgrading-tripletrail).
+- Storage and replication metrics (#220): `/$/metrics` adds, per writable on-disk dataset, the write-ahead log (`tripletrail_wal_bytes`, `tripletrail_wal_generation`), commits with their time and the slow ones, checkpoints with their time, runs and merges, and the check of the files; per read replica its lag, bytes behind, transactions applied and bases copied; on a leader the replicas it hears from and whether `--sync-replicas` writes wait. The Grafana dashboard gets panels for them and for resident memory.
+- Promoting a read replica (#217): `POST /$/replication/{name}/promote` makes a replica the leader, noting in its `HISTORY` where on the old leader's timeline it took over; it stays the leader across restarts. `--follow NAME=URL1,URL2` gives a replica several servers that may lead: when one fails or is on another timeline, it goes on with the one promoted at its position, without a new base. `GET /$/role/{name}` (open) answers 200 on the leader for load balancers.
+- Synchronous read replicas (#217): `tripletrail serve --sync-replicas N` answers a write to an on-disk dataset only once N replicas hold it (`TripleTrail-Replicas` says how many), so losing the leader loses no answered write; after `--sync-timeout` seconds (10) it answers anyway, logs a warning, and later writes answer at once until a replica catches up (`sync` in `/$/replication/{name}` shows which). Writes wait for replicas on threads of their own, so more writers than `--threads` cannot starve the replicas' log reads. A single-triple write with one synchronous replica: 1.9 ms instead of 0.7 ms (p50). Replicas name themselves in their log reads, and a read of the log waiting for a commit wakes at the next write instead of polling every 20 ms: an idle replica sees a write after 2 ms instead of 12.
+- Faster first writes into a large store on disk (#437): `INSERT DATA` looks up its terms and checks its quads in parallel, as `INSERT … WHERE` already did, on a pool of more threads than cores (`TRIPLETRAIL_LOOKUP_THREADS`, by default 4 per core, 32 to 128) for a store on disk, so that the reads of a store just opened wait side by side. The check of the store's files in the background (#436) pauses while the store is being written, reads at most about half as fast as the disk, and leaves the page cache to the store. On 40M quads with a cold page cache, the first commit of 10,000 triples took 1.6 s and now 0.6 s (5.2 s and now 2.2 s with another process reading the disk). On the 1B Europe run, the first seven commits after opening took 20 to 79 s each. When a store opens, its dictionary's hash index is read into the page cache in the background (`TRIPLETRAIL_PREFETCH=0` turns that off; skipped above a quarter of memory). With a cold cache on 6M triples, the first commit of 10,000 triples went from 180-220 ms to 90-115 ms.
+- Read replicas keep up with busy leaders (#217): a replica applies all the transactions of one read of the leader's log in one commit, not one commit each. With 4,600 small inserts a second on the leader, a write showed on the replica after 14 s (p50) and 23 s (p95); now 1 ms and 5 ms.
+- Read your writes on read replicas (#217): writes to an on-disk dataset answer with `TripleTrail-Version`, where the leader's log stands once the write is on disk; a read sent to a replica with that value as `TripleTrail-Min-Version` waits until the replica has applied it (up to 10 s, then 503).
+- Read replicas (#217): `tripletrail serve --follow NAME=URL --follow-token TOKEN` serves a copy of another server's dataset and keeps it up to date from the leader's write-ahead log: it copies a base backup, then applies each transaction the leader has synced, in order. The replica refuses writes and reports its lag in `/$/status` and `GET /$/datasets/{name}`; it copies a new base when the leader's dataset is recreated or restored, bulk loaded, or its log is gone. Leaders serve `GET /$/replication/{name}`, `…/log` and `…/base` to the admin, and keep the newest retired log in each dataset's directory (`--keep-logs`, default 1). `Store::log_position`, `Store::read_log`, `Store::set_log_retention`, `Store::base_position`, `tripletrail_store::scan_log`, `Engine::apply_logged`.
+- A dataset's `maxMemory` quota and its `memoryBytes` in the admin API now count its cached routing networks too, the stale ones kept for their contraction hierarchy included (#225).
+- A dataset's `maxMemory` quota and `memoryBytes` now also count its parsed geometries, spatial and full-text indexes (and their per-caller views) and range indexes. `/$/stats/{name}` splits the total by part under `memory`, and `/$/metrics` has `tripletrail_dataset_memory_bytes` with a `part` label (#225).
+- A dataset can keep its OWL 2 RL entailment up to date, as it keeps RDFS (#187): `tripletrail serve --owl-rl NAME[=GRAPH]`, `entailment=owl-rl` in the admin API, `Engine::set_entailment`. A write that only adds data is entailed from the added triples, round by round with the schema as it is. A removal, a schema change, `owl:sameAs` (asserted, derived, or a resource in an `owl:sameAs` class), a write into the inferred graph and a bulk load entail the whole dataset again. On 400k triples with 1.2M entailed, a 2-triple insert takes 40 ms and a removal 0.54 s.
+- Concurrent small writes go faster (#709). Commits share log syncs (group commit): a commit appends to the write-ahead log under the writer lock but syncs it after letting go, so the commits queued meanwhile append too and one `fdatasync` covers them all. Each client still hears back only once its commit is on disk; readers can see a commit up to one sync before that. After a failed sync, the store refuses writes until it is reopened. Writes also no longer rewrite the routing cache's generation file and list its directory when no routing network is saved there. On a 600k-quad disk store, 3-triple `INSERT DATA` requests went from 1,190/s to 1,550/s at 1 client and from 2,900–3,160/s to 4,900/s at 4 clients.
+- Small Graph Store uploads are fast and atomic (#702). A 10-triple N-Triples `PUT` took 43 ms and the server managed 25 per second whatever the concurrency: each N-Triples load zero-filled a 64 MB parse block under the writer lock. The block now grows with the text, and an upload of up to 100,000 quads is one transaction (clear and insert together, one log entry) that keeps the spatial index and cached counts instead of dropping them. Measured on a 600k-quad disk store: 947 `PUT`s/s at 1 client (1.0 ms) and 1,972/s at 8, against 24/s and 26/s before. `DELETE` of a graph keeps the index too. Bulk loads take as long as before.
+- OWL 2 RL scm-cls, scm-op, scm-dp, scm-dom1/2 and scm-rng1/2 (#187): declared classes are their own sub class and equivalent, sub classes of owl:Thing (so their members are typed owl:Thing) and super classes of owl:Nothing; declared object and datatype properties are their own sub property and equivalent; domains and ranges are written with those of super properties and super classes. The W3C SPARQL 1.1 Entailment Regimes suite now runs in the conformance job (`--suite sparql11-entailment`): 39 of 44 RDFS and OWL RDF-Based tests pass, 26 tests of other regimes are not run.
+- A pipeline `reason:` step's timeout now also stops the merge of derived triples and the noting of the changes, which took 8 s of the 23 s write of 36 million triples, and the step leaves the graph as it was (#659). The store commit that follows still finishes once begun; a timeout passing during it, or during the OWL 2 RL consistency checks, fails the step with an error saying the entailment was written.
+- Faster bulk loads larger than `--memory-limit` (#218). The seven index orders after SPOG are now sorted from SPOG four at a time, each with its share of the sort memory, instead of one after another: their merges and segment writes, each on one thread, now overlap. On 20M synthetic RINF triples with `--memory-limit 1G` on 4 cores, the load went from 33.8 s to 23.3 s, peak memory went down (2.3 → 1.9 GB), and peak disk use stayed at 1.8 GB (it is reached at the final checkpoint; the runs of three more orders now wait on disk during the index build).
+- Shorter checkpoint stalls on the write path (#218). The commit that checkpoints no longer pays for three things that grow with the store. First, it no longer flushes the segments a background merge wrote: the merge now flushes them itself. Second, past eight dictionary pieces, only the pieces after the first are written again, not the whole dictionary. Third, old checkpoints are renamed and deleted on a thread of their own. On a 25M-quad store with 400 commits of 10k quads and a checkpoint every 32 MB of log, the slowest commit went from 5.1 s to 1.0 s, p99 from 1.5–1.7 s to 0.5 s, and the total from 43–46 s to 37–38 s.
+- RDFS entailment (#187), phase 1: `tripletrail entail` and `Engine::entail_rdfs(into)` write what Jena's default RDFS rules derive (domain, range, subproperty and subclass, with their closures, to a fixpoint) into a named graph, on term ids, in one transaction, and say how many triples came in and left. Running it again replaces the graph's content with a merge of the sorted old and new triples. On 5M quads it derives 14.5M triples in 10 s, and a rerun with no change takes 1.6 s.
+- Entailment can be cancelled (#647): `Engine::entail` stops at the engine's deadline, so a pipeline `reason:` step honours its `timeout` and fails with the step graph as it was. `entail::entail_until` and `Transaction::entail_until` take a cancellation check, asked each round of the fixpoint, inside the OWL 2 RL joins, the class and property hierarchy closures, the owl:sameAs rewrite and the sort of a large round, so a step stops within about half a second of its timeout. Property chain joins keep each pair once as they go (a chain over a 3,000-node path held 180M duplicate pairs, about 2.9 GB, before), and an owl:sameAs class's own triples are no longer expanded a second time.
+- OWL 2 RL consistency rules (#187): cax-dw, cax-adc, cls-com, cls-nothing2, cls-maxc1, cls-maxqc1/2, prp-irp, prp-asyp, prp-pdw, prp-adp, prp-npa1/2 and eq-diff1-3 write nothing and are listed after entailing, as in Jena's validity report: `Engine::inconsistencies(limit)`, the first 20 printed by `tripletrail entail --regime owl-rl`, and a `reason: owl-rl` step's `results.inconsistencies`. With `fail_on_inconsistency: true` the step fails on one.
+- OWL 2 RL, fifth part (#187): scm-eqc2 and scm-eqp2, so classes (properties) that are sub classes (properties) of each other get owl:equivalentClass (owl:equivalentProperty), each also of itself, as it is its own sub class on the cycle.
+- OWL 2 RL, fourth part (#187): a maximum cardinality of 1 (owl:maxCardinality, owl:maxQualifiedCardinality with owl:onClass: two values of a member of the restriction are the same), owl:hasKey (two members of the class with a value in common for every key property are the same) and owl:oneOf (its members are of the class).
+- OWL 2 RL, third part (#187): owl:sameAs between resources (eq-sym, eq-trans, eq-rep-s/p/o, kept as classes and rewritten per round), owl:FunctionalProperty and owl:InverseFunctionalProperty. Generalized triples inside the fixpoint (a chain on a blank property) are no longer written, and neither are the literal-predicate triples RDFS derived from a sub property or domain on a literal, in a kept entailment too.
+- OWL 2 RL, second part (#187): value restrictions (owl:hasValue, owl:someValuesFrom, owl:allValuesFrom with their scm rules), owl:intersectionOf, owl:unionOf and owl:propertyChainAxiom. The rules that join triples run on all triples in each round whose new triples they read.
+- OWL 2 RL, first part (#187): `tripletrail entail --regime owl-rl`, `Engine::entail(into, Regime::OwlRl)` and pipeline `reason: owl-rl` add owl:equivalentClass, owl:equivalentProperty, owl:inverseOf, owl:SymmetricProperty and owl:TransitiveProperty to the RDFS rules, on term ids, to a fixpoint.
+- Admin API: `entailment=rdfs` when creating or attaching a dataset (a graph that holds triples needs `replace=true`), `POST /$/datasets/{name}/entailment` to turn it on or off, and an `entailment` field in the dataset description (#187). `serve --rdfs` refuses a name that no writable dataset has.
+- Kept RDFS entailment (#187): `tripletrail serve --rdfs ds[=GRAPH]` and `Engine::set_rdfs_entailment` keep a named graph holding the RDFS entailment of the others, updated in the same commit as every write: incrementally for added data, by delete and rederive for removed data, and by entailing again on schema changes and bulk loads.
+- Pipelines: `reason: rdfs` steps (#187) write the RDFS entailment of the other graphs to the step's graph (`urn:tripletrail:inferred` by default), replacing what it held.
+- An `INSERT … WHERE` without `DELETE` makes its quads and adds them to the transaction on a
+  second thread while the WHERE goes on (#292); before, the WHERE waited for each batch of
+  inserts. The rail KG GPS locations update (2.5M quads from 317,000 rows) takes 15 s instead of
+  19.7 s when its quads are new, and 11 to 13 s instead of 14 s when they are already there.
+- Dictionary pieces that may hold WKT literals in binary form are written with a new magic,
+  `OXGSDIC4` (#428), so a binary from before #426 refuses such a store instead of misreading
+  those keys. A piece in that format also tells the reader that keys may be compact, as the
+  `compact-keys` file does. Format 3 pieces are read as before.
+- A benchmark suite for update throughput by update size (#496): `run_suite.sh updates
+  <dataset>` holds out real triples of a dataset and sends them as INSERT DATA batches of 10 to
+  10^6 triples, then as DELETE DATA, with count checks after each size, plus INSERT { } WHERE
+  { } updates that mint nodes like the rail KG uplift, on TripleTrail, Oxigraph, Jena and GraphDB
+  (time per triple, p50/p95, failures, store size). Added to the `full` profile on
+  `bsbm-28480`; manual workflow only, never in CI.
+- After an update, only the changed quads that can touch the spatial index (a geometry literal or a `geo:asWKT`) are decoded to refresh it; the predicates are decoded once each (#292). Before, every inserted or deleted quad was decoded. An `INSERT ... WHERE` copying 2 M triples with IRI and string objects takes 6.5 s instead of 7.9 s.
+- A commit that folds the delta into new runs updates the exact counts with its range counts
+  in parallel, not one after the other (#437). On a store larger than memory each count can
+  be a read from disk, and a fold of 70k changes takes up to two per change and permutation.
+  On Europe 1B the 60 x 10k update test had p50 392 ms but p95 82 s; locally every seventh
+  commit folds, so the slow ones are most likely those (the per-commit times were lost with
+  the artifact). The slow-commit log now says how long a fold's lookups took, and the scale
+  suite prints the per-commit times and the slow-commit lines in the job log, to confirm.
+- A load of a store larger than memory is as fast as before #370 again (#218). Since the
+  opt-in WKT rendering, every dictionary lookup read the bytes of each key it compared, to see
+  whether it was a compact WKT key, even where the key's length already ruled it out; in a
+  mapped dictionary larger than memory each such read is a read from disk. Loading Europe 1B
+  took 6.9 h instead of 96 min. Lengths are compared first again, and only a dictionary that
+  may hold compact keys looks for them: a checkpoint written with WKT in binary form, or a
+  later one of the same store, carries a `compact-keys` file. A 15M-triple load under a
+  1.2 GB memory cap: 121 s, now 69.5 s (69.4 s before #370).
+- A checkpoint links the segment files it does not change instead of writing them again
+  (#444). Segments read from a checkpoint had no file of their own as far as the next
+  checkpoint knew, so every checkpoint rewrote every permutation in full: one inserted quad
+  and a checkpoint wrote 677 MB on a 20M-quad store (about 80 GB at 1B triples, at every
+  log-size checkpoint and server shutdown). It now writes about 1 MB there.
+  Copies of the store (`save_to`, backups) still get files of their own: segment files are
+  copied, never linked (already the case before for runs a fold had just written), and
+  checked against their sums on the way, so a damaged file fails the copy.
+
+- Runs left unmerged are merged once a store has been idle for 30 s (#442). Since #437 a
+  small batch of updates leaves its runs unmerged, and reads merged them in (in the #441
+  review on a 25M store: a join +19 %, a filter scan +10 %). Now a store that goes 30 s
+  without writes merges its remaining runs into the segments in the background, so a
+  read-mostly phase after updates reads the segments alone. Such a merge runs to its end
+  through later writes, so a store written now and then merges once rather than starting
+  over at every write. It takes the runs that hold at least 1/1024 of their segment, of
+  segments up to 256M quads; larger ones are left to the 1/64 rule, since their rewrite takes
+  many minutes. On a 20M store after 20 commits of 10,000 quads, a full scan went from 503 ms
+  back to 373 ms once idle, and one-quad writes every 2.4 s (idle time 2 s) wrote 707 MB in
+  all: one merge.
+
+- Small commits into a large store no longer rewrite it in the background (#437). The first
+  delta folded into runs (after about 65,000 changed quads) started a merge that rewrote every
+  permutation's segment. On a 1B-triple store that merge ran for about 20 minutes, and the
+  commits made while it ran took 11 to 155 s instead of about 4 s. A permutation's runs now
+  merge into its segment only once they hold one quad per 64 of the segment, or once there are
+  more than 8 runs. Until then, reads merge in the few runs. On a store of 20M quads, 20
+  commits of 10,000 quads wrote 24 MB instead of 1.4 GB; a full scan right after them was 35%
+  slower (510 vs 380 ms), and single-quad lookups were not slower. A commit slower than 1 s logs
+  where its time went: the wait for the writer lock, the changes and term lookups, the
+  write-ahead log, applying the changes (and whether that folded the delta), the checkpoint,
+  and whether a merge ran.
+
+- A store opens without reading its data (#436). Opening used to check every checkpoint file
+  against its checksum (and every dictionary key and segment block) before the first query: a
+  1B-triple store (171 GiB) took 22 minutes to start. A checkpoint larger than 1 GiB is now
+  opened with only its file lengths and headers checked, and a thread then reads the files and
+  checks their sums in the background
+  (`Store::verification`, `Store::wait_verified`). A damaged file is logged, and the store
+  answers queries but refuses writes and checkpoints (a damaged `geoms.bin` too, which a
+  check at open ignores). Until the check is done, damaged data can be read as it is, and no
+  checkpoint is written (it would sum unchecked data anew): commits stay in the write-ahead
+  log, `Store::checkpoint` and a server shutdown keep the log, and bulk loads, `save_to` and
+  backups wait for the check (a bulk load before it changes anything, so a load refused for
+  damage leaves the store as it was). The check reads the files the store opened even after they
+  are replaced. Smaller checkpoints are checked whole as they open, as before.
+- Opt-in: WKT literals kept only in binary form (#370). `tripletrail load --render-wkt`, or
+  `Store::set_render_wkt(true)`, has each later checkpoint keep a WKT literal as its binary
+  geometry record only, without its text, when the text written back from the record (in the
+  number format and spacing found in it) is byte for byte the text loaded; any other literal
+  keeps its text, so results are unchanged. The setting is kept with the store (a `render-wkt`
+  file, carried by `save_to`, backups, copies and restores). Default stores are unchanged.
+  Trade-off: queries that output many WKT texts are slower, since each text is written back
+  (5M geometries over HTTP: 8.4 s to 10.5 s; about 25 ns per number with fixed decimals, 55 ns
+  with full-precision ones); spatial functions, filters and lookups are unaffected. Measured
+  sizes: 5M OSM-like geometries 3.19 to 1.90 GB, the rail KG (mostly `POINT Z`) 1.78 to 1.53 GB.
+- `tripletrail lift` writes each triple of a query once (#377). The evaluator's CONSTRUCT filter
+  of duplicates empties itself past 1,048,576 triples, so a large lift repeated triples (52,770
+  extra lines in one rail KG query); lift now filters by a 128-bit hash of each triple (16 bytes a
+  triple plus hash-table overhead, for the whole query: about 3 GB for a 100M-triple lift), and
+  its summary counts distinct triples.
+- `tripletrail lift` keeps JSON numbers as written in the file (#378): they were parsed to
+  doubles, which changed thousands of coordinates in the last digit, dropped trailing zeros,
+  and gave invalid `xsd:decimal` literals for exponent forms. A numeral with an exponent is now
+  `xsd:double`, as in SPARQL Anything; the others stay `xsd:decimal`.
+- An `INSERT … WHERE` takes far less memory (#382). A transaction keeps its changes as term
+  ids, net (a quad added and removed again is not among them), instead of a second copy of
+  every quad as text; the write-ahead log and the changes a commit returns (`Changes`, now a
+  type of its own) are decoded from the ids, the log a group of pieces at a time. An update
+  without `DELETE` puts its quads into the transaction in batches as its rows come, and terms
+  a query computes (`BIND(IRI(…))`) are kept once, as their key. On 4 M inserted triples
+  (the issue's repro) the peak goes from 4.2 GB to 1.75 GB and the memory kept afterwards from
+  2.8 GB to 0.7 GB, at the same speed.
+- Point-in-time restore (#222). A commit in the write-ahead log carries its time
+  (`C <unix millis>`; logs without times are still read), and a bulk load that bypasses the
+  log leaves an `L` marker. `Store::set_wal_archive` keeps every log a checkpoint retires (a
+  hard link, or a copy on another file system), `Store::save_base` writes a checkpoint that
+  records where it starts in the log chain, and `Store::restore` replays the logs after a base
+  up to a time into a fresh store, stopping with an error at a bulk load it cannot replay or
+  at a gap in the chain. Each store directory has a timeline id, so the archive keeps the
+  logs of a dataset's incarnations apart and a restore reads only its base's timeline.
+- A full disk while writing a store's index is an I/O error ("No space left on device") instead
+  of a SIGBUS crash (#218): the index file's blocks are written before it is mapped.
+- The spatial index takes less than half the memory (#218). An entry's box is kept in `f32`,
+  rounded outwards (candidates are still a superset, the exact tests are on the geometry),
+  and a geometry no query asked for costs only its term id: the literal and parsed geometry
+  read for queries are kept in chunks made on first use. A geometry without a saved record
+  (3D, say) is parsed for its box without being kept. 10M polygons: 1.34 GB → 0.60 GB of
+  heap; the rail KG (1.05M geometries, mostly 3D): 1034 MB → 157 MB. Spatial joins take the
+  same time. The benchmark harness reports the peak heap of a TripleTrail load
+  (`load_peak_anon_bytes`) and the heap in `rss`, next to the resident size that counts the
+  mapped store files.
+- Geometries are saved per dictionary piece (`geoms.bin`, `geoms-1.bin`, ...), mapped on
+  open, and hard-linked by the next checkpoint like the pieces themselves, so a checkpoint
+  encodes only the geometries of the keys added since (#218). Before, every checkpoint
+  encoded all geometry literals again and copied them on the heap: on the rail KG (1.4M
+  geometries, 217 MB of records) a checkpoint of one change took 2.5 s and up to 690 MB of
+  heap, and now takes 1.1 s and 26 MB (`examples/checkpoint_cost.rs`). A store with the old
+  single `geoms.bin` still opens, and its first checkpoint writes the new files.
+- A checkpoint saves a hash index of each dictionary piece (`dict.idx`, `dict-1.idx`, ...),
+  which a store on disk maps when it opens, so opening hashes no keys and the hash table on
+  the heap holds only the keys added since (#218). An index takes 12 bytes a key on disk.
+  The rail KG (12.5M quads, 3.6M keys) opens in 0.21 s instead of 0.33 s, with 3 MB of heap
+  instead of 26 MB; term lookups take the same time (`examples/term_lookups.rs`, 1.2 µs a
+  quad), and so do small commits after checkpoints (`examples/dict_commits.rs`): only the
+  indexes of pieces with at least an eighth of the keys are used, so a new key costs one
+  probe of mapped memory, and the keys of the smaller pieces go to the table. An index that
+  is missing, damaged or from another hash function is built on the heap as before, and
+  written by the next checkpoint.
+- A store dropped while it merges runs in the background now stops the merge and waits for
+  it, removing what the merge wrote. Before, the merge ran on and kept writing in the
+  store's directory, which a test then failed to delete.
+
+### Workbench
+
+- The AI tab (#409) drafts rules, queries, updates and tests from a description, besides shapes, and explains a validation result (**explain**) or an inferred triple (**Explain with AI** in the why? panel) with a proposed fix. It checks each file with the new `POST /$/workspaces/{id}/check` (RDF, shapes and rules that compile, SPARQL, YAML and JSON; nothing is written), and with **may query the data** tries queries on the workspace and runs its tests. Proposed files may go only in `shapes/`, `rules/`, `queries/`, `updates/` and `tests/`; it never writes data and never runs an update.
+- Reason tab (#407): what RDFS or OWL 2 RL entails from a workspace's data (`POST /$/workspaces/{id}/reason?regime=`), by class and by predicate, with the OWL 2 RL inconsistencies, and **why?** on any entailed triple: its derivation tree, rule by rule down to asserted triples (`…/reason/why`). The derivation is searched for after the entailment, on its result (`tripletrail_store::entail::Explainer`), so the entailment itself stays as fast as before.
+- Why rules run in the order they do (#401, #408): `…/infer` answers a `plan` (with `plan=true`) with the groups the rules are split into, in run order, whether each repeats to a fixpoint, and the edges between rules (rule B reads what rule A writes, through which predicates, and whether only under a negation). The Workbench's Rules tab has a **strata** view of it. `Inference::with_plan` and `InferOptions::plan` give the same plan in Rust.
+- A pipeline run's report gives each rule of an infer step (`rules`: the rule, pass, seconds, focus nodes, triples constructed and new), to compare rule by rule with the same rules run as INSERTs (#520).
+- Rules on a union default graph (pipeline `infer` steps with `union_default_graph: true`, as the rail KG uplift steps) no longer copy every quad of the store before they run (#520). They run on a fork of the store that shares its quads, with the union put into its default graph by term id: 12 s instead of 43 s on the 12.5M-quad rail KG. Validation with a union default graph does the same.
+- An export step's `query:` may be the query itself (a value with a `{`), not only the path of a `.rq` file; a missing query file is named in the error.
+- Pipelines can declare more datasets for their python steps (`datasets: [metadata]` at the top): empty, in memory for the run, and served on the step's loopback server next to the pipeline's own, as `{base_url}/metadata/update` and so on. The rail KG ETL's `insert_lineage_triples` writes its lineage to Fuseki's separate `/metadata` dataset and failed with a 404.
+- SHACL rule inference (`infer` steps, ordered or not, `tripletrail infer`, validation with rules) runs a SPARQL rule whose `$this` is only inside a sub-select that does not return it once, as the same rule sent as an `INSERT ... FILTER EXISTS { focus }` runs, instead of once per batch of 4,096 focus nodes with each of them joined to all its solutions (#520). Such a rule makes the same triples for every focus node. The rail KG uplift_trase step ran more than 1.5 h on its two `spot_location_km` rules; a synthetic copy of one (40,000 focus nodes) takes 0.6 s instead of more than 15 min.
+- Overlays of a whole dataset (#406): `POST /$/workspaces/{id}/overlay` (and **Overlay…** in the Workbench) makes a workspace's store the dataset's quads as they are now, read only, with its own changes kept apart: updates (now taken by an overlay's `…/update`), validation, inference and the pipeline work on the whole dataset, which is never written and whose writers go on. `GET …/overlay/patch` gives the changes as an RDF Patch or added/removed N-Quads, `DELETE …/overlay/changes` drops them; `--workspace-max-overlay-changes` caps them. In Python: `ws.overlay(name)`, `ws.update(…)`, `ws.patch()`, `ws.drop_changes()`, `ws.detach()`. In the store, `Store::overlay` forks a store without copying a quad: its index is pinned, so its writes stay in runs beside the shared segments and are never folded into them, and its memory grows with its changes, not with the store.
+- Promote a workspace's shapes to a dataset (#400): **Promote shapes…** makes the Turtle files of `shapes/` the next version of a dataset's own shape set with `PUT /$/datasets/{name}/shapes/files` (the whole set at once, checked as one, an admin's), naming the workspace as the version's source; the version before is kept for a rollback.
+- Workspaces from git (#400): `POST /$/workspaces/{id}/pull` (and **Pull…** in the Workbench) fetches a folder of a branch of a git repository and writes the workspace files in it over the workspace's, checked against the caps first; the workspace remembers the repository for the next pull. For an admin only, as the server fetches the URL. The shapes' git pull and this one share the fetch (`shapes_git::fetch_files`).
+- Share links for workspaces (#400): **Share link…** puts a small workspace's files in a link (deflated, in the URL's hash, up to 64 KB), and opening it makes a new scratch workspace with a copy. A file a sample of a dataset wrote is left out: a workspace marks it (`sampled`, kept across restarts and edits) until it is deleted. Files made from sampled data are not tracked.
+- Inference with provenance costs about what inference without it does (#455): its SPARQL rules run in semi-naive passes and, for `tripletrail infer`, on the store itself (`Evaluator::select_native`), as without provenance. On 140,000 inferred triples (a transitive rule over 400 lines of 25 sections), provenance took 5.1 times as long as plain inference and now takes 0.9 times as long, with the same triples.
+- Client runs in the Workbench (#405): what the Python client, a notebook or curl runs against a workspace (queries and updates, validations, inferences, tests, pipeline runs, completed steps) is listed in a new **History** tab, with a count of new runs, and opens where the workbench shows its own: a validation's report, an inference's triples with why? on each, a query run again as a file of `queries/`. `GET /$/workspaces/{id}/history` (last 100 runs, in memory), `ws.history()` in Python. `Workspace.url` now opens the workspace (it gave a link the workbench did not follow).
+- The Pipeline tab's per-step overhead is gone (#488): a step runs on a fork of the store the step before it left (`Store::fork`: the quad index is shared until either side writes, the dictionary copied, nothing decoded) and its diff is one merge of the two quad indexes by id (`Store::changes_from`), with terms decoded only for what it reports. On a million quads, the copy takes 2 ms instead of 0.5 s and the diff 36 ms instead of several seconds.
+- Python steps in the Workbench (#405): a run of a workspace's pipeline stops at a python step, which waits for its code; the store it works on is served read-write as a Fuseki dataset at `/$/workspaces/{id}/pipeline/{N}/sparql`, `/update` and `/data`, so code written for Fuseki runs against it from a notebook (`ws.run_step(N, function)`), and `…/pipeline/{N}/complete` (or **Complete step**) takes what it left as the step's result.
+- Pipelines for the rest of the rail KG ETL (#404): a lift step with `for_each:` lifts once per input file (a folder or a `*.xml` pattern, the file bound to `?_file`), `then:` runs SPARQL updates on what each lift gave before it is added (e.g. to drop the M ordinate of WKT), every step can bind `variables:` over the parameters, and a `publish` step writes the graphs it names (`_graph_*` patterns, merged or not) as a new on-disk dataset, swapped in when complete.
+- Pipelines as code (#405): `tripletrail pipeline export --to airflow` writes an Airflow DAG whose tasks run the steps with `tripletrail pipeline run` (one per step, or one for all; parameters as DAG params), and `--to python` a script that runs them in process with `tripletrail.Engine`; the Workbench's Pipeline tab offers both, and **Copy as Python** on its Query, Validate and Rules tabs copies the `tripletrail.Engine` code of what the tab does. `Engine.infer(..., ordered=True)` in Python.
+- Rules and validation on the default graph of a store with a union default graph see every graph (but the shapes graph), and rules that read a `GRAPH` still find it when they run on a copy (#404).
+- Python against a server (#405): `tripletrail.connect(url, workspace=…)` or `(url, dataset=…)` gives `query`, `explain`, `load`, `dump`, `validate` and `infer` over HTTP with the in-process result classes (and a workspace's files, tests, pipeline and blame), on the standard library only; `%load_ext tripletrail` adds the `%%sparql` and `%%shacl` notebook magics, with results as a table or DataFrame.
+- Pipelines run the rail KG ETL's stages (#404): `python` steps call `module:function(base_url, dataset)` or run a script against the dataset served Fuseki-style on a loopback port for the step, so existing `requests` code runs unchanged; `infer` with `ordered: true` runs each rule once in `sh:order` (then rule IRI), each seeing the earlier rules' output, as a list of INSERTs (also `tripletrail infer --ordered`); `clear: true` drops a step's graph before it runs; `union_default_graph: true` makes the default graph the union of all graphs, as Fuseki's `unionDefaultGraph`.
+- Workbench Pipeline tab (#404): runs a workspace's `pipeline.yaml` step by step on a copy of the store each step left, so a step runs again from its input; shows each step's time, quads, triples added and removed by predicate and class with samples, and validation results; marks steps whose files changed; queries the store as any step left it (`/$/workspaces/{id}/pipeline`, `…/pipeline/{N}/query`); and the why? panel says which step, and which file, added or removed a triple (`…/pipeline/blame`).
+- Pipelines (#404): a `pipeline.yaml` lists the steps of an ETL (`lift`, `load`, `update`, `infer`, `validate` as a gate, `export`) with parameters, target graphs and timeouts, and `tripletrail pipeline run` runs it on a dataset from Airflow, CI or cron, all of it or `--from`/`--to` a step, with a JSON report of each step's time, peak memory, quad counts, files and validation results.
+- Workbench tests (#403): a folder of a workspace's `tests/` with an input, a query, update, rules or shapes and the expected output (a graph compared up to blank node renaming, result rows in any order, or validation results as a count or a list) is a regression test. `tripletrail test [DIR]` runs them for CI (exit status 1 on a failure, `--junit FILE`, `--record` to write the expected output), `/$/workspaces/{id}/tests` lists, runs and records them, and the Workbench has a Tests tab and **Save as test…** on its Query, Validate and Rules tabs.
+
+### Describe pages
+
+- Search by name (#142): `GET /{ds}/search/labels?q=` finds resources of the `search` reader's classes by their labels (every word, the last as a prefix; case and accents aside; `class`, `limit`), with links to their describe pages and REST records, from the full-text index and ranked as the map search. The web UI's top bar has a search box over it (`/` to focus, arrow keys and Enter) that opens the describe page.
+- Search builder (#142): the web UI's **Search** page (`/$/ui/search/{ds}`) builds a search without SPARQL, "Find [class] where [property] [operator] [value]", with operators fitting each property (numbers, ranges, text, dates, booleans, and a picker for links to other resources), extra columns, a shareable link and **Open in Query** for its SPARQL. `GET /{ds}/search/classes` lists the classes and their properties, `/search/results?m=` runs a search given as JSON (count, rows by label with their values, at most 1,000) and `/search/sparql?m=` gives its SPARQL. A limited caller sees only what it can read.
+- Search builder: value boxes suggest the values a property takes among the resources the other conditions find, with counts (`GET /{ds}/search/values?m=&key=&at=&q=`), and **or** adds alternatives to a condition (`{"any": [...]}` in the search).
+- Below 1280 px the top bar's search box is a magnifier icon that opens it over the bar, instead of being hidden or squeezed, and tabs that do not fit scroll sideways rather than widen the page; the Map page's own search box takes a line of its own there.
+
+- Every resource has a readable page (#140), at `/{ds}/describe?iri=` and as the HTML answer of dereferenced IRIs (#141), in place of the list of triples. It follows the dataset's DASH shapes (`sh:group`, `sh:order`, `sh:name`, `dash:viewer`, `dash:hidden`, inverse paths) over its superclasses too, and without shapes groups the properties into attributes and links, with labels in the browser's language, blank nodes as nested rows and the links pointing to the resource. `?format=view` gives the page's view model as JSON.
+- A describe page draws the resource's geometries (its own WKT/GML literals, those of its blank nodes and of the geometries it links to with `geo:hasGeometry`) as a map, with a link to OpenStreetMap for longitude/latitude coordinates (#140).
+- Describe page rows take any SHACL path (#140): sequences, alternatives, inverses and the `*`, `+`, `?` paths, nested, followed from the resource within 100,000 triples; the row shows the path in SPARQL syntax. Small rings and lines keep 4 points on the map next to a huge geometry.
+- rinf-describe's shapes load on describe pages (#140): `rd:key`, named paths shared between files, key figures (`dash:KeyInfoRole`) as badges, `dash:LabelRole` titles, `rd:tab`, `rd:unit`, `rd:class`, `rd:hidden`, and `rd:over` + `rd:aggregate` summaries over linked resources. The most specific class's rows win, a deactivated `tts:key`/`rd:key` row turns off a superclass's row, and own shapes come before generated ones. Property shapes without `sh:path` are accepted when deactivated or naming a `dash:viewer`.
+- Describe page rows with `sh:node` show their values as a table, with the node shape's property shapes as columns (#140).
+- Describe pages (#140): a table says when its cells were not all read (`tableTruncated`); rinf-describe widgets get the values of the paths they name (`rd:begin`, `rd:end`, `rd:km`...) as `widget` and `params`, and a validity shows as "from … until …".
+- Describe pages draw three rinf-describe widgets (#140): documents as cards with their file type (`rd:DocumentViewer`), a length as a bar against reference marks or a range on a scale (`rd:ScaleBarViewer`, `marks` and `scale` in the view), and concepts as a tree by their broader concepts (`rd:ConceptTreeViewer`). Rows of equal `sh:order` compute their sort key once.
+- Describe pages draw rinf-describe facilities as yes/no tiles (`rd:FacilitiesViewer`) and the summary rows named in `rd:figures` as key figure tiles (`rd:KeyFiguresViewer`, `figures` in the view), also when those rows are hidden (#140).
+- The map of a describe page is interactive (#140): with the web UI on, MapLibre GL JS 6.16.0 (BSD-3-Clause, served at `/$/ui/vendor/maplibre/`) shows the resource's geometries over OpenStreetMap tiles, every geometry in longitude/latitude whatever its CRS. Without the web UI or script, the drawing stays.
+- The describe-page map has no base map by default, so the page fetches nothing from elsewhere; `--map-tiles` and `--map-attribution` name XYZ raster tiles to draw under it (#140). Describe pages send no `Referer`.
+- Describe pages write railway locations (`rd:LrsLocationViewer`, `km 53+240`), draw gradient profiles as step charts (`rd:StepChartViewer`) and list a line's operational points in km order (`rd:LineStopsViewer`), draw a section's route (`rd:RouteDiagramViewer`) and what lies along it as a strip (`rd:AlongLineViewer`), and draw a line's profile with a lane per section column (`rd:LineProfileViewer`), and show where a kilometric post is on its line (`rd:LinePositionViewer`) (#140). Shown and hidden table columns are capped apart. Widgets get the rows they draw from (`rows`) and their literal settings (`settings`) in the view; hidden table columns are read for widgets and marked `hidden`.
+- Describe pages sketch a platform edge against the TSI heights (`rd:PlatformViewer`) and a track end-on (`rd:CrossSectionViewer`), draw an operational point's tracks with their platforms and sidings (`rd:TrackLayoutViewer`) and the sections that meet there as spokes pointing where they go (`rd:ConnectionsViewer`), draw a linear element's net relations as a graph with navigability arrows (`rd:TopologyViewer`) and what is positioned on it at its offset (`rd:PositionedViewer`) (#140). Rows of one property for different `rd:class` each keep their own row.
+- Describe pages put parameters that change over time on a time axis with today marked (`rd:ChangesViewer`) and draw small symbols beside values: flags, gauges, platform heights, running directions and energy supply colours (`rd:SymbolViewer`) (#140). Drawings leave out kms, offsets, lengths and geometries they cannot scale to finite numbers (1e308, INF). In the view, rows carry their `key`, and a widget names a row the page also shows by key instead of repeating it.
+- Describe pages gather the parameters a resource marks `era:notApplicable` or `era:notYetAvailable` into one *Data status* row at the end of the overview (`rd:DataStatusViewer`) (#140).
+- Describe pages match rinf-describe on its Luxembourg sample (#140): all 237 pages show the same groups and rows in the same order (none did before). Summaries over linked resources read as rinf-describe's: `count` counts the linked resources, a distinct count ends with `none (n)` for those without a value, and a range of only some of them ends with `(k of n)`. A row of the dataset's own shapes without a key is also known by its name, so a subclass's *Part of* replaces its superclass's, and rows of one property with their own keys each stay. An inherited row of a key the subclass's shape has is left out. `tripletrail shapes import-atlas --hidden-from` hides the facets too, so the rail pack's map shapes add no rows to describe pages; a superclass's shape hidden from a reader still lends its property shapes (an abstract asset shape kept off the map gives signals their owner facet).
+- The *RINF parameters* tab (`rd:ParameterIndexViewer`, #140): every RINF parameter of the resource and of what it links to (its contact line system, ETCS...), by RINF index under its chapters, with units and the parameters marked not applicable, from ERA's ontology in the dataset. A resource that links to itself lists its parameters once, and the table stops at 1,000 parameters (`tableTruncated`).
+- A describe page's map shows what is around the resource, muted (`rd:context`: the section of line a track is part of), also when the resource has no geometry of its own (#140). Widgets with nothing to draw are left out of the page.
+
+### REST API
+
+- `/{ds}/graphql` answers GraphQL queries (#144) over the REST API's datasets, from the `graphql` reader's shapes: per dataset a type, a field for one record by IRI and a connection (`first`, `after`, `filter`, `q`, `bbox`) for the list; references are objects of their dataset's type and embedded blank nodes nested types, read one batch per level the query follows; language strings as a `LangString` map. GET and POST (JSON or `application/graphql`), introspection. Limits per request: 16 levels, 10,000 fields, 500,000 values read over all fields and levels, and one timeout for the whole request. A class named like a GraphQL type (`Int`, `Query`, another class's `…Connection`) gets a type name with `_` added. Read only. Built with async-graphql 7.2 (MIT/Apache-2.0). `/$/ui/graphql/{ds}` is a playground (schema, editor, answer) on the built-in CodeMirror; a browser that opens the endpoint lands there, and `/{ds}/api/v1` links both.
+- The REST API's OpenAPI definition is also at `/{ds}/api/openapi.yaml` (#143), and passes Spectral's OpenAPI rules without a warning: tags per dataset, a description per operation, a contact.
+- The REST API embeds objects (#143): a key whose values have a node shape (`sh:node`, or its `sh:class`'s) gives a blank node, or an IRI that is no dataset's record, as an object with that shape's keys, two levels deep, with a scoped `@context` and an OpenAPI schema. Writes take such objects as new blank nodes, remove a replaced blank node with the blank nodes below it when nothing else links to them, and explain an `sh:node` violation key by key (`address.city`).
+- Fixed: a REST write that removed a blank-node value in the default graph sent `DELETE WHERE` with a `FILTER`, which is not SPARQL, and failed.
+- A REST API record as plain JSON (`f=json`) has an `ETag` of its own, apart from the JSON-LD one; `If-Match` takes either (#143).
+- A REST API record has an `ETag`, and `PUT`, `PATCH` and `DELETE` with `If-Match` are refused (412) when the record changed since it was read (#143).
+- The REST API writes records (#143): `POST /{ds}/api/v1/{dataset}` makes one (its IRI in `id`), `PUT …/{id}` replaces its keys, `PATCH` changes the keys in the body (`null` removes), `DELETE` removes it. The record as it would be is validated against its node shape in the dataset's own shapes first, and refused with 422 and `application/problem+json` naming the key, value, SHACL constraint and message. Writes are one SPARQL update under the caller's write rights; with a union default graph, values stay in the graph of the record's type triple. The OpenAPI definition has the writes.
+- `/$/ui/api/{ds}` shows the REST API's OpenAPI definition in Swagger UI (5.34.0, Apache-2.0, built in; listed in NOTICE), where requests can be tried out; `/{ds}/api/v1` links to it (#143).
+- The REST API takes its format from `Accept` when `f` isn't given, and CSV cells that a spreadsheet would read as a formula (`=`, `+`, `-`, `@` but not numbers) start with `'` (#143).
+- The REST API's records come as GeoJSON (`f=geojson`, for datasets with a geometry) and CSV (`f=csv`, pages linked in the `Link` header) as well (#143).
+- `q` on the REST API's records ignores the accents of Latin letters as well as case, as the full-text index does: `q=koln hbf` finds "Köln Hbf" (#143).
+- `/{ds}/api` is a read-only JSON-LD REST API made from the shapes of the `rest-api` reader (#143): `/{ds}/api/v1` lists a dataset per node shape, `/{ds}/api/v1/{dataset}` pages its records with `?{key}=value`, `q` (label text) and `bbox` filters and `next` links, `/{ds}/api/v1/{dataset}/{id}` gives one record, and `/{ds}/api/openapi.json` is an OpenAPI 3.1 definition. Keys come from `tts:key`; `sh:maxCount 1` gives one value, references to other datasets carry their label, language strings are language maps, and the `@context` maps every key to its predicate so the records read back as their triples. `f=json` leaves the `@context` out.
+
+### Maps (OGC API, tiles)
+
+- The Map's first facet counts of a collection where a few features have no geometry are quick again (#946). Each facet's query tested every feature's geometry path to leave those out; on all of RINF, 14 of 408,033 running tracks without one made the running-track facets take 48 s. Up to 1,000 such features are now looked up once and left out by name. On Germany's RINF graph with one such track, the 130 facets take 7.9 instead of 24.3 s, the same as with none. The counts are unchanged.
+- CQL2 `T_MEETS` and `T_METBY` take a date to end at the next midnight (#497), so a span of dates meets the day after it; before, a date ended at 23:59:59.999 and met nothing.
+- OGC API features in JSON-FG 1.0 (#497): `Accept: application/vnd.ogc.fg+json` or `f=jsonfg` adds `conformsTo`, `featureType`, each feature's `time` from its `tts:time` values, and with another `crs` the geometry in it as `place` beside the CRS84 `geometry`.
+- OGC API feature ids are short under a dataset's base IRI (#497): with one `--base-iri`, a feature's id is its IRI's local part (`s1`, at `…/items/s1`). The whole IRI still finds it.
+- A CQL2 `IN` list of strings looks the strings up as terms when the property's values are strings, language-tagged strings or IRIs (#497). On the rail KG, 1,000 strings that match nothing take 0.56 s (was 5.0 s), and 500 matching plus 500 not 1.95 s (was 6.1 s). Otherwise the text of the collection's own values is compared, no longer that of every value of the path in the store. `CASEI(p) IN (…)` no longer keeps features whose value is a blank node.
+- The OGC API Features definition (`/{ds}/ogc/api`) passes Spectral's OpenAPI rules without a warning (#138): a tag per collection, a description per operation, a contact. CI lints it, with the REST API's (#143).
+
+- Map search (#139): the Map page's search box finds features by the words of their labels (full-text index, the last word as a prefix) and goes to the one chosen, showing its layer and opening its page. `/{ds}/tiles/search?q=` answers it.
+- Colour by a range facet (#139): the Map page colours a collection by classes of a number, such as speed bands, from the property shape's new `tts:colorClasses` (`tts:upTo` and `rdfs:label` per class) or else five classes of equal width. Tiles with `color.{collection}={key}` of a range facet give each feature its highest number. Range facets show their unit from `qudt:hasUnit` (`unit` and `classes` in the facets answer).
+- A dataset's own node shape for a class replaces the class's generated shape whatever its IRI (#139) when it is written for the readers (an `tts:` annotation, no `tts:onlyFor`; a plain constraint shape adds to the generated one), and keeps the generated shape's `tts:instances`: shapes written apart, such as the rinf-atlas shapes, no longer give each class twice on the map and in the OGC API. The map legend follows the node shapes' `sh:order`, then their titles, with classes not in the data last.
+- Map facets skip the geometry test when every instance of the collection has a geometry (#139): with the rinf-atlas shapes, whose geometry is a feature's own or its section's, RINF's 120 running-track facets took 27 s and now take 3 s.
+- Map draw order (#139): within areas, lines and points, a style draws classes with more instances first, so a few stations are no longer hidden under thousands of track sections. A node shape's `tts:drawOrder` (an integer, higher on top, default 0) sets it. The facets `query` returns each feature once, with one of its geometries, so its `LIMIT 1000` counts features.
+- The web UI has a Map page (#139): `/$/ui/map/{ds}` draws a dataset's collections (those the `map` reader reads) over its vector tiles with MapLibre, each in its `tts:color` and from its `tts:minZoom`, over the `--map-tiles` base map if the server has one. A layer list turns collections on and off and greys those below their zoom; a click lists the features under the pointer with their labels, each linking to its describe page. The map opens on the collections' extents and keeps its position in the URL. `/{ds}/tiles/style.json` is the MapLibre style it draws, usable by other MapLibre clients.
+- Generated shapes leave two kinds of classes off the map (#139), which drew features twice: GeoSPARQL and Simple Features classes (`geo:Geometry`), whose instances are other features' geometries, and umbrella classes whose every instance also has narrower types covering them (RINF's `era:InfrastructureElement`, `era:NetBasicReference`). The OGC API keeps them. On the RINF Luxembourg sample the map has 6 layers instead of 9. An umbrella class is one whose every read instance has another type and whose other types all have fewer instances, checked on the sample first and then over every instance of the class, so a sampled profile neither misses one (full RINF DE+FR hides `era:InfrastructureElement`) nor hides a class whose first instances happen to all have a narrower type.
+- Map facets count only the features with a geometry (#139), the ones the map draws and the OGC API serves, so a filter's count equals what the GIS link returns (RINF operational points: 22,013 of 30,752). The facets answer also carries `query`, the filtered features as SPARQL with their geometry, and the Map page's *Query* button opens it in a new query tab. Map text search escapes `%` and `_` in the CQL2 of GIS links and folds text facets other than names.
+- Text facets (#139): generated shapes give other string properties (names, codes too many to list) `tts:Facet-Text`. The Map page searches them with a *contains* box, tiles and facet counts take `{key}.text=…` (whatever its case), and the OGC API link writes it as `CASEI(key) LIKE CASEI('%…%')`. Boolean values read *yes* and *no*. Such properties are now also OGC API queryable filters.
+- Colour by a facet (#139): the Map page draws a collection in a colour per value of one of its values facets, chosen under *Filter*, with a key of its 10 most frequent values. Tiles take `color.{collection}={key}` (`color={key}` on a collection's own tiles) and give each feature its value of that facet as `value`. Map links from a link with keys that are no facet drop them once the facets load, CQL2 links quote keys that are no plain identifier, and a link's keys can no longer write onto `Object.prototype` (`__proto__.min`).
+- Shareable maps (#139): the Map page's link holds the hidden layers (`hide=`) and the filters (`{collection}.{key}=value`, `.min`, `.max`) next to the position, so a shared link opens the same view. A collection's filter panel opens its filtered features in the OGC API and copies their GeoJSON link for a GIS, the filters written as CQL2.
+- Buttons in the web UI kept their text readable on hover: the hover took MatGUI's hover *text* colour as its background, dark on dark.
+- Map facets (#139): `/{ds}/tiles/facets/{collection}` counts a collection's features per value of each `tts:Facet-Values` facet and gives the span of each `tts:Facet-Range` facet, each facet under the filters of the others, and tiles take the same filters (`{key}=value` and `{key}.min`/`{key}.max`, prefixed `{collection}.` on `all`). The Map page lists a collection's facets under *Filter*, with counts, and redraws the map as values are picked; facets with one value fold into *Same for all*. Facets are counted in parallel and without a second sort key: on RINF DE+FR running tracks (44 facets) 0.5 s instead of 2.3 s unfiltered, 0.8 to 1.7 s instead of 3 to 5 s under a filter.
+- Maps draw OpenStreetMap's standard tiles under them by default, with their credit (Mathias's choice); `--map-tiles none` turns the base map off, and `--map-tiles` names other tiles. Describe pages send their origin (`strict-origin`) as `Referer`, as tile servers ask, instead of none.
+- The Map page opens a feature's describe page in a panel beside the map (#139), fetched with the page's token so it works on datasets that need one; links to other resources open in the panel, *Open page* in a new tab. Cached tiles count their layer name twice, as it is held twice.
+- OGC API – Features Part 3 (#138): `filter` with CQL2 text or JSON (`filter-lang`,
+  `filter-crs`) on the items, and `/collections/{id}/queryables`. Comparisons, `LIKE`,
+  `BETWEEN`, `IN`, `IS NULL`, `CASEI`, timestamps and dates, the `S_*` spatial and the
+  `T_*` temporal functions (with `INTERVAL`); arithmetic and array functions are refused
+  with `400`, as are filters over the
+  limits (64 KiB, 64 levels deep, 200 predicates, 1,000 `IN` values, 1,000 vertices).
+  A top-level `IN` of strings is read once as a join with a `VALUES` table (on 40,000
+  features, 1,000 strings: 0.5 s instead of 4.4 s).
+- OGC API and tiles after a write (#475): the collections made before the write answer while
+  new ones are made in the background, so a dataset without shapes no longer pays about 2 s
+  (on the rail KG) for the next request after every write. A shapes change still applies at once.
+- OGC API – Features collection extents (#138): `extent.spatial` (the box around the
+  geometries, reprojected to CRS84) and `extent.temporal` (the span of the `tts:time` values), made in the
+  background per data version (until a new fill is done, the last finished one is answered),
+  and shown on the collection's HTML page. With them the OGC
+  test suite runs its `bbox` tests too: 567 passed, none failed.
+- OGC API – Features `datetime` (#138): an instant or an interval filters the items on the
+  property shapes marked with the new `tts:time` (`tts:Time-Instant`, or `tts:Time-Start` and
+  `tts:Time-End`); a date covers its day. Error replies under `/{ds}/ogc` carry `Vary: Accept`,
+  and the HTML sketch leaves polygon holes empty.
+- OGC API – Features passes the OGC conformance test suite (Team Engine, ets-ogcapi-features10:
+  339 tests passed, none failed; the 8 skipped need the optional `numberMatched` and collection
+  extents). For it: query parameters are declared `style: form, explode: false` in the
+  OpenAPI definition, HTML links are typed `text/html`, and a feature id whose slashes are
+  not percent-encoded is accepted.
+- OGC API – Features HTML pages (#138): every resource as HTML for `f=html` or for a
+  browser (`Accept` with HTML before JSON), made from the JSON document: landing page,
+  conformance, API, collections, and items and features with a table of their properties
+  and an SVG sketch of their geometries. The JSON documents link their HTML form
+  (`rel=alternate`).
+- OGC API – Features property filters (#138): `…/items?key=value` on the properties the
+  shapes mark with `tts:facet`, listed in the OpenAPI definition.
+- OGC API – Features Part 2 (#138): `crs` and `bbox-crs` with CRS84, EPSG:4326 and EPSG:3857,
+  `Content-Crs` on items and features, and `crs` / `storageCrs` on the collections.
+- Vector tiles per dataset at `/{ds}/tiles/{collection|all}/{z}/{x}/{y}.mvt` (#138): a layer
+  per collection the `map` reader reads, from `tts:minZoom` on, each feature with its IRI,
+  cached in memory (256 MiB) until the next write or shapes change.
+  Layers that share a geometry path come from one query, run on up to four threads, and
+  lines and polygons are simplified to a tile unit below zoom 14 (#458).
+- OGC API – Features Part 1 per dataset at `/{ds}/ogc` (#138): landing page, conformance,
+  an OpenAPI 3.0 definition, collections from the shapes the `ogc-features` reader reads,
+  items as GeoJSON with `bbox`, `limit`, `offset` and next links, and single features by
+  their percent-encoded IRI. A feature with several geometry values gets the most detailed
+  one (`geometries=all`: a `GeometryCollection` of them all).
+
+### Endpoint
+
+- Map tiles, `bbox` reads and search areas read a geometry path made of alternatives (`A|B`, as RINF's shapes give the tracks and points) as a union of them, each next to the window's test, so the spatial index serves each one. Before, every instance's geometry was tested. A cold `all` tile of RINF Germany now takes 0 to 0.65 s instead of about 1.7 s at any zoom, with the same bytes (#947).
+- `shapes import-atlas` writes the summary of a view's requirement checks (such as RINF Atlas's "meets every TEN-T requirement") so that each check is evaluated once per feature, and features none of the checks applies to are left out first. A section's checks look at its parts once per result. On RINF Germany the summary takes 1.2 s for the running tracks (was 4.6 s) and 1.6 s for the sections of line (was 2.4 s), with the same values. On all of RINF it reached the 10 s cap (#945).
+- Computed facets (`tts:select`): a facet's value from a SPARQL pattern instead of a path, which the Map page counts, filters on and colours by; one whose query fails comes without values instead of failing the others, gets at most 10 seconds (so do counts and tiles filtered or coloured by it), and after a timeout is not counted again until the data or shapes change. The shape check refuses a pattern that does not parse, binds no `?value` or calls an outside `SERVICE`. `shapes import-atlas` turns RINF Atlas's view requirement checks (TEN-T, ERTMS, electrification) into computed facets of the checked classes and their sections (#148).
+- Map views (`tts:MapView`): a named lens on the map, picked from a **View** list above the Map page's layers, with the classes it shows (`tts:showsClass`), the filters it sets (`tts:filter`) and the facet it colours by (`tts:colorFacet`) and the facets its filter panel lists first (`tts:listsFacets`); the link keeps it as `view={key}`. `tiles/style.json` lists them in `metadata."tripletrail:views"`, for the collections the caller sees. `shapes import-atlas` reads RINF Atlas's `views/` as map views, listing a view's group facet (`atlas:groupBy`) and parameters first (#148).
+- `tts:colorBy` on a facet (a number): the Map page's "Colour by" lists such facets first, lowest first, and `tiles/facets/{collection}` answers it as `colorBy`. `shapes import-atlas` writes RINF Atlas's `atlas:colorBy` this way (#148).
+- `shapes import-atlas` writes a facet's `atlas:unit` (a QUDT unit's local name) as `qudt:hasUnit`, so the map shows it with the facet's values, and a node shape's `atlas:order` as its `sh:order`, its place in the map's legend (#148).
+- The boxes of `tts:lineBetween` lines are read in the background, one read per dataset, view and way at a time, so no request waits for them (a window builds every line until they are read), and those kept are capped at 128 MB, least recently used first (#148).
+- Map tiles, `bbox` and search areas on `tts:lineBetween` ways build only the lines whose box meets the window, from the lines' boxes kept per store generation, and a page of features builds only its own lines (#148). On 100,000 sections of line, a zoom-10 tile went from 1.4 s to under 0.1 s and a page of OGC items or REST GeoJSON from about 1 s to 0.05 s.
+- A line between two features (#148): a geometry way with `tts:lineBetween ( A B )` gives the instances without a value on the first `sh:path` way the straight line between the geometries at the end of the two paths, in the map's tiles, OGC API Features, the REST API and search. `shapes import-atlas` writes `atlas:lineBetween` this way, so RINF sections of line without a geometry are drawn between their operational points.
+- `tripletrail shapes import-atlas FOLDER --out DIR [--hidden-from READER] [--prefix P]` writes RINF Atlas shapes (`atlas:` annotations) as a shape set in `tts:` terms, one file per node shape, and counts on standard error what TripleTrail has no reader for (#148).
+- "View as" (#205) now also applies to the graph explorer and the top bar's search box: they send the view-as headers like the query page and the map, so they show the chosen caller's view rather than the admin's.
+- The conformance runner runs the W3C RDF 1.1 Semantics tests (#224, `--suite rdf11-mt`): under RDFS it closes the action with TripleTrail's RDFS rules and checks that the result graph maps into the closure, with literals of a recognized datatype compared by value, or that the action is inconsistent (an ill-typed literal, or a literal outside the datatype of its property's range). 36 of 39 approved tests pass; the 3 that need the container membership axioms fail, as those are left out like in Jena's default RDFS rules. 9 tests the working group never classified are not run.
+- `/.well-known/dcat`: a DCAT-AP catalog of the datasets for data portals such as data.europa.eu (#141). Each dataset has a distribution for its SPARQL endpoint and one for its N-Quads dump, and its endpoint is a `dcat:DataService`. `--catalog FILE` adds titles, descriptions, publisher, licence and keywords from a Turtle file whose relative IRIs are the server's own (`<#catalog>`, `<kg/void#dataset>`, or an alias's). Each caller sees only the datasets it may list.
+- `OPTIONAL { SERVICE ?endpoint { … } ?s ex:p ?o }`, a SERVICE with more patterns in its group, is evaluated once per row of the patterns that bind `?endpoint` as well, as Fuseki does; before, only a SERVICE alone in its OPTIONAL group was.
+- `OPTIONAL { SERVICE ?endpoint { … } }` after the patterns that bind `?endpoint` calls each endpoint once per row, and keeps the rows it has no answer for, as Fuseki does (follow-up to #224); before, it failed with an unbound endpoint.
+- `SERVICE ?endpoint` after the patterns that bind `?endpoint` calls each endpoint they find, once per row, as Fuseki does (#224); before, the endpoint variable was always unbound there and the query failed, unless a `LATERAL` bound it. The service description describes the built-in SERVICEs (`pgr`, `st`, `path`, `window`) as supporting SPARQL 1.1 Query. The conformance runner now runs the W3C Service Description suite (3 of 3 pass) and the 6 Federated Query tests with mock endpoints (all 10 of the suite pass), each against a `tripletrail serve` of its own; graphs named by server path (4 Graph Store Protocol tests) stay not run, as Fuseki doesn't serve them.
+- Reviewed access changes (#207, TripleTrail Enterprise): with `"review": true` in the auth configuration, a policy written or removed, anonymous access, a restore of the access history and a key for an admin are proposed (`202`) and made when a second admin approves them: `GET /$/access/proposals`, `POST /$/access/proposals/{n}/approve` or `…/reject`. Nobody approves their own, the built-in `--admin-token` neither proposes nor approves, and no access change is accepted under `X-TripleTrail-View-As`; the access history names both. The audit log names the admin behind a view-as request, with `viewAs` for whom they viewed as.
+- `tripletrail audit report FILE` (#207, TripleTrail Enterprise): who did what, from the audit log, by agent and dataset: changes done, refused and failed, reads, quads added and removed per graph, how each agent signed in and from where; `--since`, `--until` (UTC), `--agent`, `--dataset` and `--json`. It checks the chain, and when it is not whole says so and exits 1.
+- `--audit-syslog udp://HOST:PORT` or `tcp://HOST:PORT` (#207, TripleTrail Enterprise) sends each audit line to a syslog collector as an RFC 5424 message, from a queue so that requests never wait on it; lines it cannot send are counted in `tripletrail_audit_syslog_dropped_total`, and the file keeps them all.
+- The audit log (#207) says what each change did to each graph: `graphs` with the quads added and removed per graph, and the totals; a bulk load, whose quads are not counted, has `"uncounted": true`. `--audit-reads` (`TRIPLETRAIL_AUDIT_READS`) also logs queries and other reads of a dataset, by agent and query hash.
+- Audit log (#207, TripleTrail Enterprise): `tripletrail serve --audit-log FILE` appends a JSON line for each change and admin call, and each refused attempt at one: who (agent, groups, how they signed in, address), when, the dataset, path and graph, the outcome, the body size and the update's text hash (not its text). Lines are chained by SHA-256 hashes, so a removed, changed or moved line shows, and `tripletrail audit verify FILE` checks the chain. A restart goes on with it; a line cut off by a crash is ended and marked. Written before the answer is sent, whatever the licence says.
+- The access explain page takes a single sign-on token (#198, TripleTrail Enterprise): `GET /$/access/datasets/{ds}/explain` with the header `X-TripleTrail-Explain-Token` explains the token's bearer, and `token.groupClaims` names the claim each group came from; `/$/sso`'s `signedIn` has `groupClaims` too.
+- Browser sign-in to the web UI with OIDC (#198, TripleTrail Enterprise): an `auth.oidc` issuer with a `browser` client (`clientId`, `clientSecret`, `redirectUri`) lets people sign in with the provider. A browser opening the UI without credentials is sent to sign in; the server runs the authorization code flow with PKCE, exchanges the code itself, checks the ID token (and its nonce) and keeps a session, which the browser holds as an `HttpOnly`, `SameSite=Lax` cookie. Changes with a session must come from the server's own origin (CSRF). `GET /$/sso` lists the sign-ins and who is signed in, `POST /$/sso/logout` signs out; the UI's key button shows both. See [signing in with a browser](docs/server.md#signing-in-with-a-browser).
+- Single sign-on with OIDC (#198, TripleTrail Enterprise, `sso` in a licence): `auth.oidc` in `--auth-config` lists the identity providers trusted (Keycloak, Entra ID, Okta, …), and a JWT sent as `Authorization: Bearer` is checked against the issuer's published keys (RS/PS/ES/EdDSA; `none` and `HS…` refused), its expiry and its audience. Claims become the caller's agent (a template such as `https://example.org/people/{preferred_username}`) and groups (claim paths such as `realm_access.roles`, renamed with `groupNames`; the server's own `tripletrail:` groups only through it). A refused token is a 401 with the reason; without a licence covering `sso`, tokens are refused while keys and passwords keep working. The open build does not start with `auth.oidc`. See [single sign-on](docs/server.md#single-sign-on-oidc).
+- An update from a caller who may read only some graphs may call the `st:`, window, `path` and `pgr` services (#203), which were refused there: their sub-selects read the graphs of the update's `WHERE`. The operations of one update that call a service must read the same graphs. An update under row rules that calls a SERVICE is now refused (400), as a query is: its sub-select read rows the rules hide.
+- GeoSPARQL relation triples (`?a geo:sfWithin ?b`) in the sub-select of a `st:`, window, `pgr` or `path` SERVICE are answered (#857): the spatial rewrite skipped every SERVICE, so they found nothing there, and spatial FILTERs in them ran without the index. For callers limited to some graphs the sub-selects are rewritten from the index of their graphs.
+- With `--union-default-graph`, the `st:`, `window` and `pgr` services read the union of all graphs, as the query around them does (#861): a named network (`pgr:network`) stored in a named graph was not found ("no pgr:edgeQuery for network"), and the services' sub-selects read only the stored default graph. A SERVICE inside a stored `pgr:edgeQuery`, which nothing answers there, is a 400 instead of a 500.
+- `/$/metrics` counts the queries that ran into a budget (#189): `tripletrail_budget_trips_total` by dataset and `budget`, `memory` (stopped by `--query-memory`), `rows` (refused past `max-rows`) or `partial` (cut there with `partial=true`). A query stopped by the memory limit is no longer counted in `tripletrail_timeouts_total`, nor is any other 503 (a read-only dataset, a damaged file). The Grafana dashboard's timeouts panel shows the trips too.
+- A wrong parameter of one of TripleTrail's own services (`SERVICE <http://w3id.org/tripletrail/path>`, `pgr`, `window`, `st`), such as `path:exceptPredicate` with `path:predicate`, is answered 400 with the reason instead of 500.
+- OpenTelemetry traces (#220): `--otlp-endpoint` (`OTEL_EXPORTER_OTLP_ENDPOINT`) sends a span per request, with child spans `sparql.prepare`, `sparql.evaluate`, `sparql.update` and `http.send`, to an OTLP collector over HTTP with JSON. A W3C `traceparent` joins the caller's trace and its sampling; `--otlp-sample`, `--otlp-headers` (`OTEL_EXPORTER_OTLP_HEADERS`) and `--otlp-service-name` (`OTEL_SERVICE_NAME`). Written without the OpenTelemetry SDK (no new dependency); feature `otel`, on by default.
+- An access-history restore to a version that does not have a current policy file with row rules is a change of row-level policies, which needs a licence covering `row-policies` (#818 follow-up): the restored configuration may stop naming the file.
+- Users with passwords, as on Fuseki (#825): `auth.users` in `--auth-config` sign in with HTTP
+  Basic. Passwords are stored as PBKDF2-HMAC-SHA256 hashes (`tripletrail hash-password`) or
+  Shiro's `$shiro1$` hashes, and `tripletrail import-shiro shiro.ini` converts a Fuseki
+  `shiro.ini`. A 401 also asks for Basic when users exist.
+- Row-level policies (`sg:visibleIf`, `sg:hideProperties`, `sg:editableIf`, #202) are now a TripleTrail Enterprise feature (#818). The open engine keeps the row filter and a `RowCompiler` hook; compiling and judging row rules moved to `tripletrail_enterprise::rows`. The open build refuses policy files with row rules (fail closed), and a library query under row rules without the compiler is refused. The enterprise build always enforces them, even with a lapsed licence or none; only changing a policy file that has row rules (a policy write, removal or history restore) needs a licence covering `row-policies` (403 otherwise). `/$/license` has `rowPolicies` and the start log warns. Their tests run in a new CI step with `--features enterprise`; guide examples of enterprise features are marked `<!-- test: enterprise … -->`.
+- A shape pack installs from a git tag (#148): `PUT /$/datasets/{name}/shapes/pack` with `{"git": {"url", "tag", "path", "tokenFile"…}}` reads the pack's `.ttl` files from that tag (or a `ref`), named after the repository and versioned by the tag unless `name` and `version` are given, with the commit in its `source` and as `tts:commit`. With access control, installing from git needs `tripletrail:admin`, as a git binding does; a dataset's admins install a pack's files. A pack write that stops between its renames no longer loses the installed pack.
+- `tripletrail serve --pack [NAME=]DIR` (#148) installs a shape pack from a folder as the dataset opens (named by its `pack.json`, else the folder's name and version `local`), and leaves a release that is installed already as it is.
+- A check before a shape pack upgrade (#148): `PUT /$/datasets/{name}/shapes/pack?dry=true` installs nothing and answers what the release would do: its errors and the own set's, the shapes it adds, drops and changes against the installed release, the own set's overrides that go on changing a pack shape and those that would stand alone (`orphaned`), and its shapes for classes the data has no instances of (`noData`). `tripletrail shapes check --pack DIR [--installed DIR] [--own DIR] [--data FILE…]` makes the same check on folders, as text or `--json`, and exits 1 on errors (and with `--strict` on an orphaned override).
+- Shape packs (#148): `PUT /$/datasets/{name}/shapes/pack` installs a set of shapes written for a domain (`name`, `version`, `files`, optional `source`) as a layer between the generated shapes and the dataset's own set, so generated < pack < own. `GET` shows it, `DELETE` removes it; a new version keeps the own set's overrides. `TripleTrail-Shapes` names it (`pack rail@1.0; local; version=3`), the shapes' SPARQL dataset has it in `urn:tripletrail:shapes:pack` (`tts:pack`, `tts:packVersion`), `customise` starts from the generated shapes with the pack on top, and snapshots, store backups and swaps carry it.
+- A JavaScript client in `clients/js` (#223), for browsers and Node 18+, over `fetch` and with no dependencies: `select`, `ask`, `construct` and `query` (with the protocol's dataset, timeout, row budget and `partial`), `update` (with `using-graph-uri`), the Graph Store Protocol, and the admin API (ping, ready, server, datasets, create and delete, stats); `TripleTrailError` with the status and message; `toValue`/`toValues` for plain values; TypeScript types. Tested against a running server in CI, with the user guide's example (chapter 10). Not on npm yet. For pages on another origin, `--cors` now also allows the `X-API-Key` request header and exposes `X-Result-Incomplete`, `X-Cache` and `X-Truncated`.
+- `COPY DEFAULT TO <g>` and `MOVE DEFAULT TO <g>` no longer lose `<g>`'s own triples when the default graph is a union that includes `<g>` (#782): with `--union-default-graph`, for a caller that reads only some graphs, or with `using-graph-uri` naming `<g>`. The source is read as it was before the request, on both stores; `<g>` ends up holding the whole union.
+- With `--union-default-graph`, `COPY`, `MOVE` and `ADD DEFAULT TO <g>` take the stored default graph, as Fuseki does under `tdb2:unionDefaultGraph`, instead of the union (#782 follow-up). An `INSERT … WHERE { ?s ?p ?o }` written by hand still reads the union: the parser gives these operations variables no query can name (vendored spargebra patch 10). `USING <urn:x-arq:DefaultGraph>` in an update names the stored default graph, as in Jena. Where the default graph of a copy does include `<g>` (a caller that reads only some graphs, `USING <g>`), the drop of `<g>` is left out instead of being rewritten.
+- Row rules checked against an independent evaluator (#208): random policies from the SHACL subset (`sg:visibleIf` and `sg:hideProperties`, with class, node, subjects-of and objects-of targets or none, and eight kinds of constraints) are judged by the engine and by a small evaluator in the test; queries under the rules must answer as a store holding only what the evaluator shows, also after random inserts and deletes, which bring the hidden set up to date incrementally. 400 seeded inputs in CI (`tests/row_filter.rs`, 9,000 more run locally), and in the `graph_grants` fuzz target. A test that breaks the incremental path fails it. Documented: a literal target is never hidden.
+- Write tests for graph grants (#208): `MOVE`, `COPY`, `ADD`, `DROP`, `CLEAR`, `CREATE` and `LOAD` (also `SILENT`) under a write grant: a source the caller cannot read copies nothing, and an update that would change a graph it may not write is refused whole, nothing applied. Policies swapped through `/$/access` while two clients write: every update writing two graphs lands in both or neither, as its answer says, and none passes once the narrower policy is back.
+- pgRouting under named graph grants (#203): `SERVICE <http://w3id.org/tripletrail/pgr>` builds its network (and reads its points, restrictions and `pgr:edgeQuery`) from the caller's readable graphs, cached apart for each set of graphs. `pgr:shapes`, `pgr:vehicle`, `pgr:compatibilityShapes` and `pgr:shaclRules` are refused for such callers.
+- Path search under named graph grants (#203): `SERVICE <http://w3id.org/tripletrail/path>` follows only the edges of the caller's readable graphs (its default graphs, a `path:graph` it may read, or the edge sub-select on its dataset); `path:graph` on a graph it may not read finds no edges.
+- The `st:` and window services under named graph grants (#203): a caller who reads only some graphs may call them, and their sub-selects read the graphs the query reads (its readable graphs, narrowed by `FROM`). Other services, one service inside another, and services in explain and updates are still refused for such callers. A new leak test compares the answers with a server that holds the readable graph only.
+- Full-text search under access limits (#203): `tt:search`, `text:query` and the map search (`/{ds}/tiles/search`) answer callers who may read only some graphs, or under row rules, instead of 403. They search an index of what the caller can read alone, so hits, scores and limits are those of a store holding only that data; such indexes are kept per view and patched after writes like the full one. A query with a protocol dataset searches its graphs. Side fixes: the matches of a search (and other result tables) are read when the default graph is one named graph, and under row rules. Differential tests on random data, before and after writes, against an engine holding only the visible data; the two-server leak test asks the searches too. User guide, chapter 12: a search under row rules. Each view's index has a slot of its own: searches of one view wait for its one build or patch and share it, other searches go on, and a build stops with the query's timeout (a caller could ask for a new view with each protocol dataset), as does a search waiting for it. Tests: a build asks its stop and ends with its error; 8 searches at once of a view after a write do one patch and no build.
+- Row rules in the `access` benchmark (#204): a `sg:visibleIf` shape hiding about 10% of the net elements costs 1.04 to 1.3 times a store holding only the rows it shows. A property hidden everywhere (`sg:hideProperties` without targets) now counts as absent: its estimate is 0, a basic graph pattern with it is empty and a scan with it fixed reads nothing. A query joining such a property took 11.2 ms against 0.1 ms in that store, now 0.1 ms. The same holds for a subject or object hidden everywhere. Test: such terms match nothing and are estimated so, a property hidden on some subjects only keeps its estimate.
+- A Grafana dashboard for `/$/metrics` (#220): `deploy/grafana/tripletrail.json`, with requests, errors, latency percentiles, timeouts, limits, cache and memory per dataset. A test checks that every metric and label it reads is exported.
+- User guide, chapter 12: a tested section on row rules (`sg:visibleIf`, `sg:editableIf`, refused writes, the access explain page).
+- Writes under row rules judge only the resources they change (#700): the checks after the write and of `sg:editableIf` (before and after) no longer compile the rules over the whole store, under the writer lock, three times per write. A one-triple `INSERT DATA` with a `sg:visibleIf` and a `sg:editableIf` rule on 200,000 resources took 948 ms, now 4.8 ms. Differential test: on random data, the verdicts on some resources equal those of compiling all, also for shapes that read beyond the resource.
+- Reads under row rules no longer sort and hash the hidden set on every query (#708): a row filter keeps its fingerprint once made, and the spatial index view is looked up only when the query has a spatial filter. A point read with a rule hiding 10,000 of 200,000 resources took 252 µs, now 20 µs, the same as without rules.
+- More than four keep-alive connections opened at once are all served (#690): the vendored tiny_http queued them behind the first four, each held until its client closed it, so pooled clients hung. A patched check in `TaskPool::spawn` (vendor/tiny_http/TRIPLETRAIL.md). Test: 16 connections at once, all answered.
+- Row rules (#202) are brought up to date after a write instead of compiled anew: the store logs the resources and predicates each commit touched (`Store::touched_between`), and only those are judged again when every shape is local and `rdfs:subClassOf` did not change. The first restricted query after a write took 440 ms for rules on 200,000 resources, now 2 to 4 ms. Differential test: after random writes, the filter brought up to date equals one compiled anew.
+- Access explain (#202): `GET /$/access/datasets/{ds}/explain?agent=&groups=` gives a caller's access, the policies that apply and the row rules in force; `resource=` tells whether that IRI is visible and which shapes hide it, its hidden properties and what keeps it from being edited; `query=` lists the query's triple patterns with matches and visible matches (`Engine::explain_resource`, `Engine::query_patterns`).
+- `sg:editableIf <shape>` (#202, proposed sparql-guard term): visible resources a writer may not change unless they conform to the shape, before and after the write; it hides nothing from reads. Applies to SPARQL updates, Graph Store and RDF4J writes under row rules.
+- RDF4J API writes under row rules (#202): statement `POST`/`PUT`/`DELETE`, SPARQL updates and transactions from a caller with row rules who may write the whole dataset, with the checks of SPARQL updates under row rules; `PUT` removes only what the caller sees, and transaction `QUERY`/`GET`/`SIZE` read the caller's view.
+- Graph Store Protocol writes under row rules (#202): `PUT`, `POST` and `DELETE` of one graph by a caller with row rules who may write, with the checks of SPARQL updates under row rules (`Engine::write_graph_rows`); `PUT` and `DELETE` remove only the quads the caller sees, and a graph with nothing visible in it is absent.
+- SPARQL updates under row rules (#202): a caller with row rules who may write updates only what it sees. The `WHERE` matches the visible rows, deleting hidden quads changes nothing, and writing about or linking to a hidden resource, a hidden property, or an update that would move a touched resource out of the caller's view, is refused with 403 and rolled back. Only `INSERT DATA`, `DELETE DATA` and `DELETE`/`INSERT … WHERE` are taken from such callers. Checked inside the store's write transaction, against the rules compiled on the view before and after.
+- `CLEAR`/`DROP` of a graph that does not exist and `CREATE` of one that exists, without `SILENT`, answer 400 Bad Request (as Fuseki does) instead of 500.
+- Row rules (#202) apply to the describe page (HTML and `format=view`) and to `explain`: the page reads the view without what the rules hide, with shapes generated from it; explain answers the row count alone. Differential test against a server holding only the visible rows.
+- Spatial queries under row rules (#202) use the spatial index again: the rewrite reads a view of the index holding only the geometries visible quads point to (kept per store version, graphs and filter), and evaluates its own side queries on the filtered view. Tiles, `bbox` and spatial joins for such callers no longer check every geometry. Differential test against a store holding only the visible rows, with the rewrite asserted to run.
+- Row rules (#202) apply to OGC API Features and vector tiles: collections, queryables, extents, items and tiles are made from the view without what the rules hide (the dataset profile and generated shapes too, `Engine::dataset_profile_of`), cached per rules. Differential test: a contractor gets the same OGC and tile answers as from a server holding only the rows it may see.
+- Row rules (#202) apply to the RDF4J API's reads too: queries, `statements`, `size` and `contexts` answer from the view without what the rules hide; its writes answer 403.
+- Row rules (#202) now also apply to RDF descriptions (`describe`, Linked Data) and Graph Store Protocol reads, which read one view of the store without what the rules hide (a hidden resource or a graph with nothing visible is not found); compiling the rules stops with the query's timeout.
+- Row rules of sparql-guard policies (#202), for SPARQL queries: `sg:visibleIf` (with `sg:hideReferences`), `sg:hideProperties` and `sg:requestingAgent` are compiled to a set of hidden resources, predicates and (subject, predicate) pairs, and every quad scan of the caller's query drops what they hide, so aggregates, `OPTIONAL`, `EXISTS` and `*`/`+` paths see only visible rows. Shapes outside the spec's SHACL subset, or recursive, make the policy file fail to load. Other services answer 403 to callers with row rules for now. Differential test: 400 random datasets and queries answer on the filtered view as on a store without the hidden quads.
+- An answer after which the server closes the connection (the client sent `Connection: close`, HTTP/1.0 without keep-alive, or a body was left unread) now says `Connection: close` (#558). tiny_http closed such connections without the header, so clients pooling connections (Python `http.client`, `requests`) sent their next request on the closed socket and lost it: half of the small updates of a client sending `Connection: close` failed.
+- Access change history (#205): every change through `/$/access` is kept as a version of the configuration and policy files in `.access-history/` (who, when, what; last 100), with `GET /$/access/history`, `GET /$/access/history/{n}` (with the version before it and the files as they are now, key hashes cut to 8 digits) and `POST /$/access/history/{n}/restore` (keeps the current API keys; files changed by hand since the last version are kept first, as "Changed outside the access pages"). The Access page lists the versions, shows a line diff and restores one.
+- "View as" (#205): a server admin sending `X-TripleTrail-View-As` (agent IRI or `anonymous`) and `X-TripleTrail-View-As-Groups` runs the request with exactly that caller's access; others get 403. The Access page opens the query page as someone else, with a banner; the query page now sends the UI's admin token.
+- API keys from the Access page (#205, part 3): `POST /$/access/keys` creates a random key, shown once, and stores only its hash in the configuration; `DELETE /$/access/keys/{id}` revokes one; `PUT /$/access/anonymous` switches anonymous access. The page lists when each key was last used (since start), creates and revokes keys, and has the anonymous switch.
+- Access page in the UI (#205, part 2): `/$/ui/access` shows the datasets (warning about closed ones), API keys and groups, and edits a dataset's graph access matrix (graphs by policies, cells none / read / write, with a prefix bulk grant) through the access admin API. A new policy file now gets the `sg:` prefix after its opening comment lines; a change to a dataset that is neither attached nor configured answers 404 (a typo no longer creates a file and turns policies on); the configuration and policy files are written to a temporary file and renamed; removing a policy takes its trailing comment; an escaped `\#` in a local name is no comment.
+- Access admin API (#205, part 1): `/$/access` shows server admins each dataset's policies, the API keys (without hashes) and the groups in use, lists a dataset's named graphs with counts and labels, and writes or removes one policy in a dataset's Turtle policy file, keeping comments and other policies; a dataset without policies of its own gets its own file, seeded from the default policies.
+- Differential tests for updates under graph grants (#208): random updates (INSERT/DELETE DATA, DELETE/INSERT WHERE with WITH and USING, DELETE WHERE, CLEAR, DROP, ADD, COPY, MOVE, sequences) by a caller with random read and write grants must be refused exactly when they are on a store holding only those graphs, change the granted graphs as they change that store, never change another graph, and change nothing when refused. 400 inputs run with the tests (20,000 pass); the `graph_grants` fuzz target runs it too.
+- Differential tests for named graph grants (#208): random datasets (triples repeated across the default graph and four named graphs), grants and queries (paths including `*` and `+`, OPTIONAL, MINUS, EXISTS, UNION, GRAPH, FROM, FROM NAMED, aggregates, ASK, CONSTRUCT); a caller limited to some graphs must get the same answers from the store as from a store holding only those graphs. 400 inputs run with the tests (`GRANTS_INPUTS` for more; 30,000 pass), and the new `graph_grants` fuzz target runs the same check.
+- Faster joins under partial graph grants (#204): a lookup by subject or object reads all graphs in one seek and drops the copies of graphs not granted, instead of one seek per granted graph. Against a store holding only the granted graphs, a half grant now costs 1.05 to 1.7 times (was up to 3.6) in the `access` benchmark.
+- Graph grants cost nothing when they cover the store (#204): a caller granted every graph that holds data ran queries 2.5 to 4 times slower than no access control, because its graphs were merged graph by graph. Such a grant is now read as the union, in one scan (ratios 0.88 to 1.03 in the new `access` benchmark of `tripletrail-bench`).
+- Leak tests compare headers too (#208): the content type, `Link`, `X-Truncated`, whether `X-Cache` is sent and the `ETag`, with tiles compared byte for byte and queries also sent by POST. This found that the describe `ETag` of a caller limited to some graphs hashed the store's blank node labels, which differ with what else the store holds; they are now left out of the hash.
+- Leak tests for named graph grants (#208): `tests/leaks.rs` asks two servers, one holding hidden graphs and one without them, about 170 requests (twice, the second time from the caches) as a caller limited to one graph (queries, explain and RDF4J queries, the Graph Store Protocol, describe, VoID, listings, OGC API Features, tiles and workspace samples), with and without a union default graph, and fails on any answer that differs.
+- Workspace samples under named graph grants (#203, part 8): a caller who reads only some graphs of a dataset can sample it into a workspace, from those graphs only; an overlay of it is refused (403), since it would share every graph.
+- RDF4J and dataset listings under named graph grants (#203, part 7): a caller who reads only some graphs gets the RDF4J API's reads (queries, statements, contexts, size, namespaces) from those graphs, and 403 for its writes and transactions; `/$/datasets`, `/.well-known/void` and the RDF4J repository list now name such a dataset, without its counts.
+- No write signal under named graph grants (#203, part 6): for a caller who reads only some graphs, the `ETag` of a description is a hash of what it is shown, not the store's write generation, and query answers carry no `X-Cache` header, so a write to graphs it may not read no longer shows.
+- Generated shapes under named graph grants (#203, part 5): for a caller who reads only some graphs, the OGC API collections, `/queryables`, filter parameters, `/api` and tile layers come from a profile of those graphs only (`Engine::dataset_profile_in`), so a class or property that is only in other graphs no longer shows. The profile is kept per set of grants until the next write.
+- OGC API Features and vector tiles under named graph grants (#203, part 4): a caller who reads only some graphs sees the collections with features in them, and features, extents and tiles from those graphs only. The visible collections, extents and tiles are cached per set of grants.
+- Explain and VoID under named graph grants (#203, part 3): `Engine::explain_readable` evaluates on the caller's readable graphs and answers the row count alone (the plan would tell what other graphs hold); `/{ds}/void` lists only the readable graphs' subsets.
+- The spatial index under named graph grants (#203, part 2): a caller who reads only some graphs gets the spatial rewrite again, on a view of the index holding only the geometries of those graphs (`SpatialIndex::retain`), with the rewrite's own queries on the caller's dataset. Views are kept per set of grants until the next write. The `ETag` of a description also names the resource, so a tag of one resource no longer answers 304 for another.
+- Readers under named graph grants (#203, part 1): describe, Linked Data and the service description now serve a caller who reads only some graphs, keeping to them. A resource that is only in other graphs answers 404, the `ETag` of a description includes the caller's view, and the service description lists only the readable graphs. `ReadableGraphs::fingerprint()` is the key that caches of such reads take.
+- Named graph write access (#201): `sg:writeGraph <g>` lets a caller write only those graphs (and read them). An update that may change another graph is refused with 403 before anything is applied (`UpdateOptions::writable`); so are templates with `GRAPH ?g` and `CLEAR`/`DROP` of `NAMED` or `ALL`. The `WHERE` of an update by a caller that reads only some graphs is narrowed to them (`UpdateOptions::readable`). Graph Store writes must name a writable graph.
+- Named graph read access (#201): a sparql-guard policy with `sg:readGraph <g>` lets a caller read only those graphs of a dataset (`<urn:x-arq:DefaultGraph>` for the default graph). The engine evaluates such a caller's queries on a dataset narrowed to the readable graphs (`QueryOptions::readable`): without `FROM` the default graph is their union and the named graphs are those graphs, `FROM`/`FROM NAMED` and the protocol's dataset only narrow, and other graphs look empty to `GRAPH ?g`, paths and the Graph Store Protocol (404). `SERVICE` is refused and the spatial rewrite left out for them, and the other services (the service description, describe, explain, Linked Data, OGC, tiles, RDF4J, workspaces) answer 403 until #203. Datasets without such policies are unchanged. A zero-length path (`?s :p* "x"`) to a term that is a node only of graphs outside the query's dataset now matches it, as for a term the store does not hold: this also fixes such queries with `FROM`.
+- Pulls from git are capped (#419). `--git-fetch-mb` (256 by default) stops a fetch that adds more than that many MiB to the repository's copy on disk, for any URL scheme, and drops its pack. The shape files read from the commit may take that many MiB together, checked before each file is loaded, and number at most 10,000. A workspace pull gets the same fetch cap and reads within the workspace's caps. Both answer 502 naming the limit.
+- `/$/ready`, the dataset description and `/$/stats` show the background check of a large store's files (#440): `files`/`fileCheck` is `checking`, `verified`, `damaged` or `stopped`, and `damaged_file`/`damagedFile` names the file. A damaged dataset no longer holds `/$/ready` at 503: it still answers queries and is listed under `damaged`. Updates and uploads to it answer 503 naming the file, not 500. A server that stops without having written to a dataset no longer writes it a new checkpoint.
+- The Workbench (#402), a page of the web UI for developing shapes, rules and queries in a workspace: a file tree and an editor (CodeMirror 6) with syntax errors on their line, completion and hover; a Query tab with Explain and MatGUI; Validate with results grouped by shape and constraint, new and fixed since the last run, shape counts and coverage; Rules with every inferred triple's rule, focus node and pass, a rules table and Try in Query; a why? panel for any triple; six examples and a sample dialog. CodeMirror and Tabulator (MIT) are built in. `…/infer` describes every rule that ran, with its `rdfs:label`.
+- Validation and inference over HTTP (#401): `/$/workspaces/{id}/validate` and `…/infer`, and reading only `/$/datasets/{name}/validate?shapes=` and `…/infer?shapes=`. JSON by default (results with shape statistics and coverage: classes no shape targets, shapes that match nothing; inferred triples with what each rule did), or the W3C report and the triples as RDF. `provenance=true` gives each inferred triple its rule, shape, focus node, group, pass and, for a SPARQL rule, the solution that made it, in the format the workbench's "why?" panel reads; `tripletrail infer --provenance FILE` writes the same. Off, inference costs what it did.
+
+- Workbench workspaces (#400): `/$/workspaces` makes sandboxes for developing shapes, rules and queries next to the data. A workspace is a folder of files (`data/`, `shapes/`, `rules/`, `queries/`, `updates/`, `lift/`, `tests/`, `pipeline.yaml`) edited over the API, and a scratch store built from them that `/$/workspaces/{id}/sparql` queries (data in the default graph, shapes and rules in their own graphs). `POST …/sample` copies a sample of a dataset into it: N instances of some classes and what they point to, a few hops out. A workspace never writes to a dataset. Scratch workspaces are deleted after 24 h unused (`--workspace-ttl-hours`), saved ones are kept, and caps limit their number, triples and file sizes. Sampling 500 instances with 2 hops of a 1M-triple dataset takes about 10 ms in a release build.
+- A store that was just closed sometimes could not be opened again ("in use by another
+  process") while another thread was starting a child process, such as `git` for shapes:
+  until the child runs its program, it holds a copy of the store's `LOCK` file. Opening a
+  store now waits up to 2 s for a conflicting lock to go. This made the point-in-time restore
+  test flaky.
+- A backup task with `--backup-keep` now removes the old backups before it reports itself
+  finished. Before, a client that waited for the task could still list the backup about to
+  be removed, which made a test flaky.
+- Shapes from a git repository (#137): `PUT /$/datasets/{name}/shapes/git` binds a dataset to
+  a repository, ref and path; the server fetches the last commit with gix (pure Rust; https
+  through ureq, with an optional token file), checks the `.ttl` files and saves them as the
+  next version, naming the commit (`TripleTrail-Shapes: git; version=N; commit=…`, `tts:commit`).
+  A commit that fails the check keeps the shapes as they were. Pulls at start, every `poll`
+  seconds, on `POST …/shapes/pull`, which GitHub and GitLab push webhooks may call with the
+  binding's secret. While bound, the set is not changed through the API.
+- Release archives and the container image carry `THIRD_PARTY_LICENSES.md`: every crate
+  linked into `tripletrail` (316 today, all platforms) with its version, license, source and the
+  license and notice texts it ships, each distinct text once. It is written by
+  `.github/scripts/third-party-licenses.py` from `cargo metadata`, with no new tool, and is
+  also attached to each GitHub release. The image puts it, with LICENSE and NOTICE, in
+  `/usr/share/doc/tripletrail`. A crate that ships no license file is covered by LICENSE when
+  Apache-2.0 is one of its options, gets the standard MIT text with its authors when MIT is,
+  and otherwise stops the script, so no crate goes out without its license text.
+- Querying the shapes (#137): `/$/datasets/{name}/shapes/sparql` runs SPARQL over the shapes
+  a reader reads, with each layer (`urn:tripletrail:shapes:generated`, `urn:tripletrail:shapes:local`
+  and its `tts:version`) and the `tts:` vocabulary in named graphs.
+- A dataset's shapes go with its data (#137): snapshots and store backups copy them, so a
+  restore brings them back; a swap gives the new target the old one's shapes when it has none;
+  detaching an in-memory dataset removes its shapes; a read-only dataset's shapes are not
+  changed (`409`).
+- A dataset's own shapes (#137): `POST /$/datasets/{name}/shapes/customise` writes the
+  generated shapes as the dataset's own set, a folder of Turtle files (one per node shape,
+  written to diff well), kept in versions in the store directory. `GET`/`PUT`/`DELETE
+  …/shapes/files/{file}` edit it file by file, `…/validate` checks it, `…/rollback?version=N`
+  brings back one of the last 10 versions. A change is kept only when the whole set parses
+  and its `tts:` annotations check out (`422` with the errors otherwise). Its node shapes go on
+  top of the generated ones by IRI (`tripletrail::shapes::overlay`).
+- Generated shapes (#137): `GET /$/datasets/{name}/shapes` answers SHACL shapes generated from
+  the dataset profile (`tripletrail::shapes::generate`): a node shape per class with its property
+  shapes (node kind, datatype or class, `sh:in` for code lists, cardinalities when every
+  instance was read) and reader annotations in the new `tts:` vocabulary
+  (`http://w3id.org/tripletrail/shapes#`): keys, label path, geometry paths, map colour and zoom,
+  facet kinds, describe groups. `reader=` and `profile=` answer a reader's projection
+  (`tripletrail::shapes::project`): `tts:hiddenFrom`, `tts:onlyFor`, `tts:inProfile` and
+  `sh:deactivated` honoured, superclass properties inherited.
+- Dataset profile (#137): `GET /$/datasets/{name}/profile` (and `Engine::dataset_profile`)
+  describes what a dataset contains. Per class it gives the instance count; from a sample of
+  instances, the properties with their counts, cardinalities, datatypes, languages, target
+  classes and code-list values; the label properties; and the paths to a geometry (up to four
+  links, such as `era:netReference/geo:hasGeometry/geo:asWKT`) with the geometry types. It is
+  the base for generated shapes and the map. It is kept until the data changes: 0.15 s on one
+  country's RINF graph (1.2 million triples).
+- Python: `dump` to a format of triples (Turtle, N-Triples, RDF/XML) without `from_graph`
+  writes the default graph when the store has no named graph, instead of refusing (#381).
+  With named graphs it still refuses, now naming them and saying to pass `DefaultGraph()` or
+  a graph name.
+- The conformance runner also runs the GeoSPARQL Compliance Benchmark (206 queries over the 30
+  requirements of GeoSPARQL 1.0) and CI checks it like the W3C suites (#224). TripleTrail passes
+  140 of 206, a compliance percentage of 68.1 % by the benchmark's weighting; the failures are
+  listed in `docs/conformance.md`. The benchmark is fetched at a pinned commit, not copied.
+- Store backups (#222): `POST /$/backup/{name}?kind=store` copies the dataset's store into
+  the backup directory, and `from=` restores it without parsing (a file copy for `type=disk`).
+  `POST /$/backups/{file}/verify` checks a backup (checksums of a store backup, a full read of
+  an N-Quads one), `--backup-keep N` keeps the N newest backups per dataset, and
+  `/$/backups-list` gives each backup's kind, dataset and time.
+- Restore to a point in time (#222): with `--wal-archive DIR` (`TRIPLETRAIL_WAL_ARCHIVE`) the
+  write-ahead logs of on-disk datasets are kept in `DIR/<dataset>/<timeline>`, and
+  `POST /$/datasets?name=…&type=disk&from=<backup>.store&until=<RFC 3339 time|latest>`
+  restores a store backup with the writes committed after it replayed up to that time.
+- With `--backup-keep` and `--wal-archive`, the archive is pruned with the backups (#222):
+  archived logs that no kept store backup of the dataset needs are deleted after each backup
+  (`Store::prune_wal_archive`).
+- A successful SPARQL update on `/{ds}/update` and `/{ds}/sparql` is answered `200` with
+  Fuseki's "Update succeeded" page instead of `204`, as Fuseki answers it: a rail KG's ETL, written
+  for Fuseki, accepts only `200` (#363). Graph Store responses are unchanged.
+- SHACL validation now passes the whole W3C SHACL test suite (#224): SHACL Core 98 of 98 and
+  SHACL-SPARQL 22 of 22. Validation reports name the values the spec asks for: one result
+  per unexpected statement of `sh:closed` (with the property as `sh:resultPath`), per
+  differing value of `sh:equals`, per out-of-order pair of `sh:lessThan`, per repeated
+  language of `sh:uniqueLang`, and no `sh:value` for `sh:hasValue`. SPARQL-based
+  constraints give one result per solution, with its `?value` and `?path`, and
+  `sh:sourceConstraint`. Pre-binding binds `$this` in both branches of a `UNION`;
+  constraint components may be typed with a subclass of `sh:ConstraintComponent`; boolean
+  parameters are true only as `true` (not `"1"^^xsd:boolean`). Breaking change: SPARQL
+  constraints and validators with `MINUS`, `SERVICE`, `VALUES`, a nested `SELECT` without
+  `$this`, or `AS` assigning a pre-bound variable are refused when the shapes compile, as
+  the spec asks (the rail KG shapes have none).
+- W3C SHACL conformance (#224): the conformance runner also runs the SHACL Core and
+  SHACL-SPARQL suites of w3c/data-shapes (`--shacl-tests`) through `Engine::validate`,
+  comparing each validation report with the expected one. SHACL Core passes 89 of 98 and
+  SHACL-SPARQL 1 of 22. The failures, listed in docs/conformance.md, are report details
+  (`sh:value` and `sh:resultPath` for `sh:closed`, `sh:equals`, `sh:hasValue` and
+  SPARQL-based constraints, missing `sh:sourceConstraint`), `sh:uniqueLang "1"`, and
+  SPARQL constraints the spec says to refuse (`MINUS`, `VALUES`, `SERVICE`, nested
+  `SELECT` and `AS` with pre-bound variables).
+- W3C SPARQL 1.1 Protocol and Graph Store Protocol conformance (#224): with `--server`,
+  the conformance runner replays the suites' HTTP requests against `tripletrail serve`: all 34
+  Protocol tests and 8 of 9 Graph Store tests pass. The one left is `POST` without `?graph`,
+  which adds to the default graph as Fuseki does rather than creating a new graph.
+- SPARQL Protocol on `/{ds}/sparql`, `/{ds}/query` and `/{ds}/update` (#224):
+  `default-graph-uri` and `named-graph-uri` set a query's dataset and `using-graph-uri` and
+  `using-named-graph-uri` an update's (an update with its own `USING` or `WITH` and these
+  parameters gets 400); relative IRIs resolve against the endpoint's URL; repeated `query` or
+  `update` parameters, an operation in both body and URL, and parameters of the wrong kind
+  get 400, and a charset other than UTF-8 gets 415. Graph Store `PUT` and `POST` take
+  `multipart/form-data` uploads. In the library, `QueryOptions::base_iri` and
+  `Engine::update_with_options` with `UpdateOptions` carry the base IRI and update dataset.
+- W3C RDF conformance (#224): the conformance runner also runs the RDF 1.1 and 1.2 parser
+  suites (N-Triples, N-Quads, Turtle, TriG, RDF/XML, N-Triples/N-Quads canonical form)
+  through `Engine::load` and the store: 1,339 of 1,344 pass. The failures are RDF/XML
+  `rdf:XMLLiteral` canonicalization and the N-Triples `VERSION` directive.
+- W3C SPARQL conformance (#224): a new `tripletrail-testsuite` runner runs the SPARQL 1.0,
+  1.1 (query, update, result formats, federated syntax) and 1.2 suites of w3c/rdf-tests
+  against TripleTrail's store and engine. It writes an EARL report and
+  [docs/conformance.md](docs/conformance.md): 1,238 of 1,277 tests pass. CI fails on a new
+  failure, on a known failure that now passes (`known-failures.txt`), or when the page is
+  out of date. `Engine::check_query` and `Engine::check_update` parse without evaluating.
+- Release binaries for Linux (x86_64, aarch64), macOS (x86_64, arm64) and Windows (x86_64),
+  with `SHA256SUMS`, from a "Release" workflow on `v*` tags. The notes are the CHANGELOG
+  section and the commits since the last tag. The workflow refuses a tag whose version
+  differs from Cargo.toml, CHANGELOG.md or whats-new.json. Started by hand, it does a dry
+  run. CONTRIBUTING.md has the steps (#221).
+- The Docker image is built for linux/amd64 and linux/arm64. The Dockerfile cross-compiles,
+  so arm64 needs no emulation. Published images carry an SBOM and a provenance attestation.
+  The Helm chart workflow can push the chart to `oci://ghcr.io/matdata-eu/charts/tripletrail`.
+  Both workflows can sign with cosign (keyless), behind the repository variable
+  `COSIGN_SIGN`, to be switched on once the repository is public (#221).
+- Native HTTPS: `tripletrail serve --tls-cert <pem> --tls-key <pem>` (#221). It uses rustls, which
+  was already in the dependency tree, and is behind the default `tls` feature. The server's
+  own URLs are then https, and limits and failed-key counting still see the client's address.
+  A renewed certificate is taken without a restart, when the files change or on `SIGHUP`.
+  `tripletrail health` checks a TLS server over HTTPS.
+- A Helm chart in `deploy/helm/tripletrail` (#221):
+  - datasets on a persistent volume (created, attached or aliased from values);
+  - the admin and update tokens and the auth config from Secrets;
+  - the limits file from a ConfigMap;
+  - startup, readiness and liveness probes;
+  - an optional Ingress and Prometheus ServiceMonitor;
+  - a non-root, read-only-root pod;
+  - `helm test`.
+
+  The "Helm chart" workflow lints and renders it on pull requests. Started by hand, it
+  installs the chart on kind and runs `helm test`.
+- A change to the limits over the admin API rereads the file first, so a hand edit made in
+  the same second as the last write is kept, not overwritten (#225).
+- A SPARQL update is parsed once again, as before #336. The quota check looked at whether an
+  update only removes data by parsing it a second time, even with no quota set; it now does
+  so only when the dataset is over a quota. On the rail KG (12.5M quads), a commit of 10k
+  triples over HTTP takes about 79 ms again instead of 97 ms (#225).
+
+### Changed
+
+- Python: terms passed to `quads_for_pattern`, `objects`, `add`, `remove` and the other
+  store methods are recognised by type first. pyo3 tried the variants of a term in turn and
+  built a formatted error for each that did not match, which made a point lookup cost
+  4.2 µs against pyoxigraph's 2.1 µs. It now takes 2.4 µs (pyoxigraph 2.9 µs on the same
+  test). The rail KG railML generator, run on TripleTrail in place of pyoxigraph, takes 405 s for
+  the complete network in railML 3.2 and 3.3 (pyoxigraph 401 s, with 6.6 GB of memory
+  instead of 14 GB).
+- Single writes interleaved with reads no longer slow down as the write delta grows. Each
+  read after a write copied the whole uncompacted delta (up to 65,536 quads per index) into
+  sorted arrays, so a lookup then a remove per triple, as rdflib's `graph.remove` does through
+  oxrdflib, went from 12 µs to 1.6 ms over 60,000 removes. A read now takes its range from
+  the delta's persistent sets, and the arrays are made only for a small delta or once a
+  version has been read 64 times. It stays at 8 µs (`examples/remove_lookups.rs`). The rail KG
+  railML generator's filters (130,000 removes) take 41 s instead of 7.3 min.
+- A spatial join in a group with `OPTIONAL`s now uses the spatial index. The group's
+  `FILTER` applies after the left join, so the rewrite saw an opaque left join and the test
+  ran on every row. Its spatial conjuncts that read only variables the required part binds
+  are now planned before the left join (and before `BIND`s of other variables), where they
+  give the same answers. The rail KG post-process query that finds the network elements in
+  siding areas drops from 4.0 s to 0.07 s (#292). With #293 and #295, the 56 rail KG
+  post-process updates on `tripletrail serve` take 77 s instead of 143 s, and leave the same
+  13,890,436 quads.
+- Large updates refresh the spatial index faster. An update that only inserts (or only
+  deletes) skips the pass that cancels out quads deleted and inserted again. The index no
+  longer asks the store whether a geometry literal that was only added is still there, it
+  checks the literals against the index on all cores, and it loads many new geometries into
+  the tree in bulk. The rail KG post-process update that adds GPS coordinates (1.3M quads,
+  282,000 geometry literals) spends 1.4 s refreshing instead of 8.8 s (#292).
+- `sfContains`, `sfWithin`, `ST_Covers` and `ST_CoveredBy` answer "true" without the full
+  DE-9IM matrix when every point of a point or line lies strictly inside a polygon and no
+  segment meets its boundary. The test runs on the polygon's prepared, banded edges, so a
+  large polygon is no longer rebuilt for each pair. The rail KG join of network elements in
+  TEN-T areas (50,262 line/polygon pairs) drops from 25.6 s to 1.4 s with the same rows (#292).
+
+- `STR` of a constant (`STR(ex:)`, `STR("x"@en)`) is folded into the string it is before
+  evaluation. Oxigraph compiles the pattern of `REPLACE` and `REGEX` once only when it is a
+  literal, so `REPLACE(STR(?x), STR(ex:), "")`, a common way to strip a namespace, compiled a
+  regular expression for every row. One rail KG rule (RINF temporal validity) on 39,000 rows
+  drops from 3.1 s to 0.3 s, and `tripletrail infer` on the rail KG with the RINF rules from 78 s
+  to 56 s, with the same triples.
+- `tripletrail infer --location` runs the rules' queries on the engine too (#260). It copies the
+  data graph and the shapes graph into an in-memory store first (`InferOptions::scratch`), so
+  the on-disk store is not changed apart from `--into`. On the rail KG with the RINF rules
+  (`--all-constructed`, 1,203,292 triples), it takes 97 s instead of 142 s. One
+  `SAMPLE` in the rules can pick another of its tied values, because the copy is in another
+  order.
+- Eager grouping on the tag of a variable (#243) now also takes `MIN`, `MAX` and `SAMPLE` of
+  that variable, as MatGUI's "temporal properties" asks for the earliest and latest date per
+  property and datatype. The `BIND`s and `FILTER`s run once per group of kind and tag, and only
+  the rows of the groups they keep are grouped again on their values, so the dates and not
+  every literal reach the evaluator. On 1M synthetic triples without dates the query takes
+  145 ms instead of 420 ms. With 125,000 dates added, it takes 0.61-0.66 s, against
+  0.66-0.79 s before.
+- The degree of every node, `{ ?n ?p ?o } UNION { ?s ?p ?n }` grouped by `?n` with
+  `COUNT(*)` (MatGUI's "hubs", #243; each side may have a `FILTER` of kind tests of `?n`), is
+  counted from runs of equal subjects in subject order and of equal objects in object order,
+  merged on ids, instead of a row per quad hashed into groups. A scan with nothing bound but
+  the graph now reads the permutation that gives the order asked for (by predicate or by
+  object). On 1M synthetic triples, the hubs query (top 100) takes 65-85 ms instead of
+  270-285 ms.
+- Eager grouping (#243) now also covers a variable that the `BIND`s and `FILTER`s read only
+  through `LANG`, `DATATYPE`, `isLiteral`, `isIRI` and `isBlank`, such as MatGUI's
+  "language-tagged properties" and per-property datatype queries. Its values are first
+  grouped per kind and language or datatype, read from the dictionary keys under one lock
+  (`Snapshot::literal_tags`), not decoded one by one. Numeric literals keep their own values.
+  On 1M synthetic triples (result cache off) these queries take 85-110 ms instead of
+  300-460 ms.
+- SHACL rule inference keeps the triples it infers in `tripletrail_shacl::Inferred`, an
+  insertion-ordered log with hash indexes on subject, predicate and object (and a hash set of
+  the triples for duplicate checks), instead of an
+  oxigraph `Graph`. `Inference::run` and `Engine::infer`, `infer_observed` and `infer_with`
+  return it (breaking). Adding a triple to a `Graph` interned its terms into six ordered
+  indexes, at about 6 µs per triple. The rule key sets of inferred triples are also computed
+  once per predicate and class. On the rail knowledge graph with the RINF rules, inference takes
+  78 s instead of 90 s, with the same triples.
+- With `InferOptions::in_store` (`tripletrail infer --data`), SPARQL targets also run on the
+  tripletrail engine, after the triples inferred so far are added to the store, as rule queries
+  already did. On the rail knowledge graph with the RINF rules, inference takes 90 s instead of
+  102 s, with the same triples.
+- SHACL rule inference reuses the focus nodes it found for a shape. The next rule on the same
+  shape and conditions, and the same rule in the next pass, take them as long as no triple
+  inferred since has a predicate (or, for `rdf:type`, a class) that the shape's targets or the
+  rule's conditions read. SPARQL targets were evaluated again for every rule and pass. On the
+  rail knowledge graph with the RINF rules, inference takes 102 s instead of 123 s, with the same
+  triples.
+- `tripletrail infer --data` runs the rules' SPARQL queries on the tripletrail engine itself
+  (`InferOptions::in_store`, #260). Each inferred triple is added to the in-memory store before
+  the next query, so rules get the engine's planner and id-level evaluation instead of the
+  SHACL engine's evaluator reading the store term by term. Blank-node focus nodes and
+  semi-naive variants that read the delta graph still take the old path. On the rail knowledge
+  graph with the RINF rules, inference takes 148 s instead of 183 s, with the same triples.
+  About 39 s of that is adding the inferred triples to the store.
+- A triple pattern that matches more than 16,384 delta triples no longer makes a rule run in
+  full on all the data in a later pass. Its semi-naive variant now reads the delta triples
+  through a subject, object and predicate index, joined like any other triple pattern; a
+  variable predicate (`?instant ?p ?v`) matches every delta triple. Rules also skip the
+  variants when none of their focus nodes ran before. On the rail knowledge graph with the
+  RINF rules, pass 2 takes 52 s instead of 60 s and inference 183 s instead of 191 s, with the
+  same triples.
+- Inference stays semi-naive in more later passes: the limit of 16,384 delta triples per
+  triple pattern now counts the triples that fit the pattern's constants, not every inferred
+  triple of its predicate, so `?x a ex:C` is no longer evaluated in full because many other
+  types were inferred. On the rail knowledge graph with the RINF rules, pass 2 takes 60 s
+  instead of 122 s and inference 191 s instead of 250 s, with the same 1,203,292 triples.
+- Inference reruns fewer rules. A rule no longer runs again for new triples it reads only
+  under `NOT EXISTS` or on the right of `MINUS`, because those can only remove its results.
+  This covers "default unless set" rules, which read the predicate they write. The patterns
+  inside `EXISTS` and `NOT EXISTS` now count for stratification. Before, any `EXISTS` meant
+  the rule could read anything, so the rule depended on every other rule. `infer --verbose`
+  shows each rule's group, with `*` when the group runs to a fixpoint (#110).
+- Inference matches `rdf:type` dependencies per class, using the subclasses in the data
+  graph. A rule that types nodes `ex:D` feeds only the rules on `ex:D` and its superclasses,
+  where before any rule that wrote a type fed every rule with a class target. A variable
+  predicate that a `BIND(IF(…))` picks among constant IRIs, or that a `FILTER(?p IN (…))`
+  keeps to constants, counts as those predicates and no longer as "any predicate" (#110).
+- SHACL rules: a CONSTRUCT line that copies a triple the WHERE clause must match (such as
+  `?instant ?p ?v` in both) is no longer a write. That triple is already in the graph, so it feeds
+  no other rule; `--all-constructed` still outputs it (#110).
+- The spatial index of the tripletrail store is built from bounding boxes alone: they are read
+  from the geometries saved with the checkpoint, and a geometry is decoded only when a query
+  first tests it. Index entries are also smaller, which avoids an R-tree bulk-load copy that
+  kept about 1.3 KB per geometry. On the benchmark's large set (712k geometries) the build
+  takes 0.5 s instead of 1.3 s, and the server uses 0.99 GB instead of 2.06 GB; query times
+  are unchanged (#107).
+- The Python package no longer needs pyoxigraph: it has pyoxigraph's classes and functions
+  itself (`NamedNode`, `Literal`, `Quad`, `Dataset`, `RdfFormat`, the query results, `parse`,
+  `serialize`, ...; `tripletrail.Store` is `Engine`), so `import tripletrail as ox` replaces
+  `import pyoxigraph as ox`. Scans and lookups build these objects natively and run at
+  pyoxigraph's speed (a full scan 1.0 → 0.25 µs per quad, pyoxigraph 0.31). Queries return
+  pyoxigraph's own result classes, so a missing variable in a row is `None` instead of a
+  `KeyError`, as in pyoxigraph. pyoxigraph terms are still accepted as input. The rdflib store
+  `tripletrail.rdflib.TripleTrailStore` no longer needs oxrdflib and is registered as rdflib's
+  `"TripleTrail"` store plugin. PyO3 0.30 (#132). Closes #108.
+
+- The project is now called **TripleTrail**. Crates are
+  `tripletrail`, `tripletrail-store`, `tripletrail-geo`, `tripletrail-pgr`, `tripletrail-routing`,
+  `tripletrail-shacl`, `tripletrail-spatial`, `tripletrail-server` and `tripletrail-bench`; the binary is
+  `tripletrail`; the Python package is `tripletrail`; the Docker image is
+  `ghcr.io/matdata-eu/tripletrail`; environment variables start with `TRIPLETRAIL_`;
+  `--store tripletrail` selects the TripleTrail store.
+- The function and service namespaces are `http://w3id.org/tripletrail/...` (`st:`, `pgr:`,
+  `rail:`, `compat:` and the `SERVICE` IRIs).
+- Unchanged: the on-disk store and routing-graph formats, so existing data directories keep
+  working.
+- Nearest-neighbour queries start from a radius read off the spatial index and work on any
+  indexed geometry predicate, not only `geo:asWKT` (about 4x faster on the benchmark).
+- Spatial joins on the tripletrail store are computed on term ids: both sides are joined by the
+  store, their geometries swept, and the joined rows handed to the evaluation as a table it
+  reads by id, with no `VALUES` block and no pair cap (#127). Aggregates of geometry functions
+  over a plain basic graph pattern read geometries by id the same way. On benchmark v2:
+  `agg_total_length` 0.72 s to 0.35 s, `join_signal_ne_20m` 5.4 s to 1.5 s,
+  `join_op_region` 0.56 s to 0.17 s, `agg_length_region` 5.9 s to 1.9 s.
+- Join order from the data: on the tripletrail store, the SPARQL optimizer sizes triple
+  patterns from the store's block index (and samples how many quads one value of a join key
+  matches) instead of fixed guesses, and no longer starts from a one-row `VALUES` whose
+  lookup matches a large part of the data.
+- `DELETE`/`INSERT ... WHERE` keeps only the template's variables and, when the `INSERT`
+  template has no blank nodes, each distinct row once; the quads are collected without
+  duplicates instead of every solution, so a rule whose `WHERE` gives millions of rows for a
+  few thousand triples no longer holds them all in memory.
+- A spatial join whose side's rows each match many pairs (points in a few regions) binds
+  that side from its evaluated rows instead of looking it up again for every pair.
+- `tripletrail infer` stratifies the rules by the predicates they write and read (from their
+  targets, conditions, paths, templates and queries): a rule runs after the rules that feed
+  it, rules no rule of their group feeds run once, and in a group that loops a later pass
+  reruns only the rules whose inputs changed.
+- Python: `Engine.quads_for_pattern` and iterating an `Engine` build their quads through
+  pyoxigraph's own parser, about 2.7 times faster. `tripletrail.QuadIter` is no longer exported.
+  A lookup whose quads fit in one batch returns pyoxigraph's iterator directly.
+- Python: `Engine.extend` / `bulk_extend` read pyoxigraph quads through their N-Quads form,
+  about 1.5 times faster.
+
+### Added
+
+- Limits over the admin API (#225): `GET`/`PUT /$/limits` reads or replaces the limits
+  file, and `GET`/`PUT`/`DELETE /$/limits/{name}` one dataset's entry. Changes are checked,
+  written to the file and applied at once.
+
+- `--memory-limit` on `tripletrail load` and `tripletrail serve` (and `Store::set_memory_limit`): a
+  bulk load into a store on disk with more quads than fit in half the limit (32 bytes a quad)
+  sorts them on disk instead. Full chunks are sorted and written as segment files, then
+  merged into each index, which is written straight to its file. New dictionary keys move to
+  mapped files once they take an eighth of the limit, so they sit in the page cache. Loading
+  the rail KG (12.5M quads) with `--memory-limit 256M` peaks at 0.67 GB of heap instead of
+  2.25 GB, and takes 30 s instead of 24 s. No limit by default.
+
+- Disk and memory quotas per dataset in the `--limits` file (#225): `maxDisk` (the size of
+  the dataset's files) and `maxMemory` (the heap held by its dictionary, quad index and result
+  cache; TripleTrail's store only), in bytes or as `"10GB"` / `"512MiB"`. While a dataset is over
+  a quota, writes that add data get `507 Insufficient Storage`; reads, `DELETE`s, and updates
+  that only remove data still work. Stats show `memoryBytes` and `rejectedQuota`; metrics
+  count `tripletrail_dataset_writes_rejected_quota_total`.
+
+- Federated queries send the values they join on (#192): a remote `SERVICE` joined with the
+  rest of its group, or alone in an `OPTIONAL`, gets the distinct values of the shared
+  variables as `VALUES` blocks of 100 rows, one call per block, instead of being asked for
+  everything (up to 10,000 values; above that, the SERVICE is sent as written).
+
+- Federated queries (#192): `SERVICE <https://...>` calls remote SPARQL endpoints that
+  `tripletrail serve --service-allow` lists (none by default), with a timeout
+  (`--service-timeout`), an answer size limit (`--service-max-bytes`) and an optional answer
+  cache (`--service-cache-seconds`). `SERVICE SILENT` and `SERVICE ?endpoint` after a
+  `LATERAL` work. In the library: `Engine::with_remote_services` (feature `remote-service`,
+  on in the server; it adds the `ureq` HTTP client).
+
+- `--limits` also limits callers (#225): `callers` entries for `default`, `anonymous`
+  (per client address), `agents` (per agent IRI) and `groups` (shared by the members) set
+  `maxConcurrent` and `requestsPerMinute` with a `burst`. Over a limit the answer is 429 with
+  `Retry-After`; `/$/metrics` counts the refusals by reason.
+
+- `tripletrail serve --limits FILE`: limits per dataset (#225), read again when the file
+  changes. `maxConcurrent` caps the requests a dataset answers at once; a request over it
+  waits in a queue of `maxQueued` for up to `queueTimeout` seconds, then gets 429 with
+  `Retry-After`, so a flood on one dataset leaves workers free for the others. `timeout`,
+  `maxTimeout`, `maxRows` and `maxUpload` set the timeout, row and upload limits per dataset.
+  `/$/stats` shows the limits and the running, queued and refused requests, and `/$/metrics`
+  has them as `tripletrail_dataset_requests_{running,queued,rejected_total}`.
+
+- RDF4J REST API, compliance (#223). RDF4J's repository test suite passes 383 of its 497
+  tests against `HTTPRepository`. The changes:
+  - Queries read every graph as the default graph unless they have `FROM`.
+  - `rdf`, `rdfs`, `owl`, `xsd`, `fn` and `sesame` (and the repository's namespaces) need
+    no `PREFIX`.
+  - Requests take `baseURI`, `$name` bindings, `default-graph-uri` and `named-graph-uri`.
+  - Uploads may be gzip or zip files, and their blank nodes are new unless the client sends
+    `preserveNodeId`.
+  - Errors carry RDF4J's types (`MALFORMED QUERY`, `MALFORMED DATA`), which the client
+    turns into its exceptions.
+  - `PREPARE` is accepted.
+
+  Transactions still apply at commit, so their reads don't see their own changes (see
+  docs/server.md).
+- The RDF4J REST API (protocol 12, #223): every dataset is an RDF4J repository under
+  `/rdf4j-server/repositories/{id}` (and `/repositories/{id}`, as on GraphDB), with queries,
+  statements, contexts, size, namespaces and transactions. RDF4J 5's own `HTTPRepository`
+  client adds, removes, queries and commits against it unchanged, including its default
+  binary RDF uploads.
+- Dataset access with sparql-guard policies (#200): `--auth-config` names policy files per
+  dataset (`datasets.<name>.policies`) or for all (`policies`). `sg:readAllGraphs` grants
+  reads, `sg:writeAllGraphs` writes, for `sg:agent`s (`sg:Anyone`, `sg:AuthenticatedAgent`,
+  an IRI) and `sg:group`s; a dataset without policies is then closed. Per-dataset `admins` may
+  detach and back up their dataset. Listings, VoID and Linked Data show only readable datasets;
+  server-wide pages need `tripletrail:admin` or `tripletrail:monitor`. Policies that use graph grants
+  or row rules (not enforced yet) fail to load.
+
+- `tripletrail serve --auth-config FILE`: callers are identified by API key (stored as SHA-256
+  hashes, `tripletrail hash-key`), by headers from an authenticating proxy (only from
+  `trustedProxies` when listed) or as anonymous, with sparql-guard's `auth` configuration, so a
+  sparql-guard file works unchanged. Writes need the group `tripletrail:writer` or
+  `tripletrail:admin`, admin changes `tripletrail:admin`; no identity is 401, too little is 403.
+  Keys can be limited to datasets and expire; the file reloads without a restart; unknown keys
+  are rate-limited per address. `--update-token` and `--admin-token` keep working (#199).
+
+- A result-row budget (#189): `--max-rows` (and a smaller `max-rows=` per request) refuses
+  larger results with 413, or answers the first rows with `partial=true` and an
+  `X-Result-Incomplete` header.
+- Prometheus metrics at `/$/metrics` and a slow query log (#220): requests by dataset,
+  operation and status, a latency histogram per operation, timeouts, triples, graphs, mapped
+  bytes, result cache hits and misses, requests in flight, uptime and resident memory;
+  `--slow-query-ms` writes the full text of slower queries and updates to standard error.
+  See `docs/server.md`, Operations.
+- Linked Data publishing (#141): with `--base-iri DATASET=PREFIX`, the dataset's IRIs
+  dereference to their concise bounded description, in Turtle, JSON-LD, N-Triples, RDF/XML or
+  a plain HTML page, chosen by `Accept`, a `.ttl`/`.jsonld`/`.nt`/`.rdf`/`.html` suffix or
+  `?format=`. Hash-namespace resources (`IRI#...`) come with `IRI`. `Vary`, `Link`, `ETag` and
+  `304` for caches, and `--see-other` for `303` redirects to the documents.
+  `/{ds}/describe?iri=` describes any IRI. See `docs/server.md`, Linked Data.
+- The XPath and Jena function libraries, so queries written for Jena, Fuseki or SPARQL
+  Anything run unchanged (#231): `fn:` strings, numbers (`format-number`,
+  `round-half-to-even`, ...), dates and durations, all of `math:`, the `afn:` functions
+  (`localname`, `sprintf`, `strjoin`, `substr`, ...) and the casts to `xsd:int`, `xsd:long`
+  and the other integer types. Calls that a SPARQL built-in already computes
+  (`fn:matches`, `fn:upper-case`, `fn:year-from-date`, ...) are rewritten to that built-in.
+  The list is in `docs/function-matrix.md`, D.1.
+- ETL helpers (#233): `tt:skolem` for stable IRIs from values (as RDFox `SKOLEM`), `tt:iri`
+  and `spif:buildURI` / `buildString` templates, `tt:parseDate` / `tt:formatDate` with Java
+  date patterns (`dd.MM.yyyy`; also as `spif:parseDate` / `dateFormat`),
+  `fn:format-dateTime` / `format-date` / `format-time` picture strings, days, months and years
+  between dates (also as GraphDB's `ofn:`), Levenshtein, Jaro-Winkler and n-gram similarity,
+  Kölner Phonetik, and padding and case helpers. The list is in
+  `docs/function-matrix.md`, D.2.
+- Property functions with Jena's IRIs (#232): `list:member`, `list:index`, `list:length`,
+  `tt:member` and `apf:bag` / `seq` / `alt` for containers (`rdfs:member` stays a plain triple pattern), `apf:strSplit` (a string split
+  into rows at a regular expression), `apf:splitIRI`, `apf:concat` and `apf:assign`. Each
+  call is evaluated once per row of what comes before it in its group, so its arguments can
+  come from earlier patterns and `BIND`s. The list is in `docs/function-matrix.md`, D.3.
+- VoID descriptions at `/.well-known/void` and `/{ds}/void`, with class and property
+  partitions and a subset per graph, from the counts kept with the indexes;
+  `Engine::dataset_statistics` gives the same numbers in Rust. The service description now
+  carries each graph's size and links to the VoID (#242).
+- `?s ?p ?o GROUP BY ?p` with `COUNT(*)`, `COUNT(DISTINCT ?s)` or `COUNT(DISTINCT ?o)` is
+  answered from the per-predicate counts, without reading the quads, while the store has only
+  the default graph and no writes waiting to be folded into the indexes (#243).
+- `GROUP BY` of a `BIND` expression over one triple pattern (MatGUI's "namespaces":
+  `BIND(REPLACE(STR(?p), ...))` over all triples) is aggregated eagerly: counted on term ids
+  per distinct value of the variables the expressions read, which then run once per value.
+  At 1M triples "namespaces" takes 1.5 ms instead of 400 ms (#243).
+- Every dataset endpoint serves a SPARQL 1.1 Service Description on a `GET` without a query
+  (as Oxigraph's server did), generated from the registered functions, aggregates, SERVICEs,
+  formats and named graphs. MatGUI's endpoint panel reads it (#241).
+- A bounded result cache for repeated `SELECT` and `ASK` queries (#126): `tripletrail serve
+  --result-cache-mb` (256 MiB per dataset by default), `Engine::set_result_cache` and
+  `Engine.set_result_cache` in Python (off by default). Keyed by the parsed query, its options
+  and the engine settings, and dropped by any write; the `X-Cache` header says whether a
+  response came from it.
+- Apache License 2.0 (`LICENSE`), `NOTICE`, `CONTRIBUTING.md` (Contributor License
+  Agreement), `SECURITY.md` and this changelog.
+- `deny.toml` and a `cargo deny` CI job that checks dependency licenses and sources.
+- `tripletrail serve --update-token`: SPARQL updates and Graph Store writes need a bearer token.
+  `--cors` takes a list of origins (`--cors` alone still allows every origin).
+- `tripletrail serve --network-cache-mb` (2048 by default): routing networks built from inline
+  edge sub-selects are dropped least recently used first past that memory.
+- Checkpoints hold a `checksums` file; a damaged checkpoint file is reported as corrupt.
+  Checkpoints without one (written before) are still read.
+- Python: `Engine.objects`, `Engine.subjects` and `Engine.predicate_objects` return the terms
+  of the matching quads as lists, without building quads (rdflib-style lookups).
+- `tripletrail serve --union-default-graph NAME,...` (`*` for all; `unionDefaultGraph=true` in
+  the admin API; `Engine::set_union_default_graph`; `Engine.union_default_graph` in Python):
+  the default graph of queries and updates is the union of all graphs, as Fuseki's
+  `unionDefaultGraph`, with the spatial rewrite still on.
+- `tripletrail validate --stats` (`statistics=True` and `ValidationReport.shape_counts` in
+  Python, `Engine::validate_counted`): how many focus and value nodes each shape was checked
+  against, in the report as `ttsh:shapeStatistics`.
+- `tripletrail infer --all-constructed` (`include_existing=True` in Python,
+  `Engine::infer_with` with `InferOptions`): also output the constructed triples that are
+  already in the data.
+
+### Fixed
+
+- A `SERVICE SILENT` that fails, joined with triples, now keeps the rows of those triples (as
+  SPARQL's one empty solution should). The planner evaluated it first and dropped its empty
+  row for leaving the linking variable unbound, so the query answered nothing.
+
+- A request sent with `Expect: 100-continue` and answered without its body being read (for
+  example a refused write) made the server read the next request on the connection as the
+  rest of that body, and answer it with a bare 400. The server now reads such a body (up to
+  1 MiB, else it closes the connection). RDF4J's client begins every transaction this way.
+- Results formats: among media types of the same weight in `Accept`, CSV and TSV now come
+  last. RDF4J's clients list `text/csv` first at the same weight as JSON, and CSV dropped
+  every datatype.
+- A SHACL-SPARQL constraint of a property shape that projects `$PATH` (`SELECT $this $PATH
+  WHERE { $this $PATH ?v ... }`, as ERA's RINF shapes do in `LangStringEnRequiredIfPresent`)
+  no longer stops the shapes from loading with "expected WHERE". `$PATH` stands for the path
+  in the query's patterns. In a projection it stays a variable, unbound, as Jena reads it.
+  `tripletrail validate` now checks a rail KG RINF export (1.2M triples, with ERA's vocabularies)
+  against ERA's shapes in 13 s.
+
+- `Engine.save` and the snapshot endpoint work on Windows: the new store's `CURRENT` file
+  was still open when its directory was renamed ("Access is denied").
+- A `sh:SPARQLRule` whose WHERE clause does not use `$this` (such as `WHERE { }`) constructs
+  its template once per focus node, instead of nothing.
+- Query timeouts stop routing functions and long-running geo functions (`503`), instead of
+  letting them run to the end.
+- Writes no longer wait for a spatial index build.
+- `st:ST_LineInterpolatePoints` with a tiny repeat fraction no longer tries to make 10^12
+  points.
+
+## 0.0.1
+
+Development versions before the first release: the store, GeoSPARQL 1.1 and PostGIS-style
+functions, pgRouting-style routing, SHACL, the spatial and range indexes, the Fuseki-style
+server with its web UI, the Python binding and benchmark v2. See the git history.

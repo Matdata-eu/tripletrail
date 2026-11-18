@@ -1,0 +1,154 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tripletrail.fullname" . }}
+  labels:
+    {{- include "tripletrail.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # One writer per dataset directory: the old pod stops before the new one opens the volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "tripletrail.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tripletrail.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # A changed auth config or limits file rolls the pod only through values; the server
+        # also reads both files again when Kubernetes updates the mounted copy.
+        checksum/config: {{ printf "%s%s" (toJson .Values.authConfig) (toJson .Values.limits) | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "tripletrail.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: tripletrail
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [serve]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: TRIPLETRAIL_BIND
+              value: "0.0.0.0:{{ .Values.service.port }}"
+            - name: TRIPLETRAIL_LOCATION
+              value: /data
+            - name: TRIPLETRAIL_BACKUP_DIR
+              value: {{ .Values.backupDir | quote }}
+            - name: TRIPLETRAIL_SHUTDOWN_GRACE
+              value: {{ .Values.shutdownGrace | quote }}
+            - name: TRIPLETRAIL_LOG_REQUESTS
+              value: {{ .Values.logRequests | quote }}
+            {{- with .Values.datasets }}
+            - name: TRIPLETRAIL_DATASETS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.attach }}
+            - name: TRIPLETRAIL_ATTACH
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.aliases }}
+            - name: TRIPLETRAIL_ALIASES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- if .Values.readOnly }}
+            - name: TRIPLETRAIL_READ_ONLY
+              value: "true"
+            {{- end }}
+            {{- include "tripletrail.tokenEnv" (list .Values.adminToken "TRIPLETRAIL_ADMIN_TOKEN" .) | nindent 12 }}
+            {{- include "tripletrail.tokenEnv" (list .Values.updateToken "TRIPLETRAIL_UPDATE_TOKEN" .) | nindent 12 }}
+            {{- if .Values.authConfig.enabled }}
+            - name: TRIPLETRAIL_AUTH_CONFIG
+              value: /etc/tripletrail/auth/{{ .Values.authConfig.key }}
+            {{- end }}
+            {{- if .Values.limits.enabled }}
+            - name: TRIPLETRAIL_LIMITS
+              value: /etc/tripletrail/limits/limits.json
+            {{- end }}
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          startupProbe:
+            httpGet: { path: /$/ping, port: http }
+            {{- toYaml .Values.probes.startup | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /$/ready, port: http }
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            httpGet: { path: /$/ping, port: http }
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            # A writable /tmp for the read-only root filesystem.
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.authConfig.enabled }}
+            - name: auth
+              mountPath: /etc/tripletrail/auth
+              readOnly: true
+            {{- end }}
+            {{- if .Values.limits.enabled }}
+            - name: limits
+              mountPath: /etc/tripletrail/limits
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tripletrail.claimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.authConfig.enabled }}
+        - name: auth
+          secret:
+            secretName: {{ .Values.authConfig.existingSecret | default (printf "%s-auth" (include "tripletrail.fullname" .)) }}
+        {{- end }}
+        {{- if .Values.limits.enabled }}
+        - name: limits
+          configMap:
+            name: {{ include "tripletrail.fullname" . }}-limits
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

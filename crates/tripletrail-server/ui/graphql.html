@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GraphQL – {{DATASET}}</title>
+<link rel="icon" href="../icon.svg">
+<style>
+  :root { --bg: #fff; --surface: #f6f8fa; --border: #dfe5ec; --text: #1c2633; --muted: #6a7380;
+    --brand: #0563bb; --danger: #b42318; color-scheme: light;
+    --hl-keyword: #8250df; --hl-string: #0a7e3e; --hl-number: #b35900; --hl-variable: #c2410c; --hl-property: #0550ae; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f141a; --surface: #161d25; --border: #2a3440; --text: #e6edf3; --muted: #93a0ae;
+      --brand: #6cb6ff; --danger: #ff8a80; color-scheme: dark;
+      --hl-keyword: #d2a8ff; --hl-string: #7ee787; --hl-number: #ffa657; --hl-variable: #ffa198; --hl-property: #79c0ff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg);
+    color: var(--text); font: 14px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color: var(--brand); }
+  .bar { padding: 8px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 12px;
+    align-items: center; flex-wrap: wrap; }
+  .bar .grow { flex: 1; }
+  #gq-run { font: inherit; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--brand);
+    background: var(--brand); color: var(--bg); cursor: pointer; }
+  .main { flex: 1; display: grid; grid-template-columns: 240px 1fr 1fr; min-height: 0; }
+  .pane { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); }
+  .pane h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+    margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .editor { flex: 1; min-height: 0; overflow: auto; }
+  .editor .cm-editor { height: 100%; }
+  .vars { height: 30%; border-top: 1px solid var(--border); display: flex; flex-direction: column; }
+  textarea, pre { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  textarea { flex: 1; border: 0; padding: 8px 12px; resize: none; background: var(--bg); color: var(--text); }
+  pre { margin: 0; padding: 8px 12px; flex: 1; overflow: auto; white-space: pre-wrap; }
+  pre.error { color: var(--danger); }
+  .schema { overflow: auto; flex: 1; padding: 4px 0; }
+  .schema details { padding: 2px 12px; }
+  .schema summary { cursor: pointer; font-weight: 600; }
+  .schema ul { list-style: none; margin: 2px 0 6px; padding-left: 12px; }
+  .schema li { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 0; }
+  .schema li button { background: none; border: 0; color: var(--brand); padding: 0; font: inherit; }
+  .schema .type { color: var(--muted); }
+  .muted { color: var(--muted); }
+  @media (max-width: 800px) {
+    .main { grid-template-columns: 1fr; grid-auto-rows: minmax(240px, auto); overflow: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../datasets">TripleTrail</a> <span>GraphQL of <strong>{{DATASET}}</strong></span>
+  <a href="../api/{{DATASET}}">REST API</a>
+  <span class="grow"></span>
+  <span class="muted" id="gq-time"></span>
+  <button type="button" id="gq-run" title="Ctrl+Enter">Run</button>
+</div>
+<div class="main" id="gq" data-dataset="{{DATASET}}">
+  <div class="pane">
+    <h2>Schema</h2>
+    <div class="schema" id="gq-schema"><p class="muted" style="padding:0 12px">Loading…</p></div>
+  </div>
+  <div class="pane">
+    <h2>Query</h2>
+    <div class="editor" id="gq-editor"></div>
+    <div class="vars"><h2>Variables (JSON)</h2><textarea id="gq-vars" spellcheck="false" aria-label="Variables">{}</textarea></div>
+  </div>
+  <div class="pane">
+    <h2>Answer</h2>
+    <pre id="gq-out" class="muted">Run a query to see its answer.</pre>
+  </div>
+</div>
+<script src="../vendor/codemirror/codemirror.min.js"></script>
+<script src="../graphql.js"></script>
+</body>
+</html>

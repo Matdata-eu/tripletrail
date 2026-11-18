@@ -1,0 +1,15 @@
+# Network profile: RINF sections of line -> pgRouting edge set.
+#
+# The RINF line network as published for every member state: a vertex is an
+# era:OperationalPoint, an edge is an era:SectionOfLine between its era:opStart and era:opEnd,
+# costing era:lengthOfSectionOfLine (published in km, converted to metres), usable both ways.
+# Every published version of a section is an edge; filter on era:validity for one date.
+#
+# Use it as the edge sub-select of a pgr SERVICE call, or as the pgr:edgeQuery of a named network.
+PREFIX era: <http://data.europa.eu/949/>
+SELECT ?id ?source ?target ?cost ?reverse_cost WHERE {
+  ?id a era:SectionOfLine ; era:opStart ?source ; era:opEnd ?target ;
+      era:lengthOfSectionOfLine ?km .
+  BIND(?km * 1000 AS ?cost)
+  BIND(?cost AS ?reverse_cost)
+}

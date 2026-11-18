@@ -1,0 +1,60 @@
+[package]
+name = "tripletrail-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oxigraph = { version = "0.5.13", default-features = false }
+tripletrail = { path = "../crates/tripletrail" }
+tripletrail-geo = { path = "../crates/tripletrail-geo" }
+tripletrail-routing = { path = "../crates/tripletrail-routing" }
+tripletrail-store = { path = "../crates/tripletrail-store" }
+
+# Not part of the main workspace: it needs nightly Rust and cargo-fuzz.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "geo_functions"
+path = "fuzz_targets/geo_functions.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "geo_literals"
+path = "fuzz_targets/geo_literals.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "store_files"
+path = "fuzz_targets/store_files.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "routing"
+path = "fuzz_targets/routing.rs"
+test = false
+doc = false
+bench = false
+
+# The optimizer the store installs its estimates in (see vendor/sparopt/TRIPLETRAIL.md), and the
+# evaluator (see vendor/spareval/TRIPLETRAIL.md).
+[patch.crates-io]
+spargebra = { path = "../vendor/spargebra" }
+sparopt = { path = "../vendor/sparopt" }
+spareval = { path = "../vendor/spareval" }
+oxrdfxml = { path = "../vendor/oxrdfxml" }
+sparesults = { path = "../vendor/sparesults" }

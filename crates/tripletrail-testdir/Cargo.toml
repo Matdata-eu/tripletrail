@@ -1,0 +1,13 @@
+[package]
+name = "tripletrail-testdir"
+description = "Temporary folders for TripleTrail's tests and benches, removed when dropped"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# MIT OR Apache-2.0.
+tempfile = "3.27"

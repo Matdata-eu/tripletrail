@@ -1,0 +1,7 @@
+# Network profile: edges described directly with the pgr vocabulary.
+#   ex:e1 pgr:source ex:v1 ; pgr:target ex:v2 ; pgr:cost 12.5 ; pgr:reverse_cost 12.5 .
+PREFIX pgr: <http://w3id.org/tripletrail/pgr#>
+SELECT ?id ?source ?target ?cost ?reverse_cost WHERE {
+  ?id pgr:source ?source ; pgr:target ?target ; pgr:cost ?cost .
+  OPTIONAL { ?id pgr:reverse_cost ?reverse_cost }
+}

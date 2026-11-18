@@ -1,0 +1,35 @@
+[package]
+name = "tripletrail-fx"
+description = "Query CSV, JSON and other files as RDF with SPARQL, following the Facade-X model (compatible with SPARQL Anything queries)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+oxigraph.workspace = true
+spargebra.workspace = true
+oxiri.workspace = true
+serde_json.workspace = true
+csv.workspace = true
+calamine.workspace = true
+zip.workspace = true
+tar.workspace = true
+flate2.workspace = true
+regex.workspace = true
+shapefile.workspace = true
+pulldown-cmark.workspace = true
+yaml-rust2.workspace = true
+quick-xml.workspace = true
+html5ever.workspace = true
+markup5ever_rcdom.workspace = true
+thiserror.workspace = true
+ureq = { version = "2", optional = true }
+
+[features]
+# location=https://… read over HTTP (`FxConfig::remote`).
+remote = ["dep:ureq"]
+
+[dev-dependencies]
+tripletrail-testdir.workspace = true

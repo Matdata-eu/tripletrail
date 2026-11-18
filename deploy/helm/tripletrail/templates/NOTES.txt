@@ -1,0 +1,20 @@
+TripleTrail is starting as {{ include "tripletrail.fullname" . }}.
+
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  Web UI: http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/
+{{- end }}
+{{- else }}
+  kubectl port-forward svc/{{ include "tripletrail.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  Web UI: http://localhost:{{ .Values.service.port }}/
+{{- end }}
+{{- range .Values.datasets }}
+  SPARQL endpoint for {{ . }}: /{{ . }}/sparql
+{{- end }}
+{{- if not (or .Values.adminToken.value .Values.adminToken.existingSecret .Values.authConfig.enabled) }}
+
+WARNING: no admin token and no auth config: anyone who reaches the server can create,
+detach and back up datasets. Set adminToken or authConfig.
+{{- end }}
+
+Check it with: helm test {{ .Release.Name }}

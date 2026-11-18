@@ -1,0 +1,32 @@
+[package]
+name = "tripletrail-rml"
+description = "R2RML and RML mappings for TripleTrail: mapping documents compiled to a plan and run over files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+tripletrail-fx.workspace = true
+oxigraph.workspace = true
+oxiri.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+yaml-rust2.workspace = true
+flate2.workspace = true
+zip.workspace = true
+tar.workspace = true
+lzma-rs.workspace = true
+sha2 = "0.11.1"
+postgres = { workspace = true, optional = true }
+tokio-postgres-rustls = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+webpki-roots = { workspace = true, optional = true }
+
+[features]
+# Tables and queries of PostgreSQL databases as sources (DatabaseLoader).
+postgres = ["dep:postgres", "dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots"]
+
+[dev-dependencies]
+tripletrail-testdir.workspace = true

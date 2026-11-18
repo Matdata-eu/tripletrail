@@ -1,0 +1,18 @@
+[package]
+name = "tripletrail-shacl"
+description = "SHACL Core validation over the tripletrail and Oxigraph stores, and vehicle compatibility rules compiled to SHACL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+oxigraph.workspace = true
+tripletrail-store.workspace = true
+spareval.workspace = true
+spargebra.workspace = true
+thiserror.workspace = true
+oxsdatatypes = "0.2.4"
+regex = "1"
+rustc-hash = "2"

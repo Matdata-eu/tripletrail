@@ -1,0 +1,63 @@
+# A small, made-up railway network in Belgium: the sample data of the TripleTrail user guide.
+# Station positions are real; lengths, speeds and electrification are rounded or invented.
+@prefix ex:   <https://example.org/rail#> .
+@prefix geo:  <http://www.opengis.net/ont/geosparql#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:BXS a ex:Station ; rdfs:label "Brussels-South" ; ex:code "BXS" ;
+  geo:hasGeometry [ geo:asWKT "POINT(4.3357 50.8355)"^^geo:wktLiteral ] .
+ex:BXC a ex:Station ; rdfs:label "Brussels-Central" ; ex:code "BXC" ;
+  geo:hasGeometry [ geo:asWKT "POINT(4.3571 50.8456)"^^geo:wktLiteral ] .
+ex:BXN a ex:Station ; rdfs:label "Brussels-North" ; ex:code "BXN" ;
+  geo:hasGeometry [ geo:asWKT "POINT(4.3606 50.8603)"^^geo:wktLiteral ] .
+ex:MEC a ex:Station ; rdfs:label "Mechelen" ; ex:code "MEC" ;
+  geo:hasGeometry [ geo:asWKT "POINT(4.4828 51.0177)"^^geo:wktLiteral ] .
+ex:ANT a ex:Station ; rdfs:label "Antwerp-Central" ; ex:code "ANT" ;
+  geo:hasGeometry [ geo:asWKT "POINT(4.4211 51.2172)"^^geo:wktLiteral ] .
+ex:LV a ex:Station ; rdfs:label "Leuven" ; ex:code "LV" ;
+  geo:hasGeometry [ geo:asWKT "POINT(4.7158 50.8813)"^^geo:wktLiteral ] .
+ex:LG a ex:Station ; rdfs:label "Liège-Guillemins" ; ex:code "LG" ;
+  geo:hasGeometry [ geo:asWKT "POINT(5.5667 50.6245)"^^geo:wktLiteral ] .
+ex:GNT a ex:Station ; rdfs:label "Ghent-Sint-Pieters" ; ex:code "GNT" ;
+  geo:hasGeometry [ geo:asWKT "POINT(3.7107 51.0359)"^^geo:wktLiteral ] .
+ex:OTN a ex:Station ; rdfs:label "Ottignies" ; ex:code "OTN" ;
+  geo:hasGeometry [ geo:asWKT "POINT(4.5694 50.6735)"^^geo:wktLiteral ] .
+ex:NAM a ex:Station ; rdfs:label "Namur" ; ex:code "NAM" ;
+  geo:hasGeometry [ geo:asWKT "POINT(4.8622 50.4687)"^^geo:wktLiteral ] .
+
+ex:S01 a ex:Section ; ex:line "0" ; ex:from ex:BXS ; ex:to ex:BXC ;
+  ex:lengthKm 2 ; ex:maxSpeed 50 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.3357 50.8355, 4.3571 50.8456)"^^geo:wktLiteral ] .
+ex:S02 a ex:Section ; ex:line "0" ; ex:from ex:BXC ; ex:to ex:BXN ;
+  ex:lengthKm 2 ; ex:maxSpeed 50 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.3571 50.8456, 4.3606 50.8603)"^^geo:wktLiteral ] .
+ex:S03 a ex:Section ; ex:line "25" ; ex:from ex:BXN ; ex:to ex:MEC ;
+  ex:lengthKm 20 ; ex:maxSpeed 160 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.3606 50.8603, 4.4828 51.0177)"^^geo:wktLiteral ] .
+ex:S04 a ex:Section ; ex:line "25" ; ex:from ex:MEC ; ex:to ex:ANT ;
+  ex:lengthKm 23 ; ex:maxSpeed 160 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.4828 51.0177, 4.4211 51.2172)"^^geo:wktLiteral ] .
+ex:S05 a ex:Section ; ex:line "36" ; ex:from ex:BXN ; ex:to ex:LV ;
+  ex:lengthKm 30 ; ex:maxSpeed 160 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.3606 50.8603, 4.7158 50.8813)"^^geo:wktLiteral ] .
+ex:S06 a ex:Section ; ex:line "53" ; ex:from ex:MEC ; ex:to ex:LV ;
+  ex:lengthKm 24 ; ex:maxSpeed 120 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.4828 51.0177, 4.7158 50.8813)"^^geo:wktLiteral ] .
+ex:S07 a ex:Section ; ex:line "2" ; ex:from ex:LV ; ex:to ex:LG ;
+  ex:lengthKm 64 ; ex:maxSpeed 300 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.7158 50.8813, 5.5667 50.6245)"^^geo:wktLiteral ] .
+ex:S08 a ex:Section ; ex:line "50A" ; ex:from ex:BXS ; ex:to ex:GNT ;
+  ex:lengthKm 55 ; ex:maxSpeed 160 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.3357 50.8355, 3.7107 51.0359)"^^geo:wktLiteral ] .
+ex:S09 a ex:Section ; ex:line "161" ; ex:from ex:BXS ; ex:to ex:OTN ;
+  ex:lengthKm 30 ; ex:maxSpeed 160 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.3357 50.8355, 4.5694 50.6735)"^^geo:wktLiteral ] .
+ex:S10 a ex:Section ; ex:line "161" ; ex:from ex:OTN ; ex:to ex:NAM ;
+  ex:lengthKm 33 ; ex:maxSpeed 160 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.5694 50.6735, 4.8622 50.4687)"^^geo:wktLiteral ] .
+ex:S11 a ex:Section ; ex:line "125" ; ex:from ex:NAM ; ex:to ex:LG ;
+  ex:lengthKm 60 ; ex:maxSpeed 120 ; ex:electrified true ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(4.8622 50.4687, 5.5667 50.6245)"^^geo:wktLiteral ] .
+ex:S12 a ex:Section ; ex:line "59" ; ex:from ex:GNT ; ex:to ex:ANT ;
+  ex:lengthKm 60 ; ex:maxSpeed 120 ; ex:electrified false ;
+  geo:hasGeometry [ geo:asWKT "LINESTRING(3.7107 51.0359, 4.4211 51.2172)"^^geo:wktLiteral ] .

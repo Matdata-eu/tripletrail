@@ -1,0 +1,223 @@
+name: CI
+
+# Every job runs on GitHub's hosted runners. This repository has no self-hosted runner, so
+# pull requests from forks run like any other; a maintainer approves a first-time
+# contributor's run (Settings → Actions → Fork pull request workflows).
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - "bench/**"
+      - "LICENSE"
+      - "NOTICE"
+  pull_request:
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
+      - "bench/**"
+      - "LICENSE"
+      - "NOTICE"
+  workflow_dispatch:
+
+# A newer push cancels the run it replaces, on main too: after a merge only the newest main
+# commit is tested, so merges in a row do not queue a full run each.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pinned, so a new Rust release (and its new lints) cannot turn main red on its own. Bump it
+  # on purpose, in its own commit.
+  RUST_TOOLCHAIN: "1.97.0"
+  # Full debug info in every test binary fills the runner's disk; line tables keep
+  # backtraces readable at a fraction of the size.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_INCREMENTAL: "0"
+  # The w3c/rdf-tests commit the conformance step runs (docs/conformance.md). Bump it on
+  # purpose, with the regenerated page and known failures.
+  RDF_TESTS_COMMIT: 202a74eb81f47bcad13bbafdd37eba69c361c1c2
+  # The w3c/data-shapes commit for the SHACL suites, bumped the same way.
+  DATA_SHAPES_COMMIT: 37aca10843ae370ddb7db515957ae3873e7f560a
+  # The OpenLinkSoftware/GeoSPARQLBenchmark commit for the GeoSPARQL benchmark (GPL test data:
+  # fetched, never copied into the repository), bumped the same way.
+  GEOSPARQL_BENCHMARK_COMMIT: 879e0746e74c1327f74e57366104bcf1a6d63fb1
+
+jobs:
+  # One job builds and tests everything (workspace, every feature, Python binding): one queue
+  # slot and one cache restore per run. As three jobs, each waited for a free runner and spent
+  # most of its time restoring the cache.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      # The debug test builds plus the release bench build need more than the hosted runner's
+      # free disk; drop preinstalled toolchains this job does not use.
+      - name: Free disk space
+        if: runner.environment == 'github-hosted'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      # Tests, and the servers and tools they start, make their temporary folders here rather
+      # than in the machine's /tmp: the runner empties RUNNER_TEMP at the start and end of each
+      # job, so even a folder a killed process left goes with the job. The last step fails when
+      # the tests left any (.github/scripts/check-temp-leftovers.sh).
+      - name: Temporary folder of the job
+        run: |
+          mkdir -p "$RUNNER_TEMP/tmp"
+          echo "TMPDIR=$RUNNER_TEMP/tmp" >> "$GITHUB_ENV"
+      # Self-hosted runners keep one build directory between jobs, outside the checkout (which
+      # actions/checkout cleans), shared by the workspace and the Python binding: restoring the
+      # GitHub cache took 1 to 3 minutes of each run. It is emptied when it outgrows
+      # TARGET_CACHE_MAX_GB (repository variable, default 30; one full
+      # main run fills about 16 GB, so a cap below that empties it every run). Hosted runners restore the cache.
+      - name: Persistent build directory
+        if: runner.environment != 'github-hosted'
+        env:
+          MAX_GB: ${{ vars.TARGET_CACHE_MAX_GB || '30' }}
+        run: |
+          dir="$(dirname "$RUNNER_WORKSPACE")/.cargo-target"
+          mkdir -p "$dir"
+          used=$(du -s --block-size=1G "$dir" | cut -f1)
+          echo "build directory $dir: ${used} GB (limit ${MAX_GB} GB)"
+          if [ "$used" -gt "$MAX_GB" ]; then echo "over the limit: emptied"; rm -rf "$dir" && mkdir -p "$dir"; fi
+          df -h "$dir"
+          echo "CARGO_TARGET_DIR=$dir" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
+        with:
+          workspaces: |
+            . -> target
+            python -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      # Every feature compiles, rocksdb (on-disk Oxigraph store) included, which no other step builds.
+      - name: Every feature compiles
+        run: cargo check --workspace --all-targets --all-features
+      - run: cargo test --all
+      # The W3C SPARQL, RDF and SHACL suites and the GeoSPARQL benchmark against TripleTrail (#224): fails on a new failure, on a known
+      # failure that now passes, and when docs/conformance.md is out of date.
+      - name: W3C SPARQL, RDF and SHACL conformance
+        run: |
+          tests="$RUNNER_TEMP/rdf-tests"
+          rm -rf "$tests" && git init -q "$tests"
+          git -C "$tests" fetch -q --depth 1 https://github.com/w3c/rdf-tests "$RDF_TESTS_COMMIT"
+          git -C "$tests" checkout -q FETCH_HEAD
+          shapes="$RUNNER_TEMP/data-shapes"
+          rm -rf "$shapes" && git init -q "$shapes"
+          git -C "$shapes" fetch -q --depth 1 https://github.com/w3c/data-shapes "$DATA_SHAPES_COMMIT"
+          git -C "$shapes" checkout -q FETCH_HEAD
+          geo="$RUNNER_TEMP/GeoSPARQLBenchmark"
+          rm -rf "$geo" && git init -q "$geo"
+          git -C "$geo" fetch -q --depth 1 https://github.com/OpenLinkSoftware/GeoSPARQLBenchmark "$GEOSPARQL_BENCHMARK_COMMIT"
+          git -C "$geo" checkout -q FETCH_HEAD
+          mkdir -p "$RUNNER_TEMP/conformance"
+          cargo build -q -p tripletrail-server
+          cargo run -q -p tripletrail-testsuite -- --tests "$tests" --shacl-tests "$shapes" \
+            --geosparql-tests "$geo" \
+            --server "${CARGO_TARGET_DIR:-target}/debug/tripletrail" \
+            --known crates/tripletrail-testsuite/known-failures.txt \
+            --report "$RUNNER_TEMP/conformance/conformance.md" \
+            --earl "$RUNNER_TEMP/conformance/tripletrail-earl.ttl"
+          diff -u docs/conformance.md "$RUNNER_TEMP/conformance/conformance.md" \
+            || { echo "docs/conformance.md is out of date: regenerate it (see the page)"; exit 1; }
+      # The REST API's OpenAPI definitions pass Spectral's OpenAPI rules without a warning (#143).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Spectral lint of the REST API's OpenAPI definitions
+        run: |
+          cargo build -q -p tripletrail-server
+          .github/scripts/lint-openapi.sh "${CARGO_TARGET_DIR:-target}/debug/tripletrail"
+      # The JavaScript client against a running server, and the guide's example of it (#223).
+      - name: JavaScript client
+        working-directory: clients/js
+        run: node --test
+      - name: Upload the conformance reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance
+          path: ${{ runner.temp }}/conformance
+          if-no-files-found: ignore
+      - name: Tests of the vendored SPARQL optimizer
+        run: cargo test --manifest-path vendor/sparopt/Cargo.toml --features sep-0006 --lib
+      # On pull requests too, so a green pull request means a green main.
+      - name: Engine and server tests on Oxigraph's store
+        run: cargo test -p tripletrail -p tripletrail-server
+        env:
+          TRIPLETRAIL_STORE: oxigraph
+      # A venv keeps the job's packages out of the runner's own Python.
+      - uses: actions/setup-python@v5
+        if: runner.environment == 'github-hosted'
+        with:
+          python-version: "3.12"
+      - name: Python environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      # pyoxigraph only for the tests that compare with it.
+      - run: pip install maturin pytest rdflib pyarrow pyoxigraph
+      - name: Build and test the Python binding (in-memory build)
+        working-directory: python
+        run: |
+          rm -rf dist
+          maturin build --no-default-features --features geoparquet -o dist
+          pip install dist/*.whl
+          pytest tests
+      # Last, and also after a failure: a test that leaves its temporary folder behind fails the
+      # job, before thousands of them fill a persistent runner's disk.
+      - name: No temporary folders left behind
+        if: always()
+        run: .github/scripts/check-temp-leftovers.sh
+
+  # Known vulnerabilities in the dependencies of the workspace and of the Python binding, and
+  # drift between the two lockfiles.
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      # A prebuilt binary, instead of compiling cargo-audit from source on every run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+      - run: cargo audit --file python/Cargo.lock
+      - name: The Python binding resolves the same dependency versions as the workspace
+        run: python3 .github/scripts/check-python-lock.py
+
+  # Licenses and sources of every dependency, for the workspace and the Python binding (deny.toml).
+  licenses:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      # A prebuilt cargo-deny binary rather than its Docker action, so the job also runs on a
+      # runner without Docker access.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check licenses bans sources
+      - run: cargo deny --manifest-path python/Cargo.toml check licenses bans sources
+      # The Apache-2.0 build (default features, as the release workflow and the image build it)
+      # never contains the proprietary enterprise crate (#734).
+      - name: The Apache-2.0 build has no enterprise code
+        run: |
+          if cargo tree --locked -p tripletrail-server -e normal,build --prefix none | grep -E '^tripletrail-(enterprise|license-issuer) '; then
+            echo "tripletrail-server's default build depends on enterprise code: keep it behind the feature enterprise"
+            exit 1
+          fi

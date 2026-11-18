@@ -1,0 +1,279 @@
+# The TripleTrail shapes vocabulary (tts:): annotations on SHACL shapes for the readers that work
+# from one shape set: validation, the map, describe pages, search, OGC API Features, the REST
+# and GraphQL APIs and the AI assistant (#137). Each reader reads its own projection of the
+# set: shapes hidden from it are left out, and with profiles active only the shapes in them.
+
+@prefix tts: <http://w3id.org/tripletrail/shapes#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<http://w3id.org/tripletrail/shapes> a owl:Ontology ;
+    rdfs:label "TripleTrail shapes vocabulary"@en ;
+    rdfs:comment "Reader annotations, readers and profiles for SHACL shape sets."@en .
+
+# Shape sets
+
+tts:ShapeSet a rdfs:Class ;
+    rdfs:label "Shape set"@en ;
+    rdfs:comment "A set of shapes a dataset is read and validated with."@en .
+
+tts:inSet a rdf:Property ;
+    rdfs:label "in set"@en ;
+    rdfs:domain sh:Shape ;
+    rdfs:range tts:ShapeSet .
+
+tts:source a rdf:Property ;
+    rdfs:label "source"@en ;
+    rdfs:comment "Where the set comes from: \"generated\", \"local\" or a repository URL."@en ;
+    rdfs:domain tts:ShapeSet .
+
+tts:dataGeneration a rdf:Property ;
+    rdfs:label "data generation"@en ;
+    rdfs:comment "The version of the data a generated set was made from."@en ;
+    rdfs:domain tts:ShapeSet ;
+    rdfs:range xsd:integer .
+
+tts:version a rdf:Property ;
+    rdfs:label "version"@en ;
+    rdfs:comment "The version of a dataset's own set, counted from 1 at each save."@en ;
+    rdfs:domain tts:ShapeSet ;
+    rdfs:range xsd:integer .
+
+tts:commit a rdf:Property ;
+    rdfs:label "commit"@en ;
+    rdfs:comment "The git commit a set pulled from a repository was read from: its full hash."@en ;
+    rdfs:domain tts:ShapeSet ;
+    rdfs:range xsd:string .
+
+tts:pack a rdf:Property ;
+    rdfs:label "pack"@en ;
+    rdfs:comment "The name of the shape pack installed on a dataset, between the generated set and its own set."@en ;
+    rdfs:domain tts:ShapeSet ;
+    rdfs:range xsd:string .
+
+tts:packVersion a rdf:Property ;
+    rdfs:label "pack version"@en ;
+    rdfs:comment "The version of the installed shape pack, as its publisher names it."@en ;
+    rdfs:domain tts:ShapeSet ;
+    rdfs:range xsd:string .
+
+tts:refines a rdf:Property ;
+    rdfs:label "refines"@en ;
+    rdfs:comment "true on a node shape of a higher layer: it changes the node shape of the same IRI below instead of replacing it. The settings it gives replace those below, its property shapes replace those below with the same path, and the rest of the shape below stays."@en ;
+    rdfs:domain sh:NodeShape ;
+    rdfs:range xsd:boolean .
+
+tts:instances a rdf:Property ;
+    rdfs:label "instances"@en ;
+    rdfs:comment "How many instances of the target class the data had when the shape was generated."@en ;
+    rdfs:range xsd:integer .
+
+# Readers
+
+tts:Readers a skos:ConceptScheme ;
+    rdfs:label "TripleTrail readers"@en .
+
+tts:Reader a rdfs:Class ;
+    rdfs:subClassOf skos:Concept ;
+    rdfs:label "Reader"@en ;
+    rdfs:comment "A part of TripleTrail that reads the shape set."@en .
+
+tts:Reader-Validation a tts:Reader ; skos:inScheme tts:Readers ; skos:prefLabel "Validation"@en ;
+    skos:notation "validation" .
+tts:Reader-Map a tts:Reader ; skos:inScheme tts:Readers ; skos:prefLabel "Map"@en ;
+    skos:notation "map" .
+tts:Reader-Describe a tts:Reader ; skos:inScheme tts:Readers ; skos:prefLabel "Describe pages"@en ;
+    skos:notation "describe" .
+tts:Reader-Search a tts:Reader ; skos:inScheme tts:Readers ; skos:prefLabel "Search"@en ;
+    skos:notation "search" .
+tts:Reader-OgcFeatures a tts:Reader ; skos:inScheme tts:Readers ;
+    skos:prefLabel "OGC API Features"@en ; skos:notation "ogc-features" .
+tts:Reader-RestApi a tts:Reader ; skos:inScheme tts:Readers ; skos:prefLabel "REST API"@en ;
+    skos:notation "rest-api" .
+tts:Reader-GraphQL a tts:Reader ; skos:inScheme tts:Readers ; skos:prefLabel "GraphQL API"@en ;
+    skos:notation "graphql" .
+tts:Reader-Ai a tts:Reader ; skos:inScheme tts:Readers ; skos:prefLabel "AI assistant"@en ;
+    skos:notation "ai" .
+
+tts:hiddenFrom a rdf:Property ;
+    rdfs:label "hidden from"@en ;
+    rdfs:comment "A reader that leaves the shape out."@en ;
+    rdfs:domain sh:Shape ;
+    rdfs:range tts:Reader .
+
+tts:onlyFor a rdf:Property ;
+    rdfs:label "only for"@en ;
+    rdfs:comment "The readers that read the shape; the others leave it out."@en ;
+    rdfs:domain sh:Shape ;
+    rdfs:range tts:Reader .
+
+# Profiles (use cases)
+
+tts:Profile a rdfs:Class ;
+    rdfs:subClassOf skos:Concept ;
+    rdfs:label "Profile"@en ;
+    rdfs:comment "A use case: the shapes shown and validated when it is active."@en .
+
+tts:inProfile a rdf:Property ;
+    rdfs:label "in profile"@en ;
+    rdfs:comment "A profile the node shape belongs to. A shape in no profile is in all; property shapes take their node shape's profiles."@en ;
+    rdfs:domain sh:Shape ;
+    rdfs:range skos:Concept .
+
+# Keys and labels
+
+tts:key a rdf:Property ;
+    rdfs:label "key"@en ;
+    rdfs:comment "A short name for the shape in APIs (a collection, a field): unique among the node shapes of a set, and among the property shapes of a node shape. Also the name of a map view in the map's link."@en ;
+    rdfs:domain sh:Shape ;
+    rdfs:range xsd:string .
+
+tts:labelPath a rdf:Property ;
+    rdfs:label "label path"@en ;
+    rdfs:comment "The SHACL path from an instance to its label."@en ;
+    rdfs:domain sh:NodeShape .
+
+tts:searchable a rdf:Property ;
+    rdfs:label "searchable"@en ;
+    rdfs:comment "Whether search lists the instances of the target class."@en ;
+    rdfs:domain sh:NodeShape ;
+    rdfs:range xsd:boolean .
+
+# Map and features
+
+tts:geometry a rdf:Property ;
+    rdfs:label "geometry"@en ;
+    rdfs:comment "A way to the instance's geometry: a node with sh:path (to the geometry literal), sh:order and the geometry types found."@en ;
+    rdfs:domain sh:NodeShape .
+
+tts:lineBetween a rdf:Property ;
+    rdfs:label "line between"@en ;
+    rdfs:comment "On a geometry way, in place of sh:path: a list of two SHACL paths, each to a geometry literal. The way's geometry is the straight line from the first to the second, such as a section of line between its two operational points. Readers take it for the instances without a value on the first way with sh:path."@en .
+
+tts:geometryType a rdf:Property ;
+    rdfs:label "geometry type"@en ;
+    rdfs:comment "A WKT geometry type found at the end of the path, such as \"POINT\" or \"LINESTRING\"."@en ;
+    rdfs:range xsd:string .
+
+tts:color a rdf:Property ;
+    rdfs:label "colour"@en ;
+    rdfs:comment "The map colour of the instances, as #rrggbb."@en ;
+    rdfs:domain sh:NodeShape ;
+    rdfs:range xsd:string .
+
+tts:minZoom a rdf:Property ;
+    rdfs:label "minimum zoom"@en ;
+    rdfs:comment "The web map zoom level from which the map shows the instances."@en ;
+    rdfs:domain sh:NodeShape ;
+    rdfs:range xsd:integer .
+
+tts:drawOrder a rdf:Property ;
+    rdfs:label "draw order"@en ;
+    rdfs:comment "Where a map draws the instances among those of other classes of the same kind of geometry (areas, lines, points): higher on top. Without it, classes with more instances are drawn first, below the others."@en ;
+    rdfs:domain sh:NodeShape ;
+    rdfs:range xsd:integer .
+
+tts:colorClasses a rdf:Property ;
+    rdfs:label "colour classes"@en ;
+    rdfs:comment "A list of the classes a map colours a range facet's values in, low to high: each a node with tts:upTo (the highest value in it) and an optional rdfs:label, the last without tts:upTo for every higher value. Without it, a map makes classes from the values."@en ;
+    rdfs:domain sh:PropertyShape .
+
+tts:colorBy a rdf:Property ;
+    rdfs:label "colour by"@en ;
+    rdfs:comment "An integer on a facet a map can colour by: the map's \"Colour by\" lists such facets first, lowest first, then the others in their order."@en ;
+    rdfs:domain sh:PropertyShape ;
+    rdfs:range xsd:integer .
+
+tts:select a rdf:Property ;
+    rdfs:label "select"@en ;
+    rdfs:comment "On a facet: a SPARQL group graph pattern (without its braces) that binds ?value to the facet's values of the feature $this, in place of its sh:path, for a value computed from the data (whether a track meets a requirement). It is written with full IRIs (no prefixes) and joined where $this is bound, so OPTIONAL keeps the features without a value; its other variables stay inside it. Only the map reads it: such a facet is no property in the OGC API, REST or GraphQL."@en ;
+    rdfs:domain sh:PropertyShape ;
+    rdfs:range xsd:string .
+
+tts:MapView a rdfs:Class ;
+    rdfs:label "map view"@en ;
+    rdfs:comment "A named lens on the map, picked above its layers: the classes it shows (tts:showsClass, the others hidden), the filters set when it opens (tts:filter), the facet it colours them by (tts:colorFacet) and the facets its filter panel lists first (tts:listsFacets). It has an tts:key (in the map's link), an rdfs:label, an rdfs:comment and an sh:order; sh:deactivated true leaves it out."@en .
+
+tts:listsFacets a rdf:Property ;
+    rdfs:label "lists facets"@en ;
+    rdfs:comment "On a map view: the keys (tts:key) of the facets its filter panel lists first, in this order, as an RDF list. A key a collection has no values or range facet for is left out for it."@en ;
+    rdfs:domain tts:MapView ;
+    rdfs:range rdf:List .
+
+tts:showsClass a rdf:Property ;
+    rdfs:label "shows class"@en ;
+    rdfs:comment "A class a map view shows; the map hides the others while the view is on."@en ;
+    rdfs:domain tts:MapView ;
+    rdfs:range rdfs:Class .
+
+tts:filter a rdf:Property ;
+    rdfs:label "filter"@en ;
+    rdfs:comment "A filter a map view sets when it opens: a node with the facet's tts:key and sh:in (a list of the values kept) or sh:minInclusive and sh:maxInclusive (a range facet's bounds). It filters each class the view shows that has a facet of that key."@en ;
+    rdfs:domain tts:MapView .
+
+tts:colorFacet a rdf:Property ;
+    rdfs:label "colour facet"@en ;
+    rdfs:comment "The tts:key of the facet a map view colours its classes by, for each class that has a facet of that key."@en ;
+    rdfs:domain tts:MapView ;
+    rdfs:range xsd:string .
+
+tts:upTo a rdf:Property ;
+    rdfs:label "up to"@en ;
+    rdfs:comment "The highest value in a colour class (inclusive)."@en ;
+    rdfs:range xsd:decimal .
+
+tts:facet a rdf:Property ;
+    rdfs:label "facet"@en ;
+    rdfs:comment "How the map and search filter on the property."@en ;
+    rdfs:domain sh:PropertyShape ;
+    rdfs:range tts:FacetKind .
+
+tts:FacetKind a rdfs:Class ;
+    rdfs:label "Facet kind"@en .
+
+tts:Facet-Values a tts:FacetKind ;
+    rdfs:label "Values"@en ;
+    rdfs:comment "Pick among the values (a code list)."@en .
+
+tts:Facet-Range a tts:FacetKind ;
+    rdfs:label "Range"@en ;
+    rdfs:comment "A range of numbers or dates."@en .
+
+tts:Facet-Text a tts:FacetKind ;
+    rdfs:label "Text"@en ;
+    rdfs:comment "Text the value contains."@en .
+
+tts:time a rdf:Property ;
+    rdfs:label "time"@en ;
+    rdfs:comment "What the property's dates or date-times say of the instance's time: when it holds (tts:Time-Instant), or when it begins (tts:Time-Start) or ends (tts:Time-End). The OGC API's datetime parameter filters on it."@en ;
+    rdfs:domain sh:PropertyShape ;
+    rdfs:range tts:TimeRole .
+
+tts:TimeRole a rdfs:Class ;
+    rdfs:label "Time role"@en .
+
+tts:Time-Instant a tts:TimeRole ;
+    rdfs:label "Instant"@en ;
+    rdfs:comment "The instance holds at this time."@en .
+
+tts:Time-Start a tts:TimeRole ;
+    rdfs:label "Start"@en ;
+    rdfs:comment "The instance holds from this time on; without a start it holds since always."@en .
+
+tts:Time-End a tts:TimeRole ;
+    rdfs:label "End"@en ;
+    rdfs:comment "The instance holds until this time; without an end it still holds."@en .
+
+# Describe pages
+
+tts:Group-Attributes a sh:PropertyGroup ;
+    rdfs:label "Attributes"@en ;
+    sh:order 0 .
+
+tts:Group-Links a sh:PropertyGroup ;
+    rdfs:label "Links"@en ;
+    sh:order 1 .

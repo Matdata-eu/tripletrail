@@ -1,0 +1,170 @@
+# Default values for the TripleTrail chart. See README.md for examples.
+
+image:
+  repository: ghcr.io/matdata-eu/tripletrail
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# TripleTrail has one writer per dataset directory, so keep one replica for writable datasets.
+# Several replicas only make sense with read-only datasets on a ReadOnlyMany volume.
+replicaCount: 1
+
+# Datasets created under /data on first start (TRIPLETRAIL_DATASETS), served at /<name>/...
+datasets:
+  - ds
+
+# Existing dataset directories to serve: NAME=DIR, or NAME=DIR:ro read-only (TRIPLETRAIL_ATTACH).
+# DIR is a path in the container, e.g. /data/network_20261107 on the data volume.
+attach: []
+
+# Stable names that the admin API can later point elsewhere: ALIAS=DATASET (TRIPLETRAIL_ALIASES).
+aliases: []
+
+# Serve every dataset read-only (TRIPLETRAIL_READ_ONLY).
+readOnly: false
+
+# Bearer token for admin changes (/$/datasets, backups, swaps, /$/limits). Set value, or name
+# an existing Secret and its key. Without either, admin changes are open to anyone who
+# reaches the server: set one for anything but a test.
+adminToken:
+  value: ""
+  existingSecret: ""
+  key: admin-token
+
+# Bearer token for writes (updates, uploads). Same form as adminToken.
+updateToken:
+  value: ""
+  existingSecret: ""
+  key: update-token
+
+# Who may call (--auth-config): a sparql-guard configuration with API key hashes, trusted
+# proxy headers and anonymous access, stored in a Secret. Give it inline (config) or name an
+# existing Secret whose key holds the JSON.
+authConfig:
+  enabled: false
+  config: {}
+  existingSecret: ""
+  key: auth.json
+
+# Per-dataset and per-caller limits and quotas (--limits), stored in a ConfigMap. A file from
+# a ConfigMap is read-only, so PUT /$/limits answers with an error: change the values and
+# upgrade instead (the server reads the file again when Kubernetes updates it).
+limits:
+  enabled: false
+  config: {}
+    # default: { maxConcurrent: 4, maxQueued: 8, queueTimeout: 10 }
+    # datasets:
+    #   ds: { timeout: 30, maxTimeout: 300, maxDisk: "50GB" }
+
+# Further settings as environment variables (see `tripletrail serve --help`), e.g.
+#   TRIPLETRAIL_TIMEOUT: "60"
+#   TRIPLETRAIL_THREADS: "16"
+#   TRIPLETRAIL_MEMORY_LIMIT: "8G"
+env: {}
+# Extra env entries in Kubernetes form (valueFrom etc.).
+extraEnv: []
+
+# Log one JSON line per request to standard output.
+logRequests: true
+
+# Seconds running requests get on shutdown before the datasets are checkpointed. Kept below
+# terminationGracePeriodSeconds.
+shutdownGrace: 30
+terminationGracePeriodSeconds: 45
+
+persistence:
+  enabled: true
+  # Use an existing PersistentVolumeClaim instead of creating one.
+  existingClaim: ""
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+  size: 10Gi
+  annotations: {}
+
+# Backups (POST /$/backup/<name>) go here; on the data volume by default.
+backupDir: /data/backups
+
+service:
+  type: ClusterIP
+  port: 7878
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # Large uploads and long queries need a proxy that allows them, e.g. for ingress-nginx:
+    # nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+  hosts:
+    - host: tripletrail.example.org
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: tripletrail-tls
+    #   hosts: [tripletrail.example.org]
+
+# A Prometheus Operator ServiceMonitor for /$/metrics.
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    # With --auth-config, /$/metrics needs a key in tripletrail:admin or tripletrail:monitor:
+    # name a Secret holding it, sent as a bearer token.
+    bearerTokenSecret: {}
+      # name: tripletrail-monitor
+      # key: token
+
+probes:
+  readiness:
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 4
+  # Opening a large dataset can take a while; the startup probe holds the others off until
+  # the server answers (here: up to 10 minutes).
+  startup:
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 120
+
+resources: {}
+  # requests: { cpu: "1", memory: 4Gi }
+  # limits: { memory: 8Gi }
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}

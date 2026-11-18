@@ -1,0 +1,24 @@
+# `helm test`: the server answers 200 on /$/ready (with every dataset open).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "tripletrail.fullname" . }}-test
+  labels:
+    {{- include "tripletrail.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext:
+    {{- toYaml .Values.podSecurityContext | nindent 4 }}
+  containers:
+    - name: ready
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      args: [health]
+      env:
+        - name: TRIPLETRAIL_HEALTH_URL
+          value: "http://{{ include "tripletrail.fullname" . }}:{{ .Values.service.port }}"
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}

@@ -1,0 +1,10 @@
+/target
+*.nt.gz
+/data
+/python/target
+__pycache__/
+/python/tripletrail/*.so
+/python/dist
+/THIRD_PARTY_LICENSES.md
+/vendor/*/target
+/vendor/*/Cargo.lock

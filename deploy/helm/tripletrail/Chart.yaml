@@ -1,0 +1,11 @@
+apiVersion: v2
+name: tripletrail
+description: TripleTrail, a spatial RDF store with a SPARQL endpoint, Graph Store Protocol and web UI.
+type: application
+# The chart's own version; appVersion is the image tag used when image.tag is empty.
+version: 0.1.0
+appVersion: "main"
+home: https://github.com/Matdata-eu/tripletrail
+sources:
+  - https://github.com/Matdata-eu/tripletrail
+keywords: [rdf, sparql, geosparql, triplestore, linked-data]

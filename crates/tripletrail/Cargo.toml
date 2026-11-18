@@ -1,0 +1,52 @@
+[package]
+name = "tripletrail"
+description = "Knowledge graph store with GeoSPARQL, PostGIS-style functions and pgRouting-compatible routing, built on Oxigraph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+oxigraph.workspace = true
+thiserror.workspace = true
+tripletrail-geo.workspace = true
+tripletrail-pgr.workspace = true
+tripletrail-shacl.workspace = true
+tripletrail-spatial.workspace = true
+tripletrail-store.workspace = true
+tripletrail-fx.workspace = true
+spargebra.workspace = true
+spareval.workspace = true
+# Regular expressions of REGEX filters evaluated on ids (the evaluator's own crate).
+regex.workspace = true
+oxiri.workspace = true
+oxsdatatypes = "0.2.4"
+# RDFC-1.0 hashes (`canon`).
+sha2 = "0.11.1"
+# GeoParquet import and export (feature `geoparquet`).
+arrow-array = { version = "60.1.0", optional = true }
+arrow-schema = { version = "60.1.0", optional = true }
+arrow-cast = { version = "60.1.0", optional = true }
+parquet = { version = "60.1.0", default-features = false, features = ["arrow", "snap", "zstd"], optional = true }
+bytes = { version = "1", optional = true }
+serde_json = { workspace = true, optional = true }
+geo = { workspace = true, optional = true }
+rayon = { version = "1.12", optional = true }
+# SERVICE calls to remote SPARQL endpoints (feature `remote-service`).
+ureq = { version = "2", optional = true }
+# Snowball stemmers of full-text search with `lang:` (#830), MIT.
+rust-stemmers = "1.2"
+
+[features]
+# GeoParquet import and export: `Engine::export_geoparquet`, `Engine::load_geoparquet`.
+# SERVICE to remote SPARQL endpoints (#192): `Engine::with_remote_services`.
+remote-service = ["dep:ureq", "tripletrail-fx/remote"]
+geoparquet = ["dep:arrow-array", "dep:arrow-schema", "dep:arrow-cast", "dep:parquet", "dep:bytes", "dep:serde_json", "dep:geo", "dep:rayon"]
+
+[dev-dependencies]
+tripletrail-testdir.workspace = true
+serde_json.workspace = true
+# Round-trip tests of the hand-written FlatGeobuf encoder against the reference implementation.
+flatgeobuf = { version = "6.0.1", default-features = false }
+geozero = { version = "0.15.1", default-features = false, features = ["with-wkt"] }

@@ -1,0 +1,42 @@
+# cargo-deny: licenses and sources of every dependency (`cargo deny check`).
+# Vulnerabilities are checked by `cargo audit` in CI (see .cargo/audit.toml).
+
+[graph]
+all-features = true
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# The Python binding uses licenses (CDLA-Permissive-2.0) the workspace does not.
+unused-allowed-license = "allow"
+# Permissive licenses, plus MPL-2.0 (file-level copyleft: fine to use, but changes to
+# MPL-licensed files must be published). No GPL, LGPL or AGPL: TripleTrail ships as a single
+# binary under Apache-2.0 and in commercial editions.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

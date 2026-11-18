@@ -1,0 +1,15 @@
+# gitleaks configuration: the default rules, minus the example credentials in the user guide
+# and the changelog (`reader-secret-1`, a forged token) and the localhost TLS keys the tests
+# use. None of them protects anything.
+title = "TripleTrail"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Example credentials and test fixtures"
+paths = [
+  '''(^|/)crates/tripletrail-server/tests/tls-fixtures/[^/]+\.key$''',
+  '''(^|/)docs/guide/[^/]+\.md$''',
+  '''(^|/)CHANGELOG\.md$''',
+]

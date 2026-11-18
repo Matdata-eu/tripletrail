@@ -1,0 +1,218 @@
+# Compatibility profile: RINF vehicle / infrastructure compatibility as generic rules.
+#
+# The simple rules of the RINF atlas (shapes/compatibility.ttl in Matdata-eu/rinf-atlas),
+# written in the tripletrail compatibility vocabulary (compat:, see the README). Each rule compares a
+# property of an era:VehicleType with a property of a running track; the atlas facet key the
+# rule compares is resolved to its ERA property path (from the atlas facet shapes,
+# shapes/running-track.ttl). Load this file into a named graph and route with it:
+#
+#   SERVICE <http://w3id.org/tripletrail/pgr> {
+#     [] pgr:function rail:route ; pgr:start_vid op:A ; pgr:end_vid op:B ;
+#        pgr:vehicle ex:myVehicleType ; pgr:rules <urn:rinf-compatibility> ;
+#        pgr:focus "c_track" ;
+#        pgr:edge ?edge ; pgr:agg_cost ?cost .
+#     { SELECT ?id ?source ?target ?cost ?reverse_cost ?c_track WHERE {
+#         ?id a era:SectionOfLine ; era:opStart ?source ; era:opEnd ?target ;
+#             era:lengthOfSectionOfLine ?km .
+#         ?c_track era:isPartOf ?id .                       # or ?id era:hasPart ?c_track
+#         BIND(?km * 1000 AS ?cost) BIND(?cost AS ?reverse_cost) } }
+#   }
+#
+# The focus node is the running track behind each edge (pgr:focus "c_track"); an edge with
+# several tracks is routable only when every one of them is compatible. A rule is checked only
+# when the vehicle type has a value for it. A track without a value passes (the atlas calls
+# it "unknown"), except where compat:whenMissing compat:Fail says otherwise.
+#
+# Atlas features left out, and why:
+# - Train composition (atlas:combineOver, atlas:combineBy, atlas:vehicleDefault,
+#   atlas:lengthFrom): the rules compare one vehicle's values. To check a train, give it a
+#   node with the combined values (the sum of the currents, the lowest wire height reached,
+#   the length of the train, ...) and pass that node as pgr:vehicle.
+# - Record facets selected by the train's speed are in for the load capability (compat:field
+#   and compat:selectBy, below), not for the raised pantographs and their spacing: those
+#   combine the vehicles of a train (see above).
+# - Braking distance (atlas:brakingDistance): computed from the line speed and the
+#   deceleration, not compared.
+# - atlas:impliedValue (era:notApplicable era:etcs counting as ETCS level N): a track that
+#   declares ETCS not applicable has no level, so the ETCS rule passes it (as level N would
+#   for a vehicle without ETCS). A vehicle that requires ETCS then also passes it.
+# - atlas:withoutValue / atlas:withoutMatches ("No ETCS installed" standing for N, level 0
+#   and NTC): a convenience of the profile editor. Give such a vehicle those levels as
+#   era:etcsEquipmentOnBoardLevel values.
+# - atlas:option (safe consist length, magnetic, eddy current and regenerative brakes) with
+#   atlas:matches / atlas:maybe / atlas:anyTrack: the vehicle picks an option that stands for a
+#   set of track values, with "allowed under conditions" giving unknown. Not a comparison of
+#   the vehicle's own values.
+# - atlas:requires (train integrity, current limitation, red tail lights, quiet route): "a
+#   vehicle without it may not run where the track requires it" is asymmetric (a vehicle with
+#   it runs anywhere), which none of the comparisons say.
+# - atlas:linkedClass (the fire safety category of the tunnels a track runs through): needs
+#   a path from the track to its tunnels the ERA data does not give directly.
+# - atlas:noneFrom (pantograph head, wire heights and current are "missing" only where the
+#   energy supply is too): the energy supply rule already fails a track without a contact
+#   line for an electric-only vehicle, so these rules let a track without a value pass.
+#   A bi-mode vehicle that has the "not electrified" none value is compared with the
+#   contact line where there is one: unlike the atlas, it does not pass an electrified track
+#   with another voltage.
+# - The section fallback (a track without a value takes its section of line's value): give
+#   a rule an alternative path, e.g. [ sh:alternativePath ( era:x ( era:isPartOf era:x ) ) ].
+# - The tri-state result (compatible / unknown / not compatible): routing needs a yes or no;
+#   unknown counts as yes (compat:whenMissing compat:Pass), or as no with compat:Fail.
+# - The atlas' mass per metre characteristic: ERA has no vehicle type property for it. A
+#   vehicle's line category carries it (the load capability rule).
+# - Maximum speed (atlas:input): not compared on its own; the load capability rule reads it.
+#
+# Load capability (atlas:termValue, atlas:recordFilter): a track lists EN 15528 line
+# categories, each with the speed it holds at (era:trackLoadCapability, an era:LoadCapability
+# with era:loadCapabilityLineCategory and era:loadCapabilitySpeed). The categories are ranked
+# below by their axle load (t) and mass per metre (t/m), with compat:rank: a category is at
+# least another when both are (C2 is above B2, D2 is not above C3). The vehicle's line category
+# (era:compatibleWithLineCategory: its own, or those it may run on) or its axle load
+# (era:staticAxleLoadNormalPayload, kg) must be met by one load capability of the track; with
+# the vehicle's maximum speed, only by one whose speed is at least that speed (a load
+# capability without a speed holds at any speed). This is the atlas' check with one difference:
+# the atlas takes the record with the lowest speed at or above the vehicle's, this profile any
+# of them (the same for data where a faster record has a lower category). D4xL ranks as D4.
+# The UK route availability (RA) and HS17 categories are not ranked: a track with one of them
+# passes (unknown in the atlas), as does a track without a load capability.
+PREFIX compat: <http://w3id.org/tripletrail/compat#>
+PREFIX sh:     <http://www.w3.org/ns/shacl#>
+PREFIX era:    <http://data.europa.eu/949/>
+PREFIX rdfs:   <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX rinf:   <http://w3id.org/tripletrail/compat/rinf#>
+PREFIX lclc:   <http://data.europa.eu/949/concepts/load-capability-line-categories/>
+
+# ---- gauge and dimensions ----
+
+rinf:wheelSetGauge a compat:Rule ;
+    rdfs:label "Nominal track gauge" ;
+    rdfs:comment "The track has one of the gauges the wheelsets run on (facet wheelSetGauge)." ;
+    compat:vehiclePath era:wheelSetGauge ;
+    compat:edgePath era:wheelSetGauge ;
+    compat:constraint sh:hasValue .
+
+rinf:gaugingProfile a compat:Rule ;
+    rdfs:label "Gauging profile" ;
+    rdfs:comment "The track lists one of the gauging profiles the vehicle fits (facet gaugingProfile)." ;
+    compat:vehiclePath era:gaugingProfile ;
+    compat:edgePath era:gaugingProfile ;
+    compat:constraint sh:hasValue .
+
+rinf:trainLength a compat:Rule ;
+    rdfs:label "Train length" ;
+    rdfs:comment "The track's maximum permitted train length is not below the vehicle's length (facet maxPermittedTrainLength)." ;
+    compat:vehiclePath era:lengthOfVehicle ;
+    compat:edgePath era:maxPermittedTrainLength ;
+    compat:constraint sh:minInclusive .
+
+rinf:minWheelDiameter a compat:Rule ;
+    rdfs:label "Minimum wheel diameter" ;
+    rdfs:comment "The track's minimum permitted wheel diameter is not above the vehicle's smallest wheel (facet minimumWheelDiameter)." ;
+    compat:vehiclePath era:minWheelDiameter ;
+    compat:edgePath era:minimumWheelDiameter ;
+    compat:constraint sh:maxInclusive .
+
+# ---- energy ----
+
+rinf:energySupplySystem a compat:Rule ;
+    rdfs:label "Energy supply system" ;
+    rdfs:comment "The track's contact line has one of the energy supply systems the vehicle draws from (facet contactLineSystem.energySupplySystem). A track without one has no contact line: an electric vehicle cannot run there, unless it also has the value Not electrified (a bi-mode vehicle). Leave the characteristic empty for a diesel or battery vehicle." ;
+    compat:vehiclePath era:energySupplySystem ;
+    compat:edgePath ( era:contactLineSystem era:energySupplySystem ) ;
+    compat:constraint sh:hasValue ;
+    compat:whenMissing compat:Fail ;
+    compat:noneValue <http://data.europa.eu/949/concepts/contact-line-systems/40> .
+
+rinf:pantographHead a compat:Rule ;
+    rdfs:label "Pantograph head" ;
+    rdfs:comment "The track accepts one of the pantograph heads fitted (facets tsiPantographHead and otherPantographHead, pooled)." ;
+    compat:vehiclePath ( era:configDependentParameter era:vehiclePantographHead ) ;
+    compat:edgePath [ sh:alternativePath ( era:tsiPantographHead era:otherPantographHead ) ] ;
+    compat:constraint sh:hasValue .
+
+rinf:maximumContactWireHeight a compat:Rule ;
+    rdfs:label "Maximum contact wire height reached" ;
+    rdfs:comment "The track's maximum contact wire height is not above the highest wire the pantograph reaches (facet contactLineSystem.maximumContactWireHeight)." ;
+    compat:vehiclePath era:maximumContactWireHeight ;
+    compat:edgePath ( era:contactLineSystem era:maximumContactWireHeight ) ;
+    compat:constraint sh:maxInclusive .
+
+rinf:minimumContactWireHeight a compat:Rule ;
+    rdfs:label "Minimum contact wire height reached" ;
+    rdfs:comment "The track's minimum contact wire height is not below the lowest wire the pantograph works with (facet contactLineSystem.minimumContactWireHeight)." ;
+    compat:vehiclePath ( era:configDependentParameter era:minimumContactWireHeight ) ;
+    compat:edgePath ( era:contactLineSystem era:minimumContactWireHeight ) ;
+    compat:constraint sh:minInclusive .
+
+rinf:maxTrainCurrent a compat:Rule ;
+    rdfs:label "Maximum current drawn from the contact line" ;
+    rdfs:comment "The track's maximum train current is not below the current the vehicle draws (facet contactLineSystem.maxTrainCurrent)." ;
+    compat:vehiclePath ( era:configDependentParameter era:catenaryMaxRatedCurrent ) ;
+    compat:edgePath ( era:contactLineSystem era:maxTrainCurrent ) ;
+    compat:constraint sh:minInclusive .
+
+# ---- signalling ----
+
+rinf:etcsLevel a compat:Rule ;
+    rdfs:label "ETCS level on board" ;
+    rdfs:comment "The track has one of the ETCS levels the on-board equipment supports (facet etcs.etcsLevelType). A vehicle without ETCS lists levels N, 0 and NTC (etcs-levels 10, 50, 60)." ;
+    compat:vehiclePath era:etcsEquipmentOnBoardLevel ;
+    compat:edgePath ( era:etcs era:etcsLevelType ) ;
+    compat:constraint sh:hasValue .
+
+rinf:protectionLegacySystem a compat:Rule ;
+    rdfs:label "Class B train protection" ;
+    rdfs:comment "The track has one of the class B train protection systems fitted (facet protectionLegacySystem)." ;
+    compat:vehiclePath era:protectionLegacySystem ;
+    compat:edgePath era:protectionLegacySystem ;
+    compat:constraint sh:hasValue .
+
+rinf:trainDetectionSystemType a compat:Rule ;
+    rdfs:label "Train detection systems" ;
+    rdfs:comment "Every train detection system of the track is one the vehicle is compatible with (facet trainDetectionSystem.trainDetectionSystemType)." ;
+    compat:vehiclePath era:trainDetectionSystemType ;
+    compat:edgePath ( era:trainDetectionSystem era:trainDetectionSystemType ) ;
+    compat:constraint sh:in .
+
+# ---- load ----
+
+rinf:loadCapability a compat:Rule ;
+    rdfs:label "Load capability" ;
+    rdfs:comment "One of the track's load capabilities (EN 15528 line category and speed) carries the vehicle: its category is at least the vehicle's line category in axle load and mass per metre, its axle load is at least the vehicle's, and, when the vehicle has a maximum speed, its speed is at least that speed (facet trackLoadCapability)." ;
+    compat:edgePath era:trackLoadCapability ;
+    compat:constraint sh:hasValue ;
+    compat:field [
+        rdfs:label "Line category" ;
+        compat:vehiclePath era:compatibleWithLineCategory ;
+        compat:edgePath era:loadCapabilityLineCategory ;
+        compat:constraint sh:minInclusive ;
+        compat:rank rinf:maxAxleLoad, rinf:maxMassPerMetre ;
+    ] , [
+        rdfs:label "Axle load" ;
+        compat:vehiclePath era:staticAxleLoadNormalPayload ;
+        compat:factor 0.001 ;                     # kg in ERA, t in the ranks
+        compat:edgePath era:loadCapabilityLineCategory ;
+        compat:constraint sh:minInclusive ;
+        compat:rank rinf:maxAxleLoad ;
+    ] ;
+    compat:selectBy [
+        rdfs:label "Load capability speed" ;
+        compat:vehiclePath ( era:vehicleTypeMaximumSpeedAndCantDeficiency era:vehicleTypeMaximumSpeed ) ;
+        compat:edgePath era:loadCapabilitySpeed ;
+        compat:constraint sh:minInclusive ;
+    ] .
+
+# EN 15528 line categories (ERA load-capability-line-categories): maximum axle load (t) and
+# mass per metre (t/m).
+lclc:10  rdfs:label "A" ;    rinf:maxAxleLoad 16.0 ; rinf:maxMassPerMetre 5.0 .
+lclc:20  rdfs:label "B1" ;   rinf:maxAxleLoad 18.0 ; rinf:maxMassPerMetre 5.0 .
+lclc:30  rdfs:label "B2" ;   rinf:maxAxleLoad 18.0 ; rinf:maxMassPerMetre 6.4 .
+lclc:40  rdfs:label "C2" ;   rinf:maxAxleLoad 20.0 ; rinf:maxMassPerMetre 6.4 .
+lclc:50  rdfs:label "C3" ;   rinf:maxAxleLoad 20.0 ; rinf:maxMassPerMetre 7.2 .
+lclc:60  rdfs:label "C4" ;   rinf:maxAxleLoad 20.0 ; rinf:maxMassPerMetre 8.0 .
+lclc:70  rdfs:label "D2" ;   rinf:maxAxleLoad 22.5 ; rinf:maxMassPerMetre 6.4 .
+lclc:80  rdfs:label "D3" ;   rinf:maxAxleLoad 22.5 ; rinf:maxMassPerMetre 7.2 .
+lclc:90  rdfs:label "D4" ;   rinf:maxAxleLoad 22.5 ; rinf:maxMassPerMetre 8.0 .
+lclc:100 rdfs:label "D4xL" ; rinf:maxAxleLoad 22.5 ; rinf:maxMassPerMetre 8.0 .
+lclc:110 rdfs:label "E4" ;   rinf:maxAxleLoad 25.0 ; rinf:maxMassPerMetre 8.0 .
+lclc:120 rdfs:label "E5" ;   rinf:maxAxleLoad 25.0 ; rinf:maxMassPerMetre 8.8 .

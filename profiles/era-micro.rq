@@ -1,0 +1,35 @@
+# Network profile: ERA RINF micro topology -> pgRouting edge set.
+#
+# Builds an edge-based graph so switch navigability is respected: a vertex is
+# "<net element>#fwd" or "<net element>#bwd" (the element travelled from its origin to its end,
+# or the reverse), and an edge is a move through a navigable era:NetRelation into the next
+# element, costing that element's era:lengthOfNetLinearElement (metres). Relations with
+# navigability None produce no edge, so a train can never go from one diverging leg of a switch
+# to the other.
+#
+# Use it as the edge sub-select of a pgr SERVICE call, or as the pgr:edgeQuery of a named network.
+# To route from element E in either direction, pass both "E#fwd" and "E#bwd" as start_vid.
+#
+# Property names and navigability concepts match RINF data published with ERA ontology 3.1
+# (graph.data.era.europa.eu, repository rinf-plus, checked 2026-10-31).
+PREFIX era: <http://data.europa.eu/949/>
+PREFIX nav: <http://data.europa.eu/949/concepts/navigabilities/>
+SELECT ?id ?source ?target ?cost WHERE {
+  {
+    ?r a era:NetRelation ; era:elementA ?a ; era:elementB ?b ;
+       era:isOnOriginOfElementA ?oa ; era:isOnOriginOfElementB ?ob ; era:navigability ?nav .
+    FILTER(?nav IN (nav:AB, nav:Both))
+    ?b era:lengthOfNetLinearElement ?cost .
+    BIND(CONCAT(STR(?a), IF(?oa, "#bwd", "#fwd")) AS ?source)
+    BIND(CONCAT(STR(?b), IF(?ob, "#fwd", "#bwd")) AS ?target)
+    BIND(CONCAT(STR(?r), "#ab") AS ?id)
+  } UNION {
+    ?r a era:NetRelation ; era:elementA ?a ; era:elementB ?b ;
+       era:isOnOriginOfElementA ?oa ; era:isOnOriginOfElementB ?ob ; era:navigability ?nav .
+    FILTER(?nav IN (nav:BA, nav:Both))
+    ?a era:lengthOfNetLinearElement ?cost .
+    BIND(CONCAT(STR(?b), IF(?ob, "#bwd", "#fwd")) AS ?source)
+    BIND(CONCAT(STR(?a), IF(?oa, "#fwd", "#bwd")) AS ?target)
+    BIND(CONCAT(STR(?r), "#ba") AS ?id)
+  }
+}

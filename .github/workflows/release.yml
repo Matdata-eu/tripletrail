@@ -1,0 +1,222 @@
+name: Release
+
+# Release binaries of `tripletrail` (the server and the CLI are one binary) for Linux (x86_64,
+# aarch64), macOS (x86_64, arm64) and Windows (x86_64), with SHA256SUMS, published as a GitHub
+# release with notes from CHANGELOG.md and the Conventional Commits since the last tag.
+#
+# Pushing a tag `v1.2.3` runs all of it and creates the release. Before tagging: set the
+# workspace version in Cargo.toml, rename "## [Unreleased]" in CHANGELOG.md to "## 1.2.3" and
+# add the release's entry at the top of crates/tripletrail-server/ui/whats-new.json; the check
+# job refuses the release otherwise (.github/scripts/release-notes.sh --check).
+#
+# Started by hand it is a dry run: it builds and packages everything and keeps the result as
+# a workflow artifact, without a release. macOS and Windows run on GitHub's runners, which
+# count 10x and 2x against the private repository's minutes; untick them to save those.
+#
+# The binaries are not signed yet: cosign keyless signing would write the repository's name
+# and commits to Sigstore's public log, so it waits until the repository is public (#150).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: Build for macOS (GitHub runner, 10x minutes)
+        type: boolean
+        default: true
+      windows:
+        description: Build for Windows (GitHub runner, 2x minutes)
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The third-party list runs `cargo fetch`; the light runner has no Rust of its own.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.0"
+      - id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Version, CHANGELOG and whats-new.json agree
+        run: .github/scripts/release-notes.sh --check "${{ steps.version.outputs.version }}"
+      - name: Release notes
+        run: .github/scripts/release-notes.sh "${{ steps.version.outputs.version }}" > notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
+      # One list for every platform, packaged with each binary and published with the release.
+      - name: Third-party licenses
+        run: |
+          cargo fetch --locked
+          python3 .github/scripts/third-party-licenses.py -o THIRD_PARTY_LICENSES.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: third-party
+          path: THIRD_PARTY_LICENSES.md
+
+  # Both Linux binaries from the Dockerfile's build stage, cross-compiled on one machine and
+  # linked against Debian 12's glibc (2.36), so they run on most current distributions.
+  linux:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: binary
+          platforms: linux/amd64,linux/arm64
+          outputs: type=local,dest=out
+          cache-from: type=gha
+      - uses: actions/download-artifact@v4
+        with:
+          name: third-party
+      - name: Package
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          mkdir -p dist
+          for p in amd64:x86_64-unknown-linux-gnu arm64:aarch64-unknown-linux-gnu; do
+            name="tripletrail-$VERSION-${p#*:}"
+            mkdir -p "pkg/$name"
+            cp "out/linux_${p%%:*}/tripletrail" LICENSE NOTICE THIRD_PARTY_LICENSES.md README.md CHANGELOG.md "pkg/$name/"
+            chmod +x "pkg/$name/tripletrail"
+            tar -C pkg -czf "dist/$name.tar.gz" "$name"
+          done
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  macos:
+    needs: check
+    if: github.event_name == 'push' || inputs.macos
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            CARGO_PROFILE_RELEASE_DEBUG=false CARGO_PROFILE_RELEASE_STRIP=symbols \
+              cargo build --release --locked -p tripletrail-server --target "$target"
+          done
+      - uses: actions/download-artifact@v4
+        with:
+          name: third-party
+      - name: Package
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          mkdir -p dist
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            name="tripletrail-$VERSION-$target"
+            mkdir -p "pkg/$name"
+            cp "target/$target/release/tripletrail" LICENSE NOTICE THIRD_PARTY_LICENSES.md README.md CHANGELOG.md "pkg/$name/"
+            tar -C pkg -czf "dist/$name.tar.gz" "$name"
+          done
+          ./target/aarch64-apple-darwin/release/tripletrail --help > /dev/null
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  windows:
+    needs: check
+    if: github.event_name == 'push' || inputs.windows
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: bash
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: "false"
+        run: cargo build --release --locked -p tripletrail-server --target x86_64-pc-windows-msvc
+      - uses: actions/download-artifact@v4
+        with:
+          name: third-party
+      - name: Package
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          $name = "tripletrail-$env:VERSION-x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory -Force -Path "pkg/$name", dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/tripletrail.exe, LICENSE, NOTICE, THIRD_PARTY_LICENSES.md, README.md, CHANGELOG.md "pkg/$name/"
+          & "pkg/$name/tripletrail.exe" --help | Out-Null
+          Compress-Archive -Path "pkg/$name" -DestinationPath "dist/$name.zip"
+          Get-ChildItem dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  release:
+    needs: [check, linux, macos, windows]
+    # macOS and Windows may be skipped on a dry run; a tag needs them all.
+    if: >-
+      !cancelled() && needs.check.result == 'success' && needs.linux.result == 'success'
+      && (github.event_name != 'push' || (needs.macos.result == 'success' && needs.windows.result == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Checksums
+        run: |
+          mkdir dist
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} dist/ \;
+          mv artifacts/notes/notes.md .
+          mv artifacts/third-party/THIRD_PARTY_LICENSES.md dist/
+          (cd dist && sha256sum * > SHA256SUMS)
+          cat dist/SHA256SUMS
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "TripleTrail $VERSION" --notes-file notes.md --verify-tag
+      - name: Keep the dry run
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dry-run
+          path: |
+            dist/*
+            notes.md

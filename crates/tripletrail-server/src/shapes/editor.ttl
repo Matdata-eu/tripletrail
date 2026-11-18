@@ -1,0 +1,60 @@
+# The editor shapes of the Shapes page's forms (#145): what a form shows for a node shape and
+# for a property shape, each field a property shape of the setting it changes, with the DASH
+# editor (dash:editor) that draws it and, for a choice, its values (sh:in). Fields are shown in
+# sh:order. `GET …/shapes/form` reads them, so a field is added here, with a setting of the edit
+# API (shapes/edit.rs) for its path.
+
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix dash: <http://datashapes.org/dash#> .
+@prefix tts:  <http://w3id.org/tripletrail/shapes#> .
+@prefix mge:  <urn:tripletrail:editor:> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+mge:NodeShapeForm a sh:NodeShape ;
+    sh:targetClass sh:NodeShape ;
+    sh:property
+        [ sh:path sh:name ; sh:order 1 ; sh:name "Name" ; dash:editor dash:TextFieldWithLangEditor ;
+          sh:description "What the readers call an instance's class." ] ,
+        [ sh:path sh:description ; sh:order 2 ; sh:name "Description" ; dash:editor dash:TextAreaWithLangEditor ] ,
+        [ sh:path tts:key ; sh:order 3 ; sh:name "Key" ; dash:editor dash:TextFieldEditor ; sh:maxCount 1 ;
+          sh:description "Its name in the OGC API, the REST API and GraphQL." ] ,
+        [ sh:path tts:color ; sh:order 4 ; sh:name "Map colour" ; dash:editor dash:TextFieldEditor ; sh:maxCount 1 ;
+          sh:pattern "^#[0-9a-fA-F]{6}$" ; sh:description "As #rrggbb." ] ,
+        [ sh:path tts:minZoom ; sh:order 5 ; sh:name "Shown from zoom" ; dash:editor dash:TextFieldEditor ;
+          sh:datatype xsd:integer ; sh:maxCount 1 ; sh:minInclusive 0 ; sh:maxInclusive 24 ] ,
+        [ sh:path tts:drawOrder ; sh:order 6 ; sh:name "Draw order" ; dash:editor dash:TextFieldEditor ;
+          sh:datatype xsd:integer ; sh:maxCount 1 ; sh:description "Higher is drawn on top." ] ,
+        [ sh:path tts:hiddenFrom ; sh:order 7 ; sh:name "Hidden from" ; dash:editor dash:EnumSelectEditor ;
+          sh:class tts:Reader ] ,
+        [ sh:path tts:onlyFor ; sh:order 8 ; sh:name "Only for" ; dash:editor dash:EnumSelectEditor ;
+          sh:class tts:Reader ] ,
+        [ sh:path tts:inProfile ; sh:order 9 ; sh:name "Profiles" ; dash:editor dash:InstancesSelectEditor ;
+          sh:class tts:Profile ; sh:description "A shape in no profile is in all of them." ] ,
+        [ sh:path sh:deactivated ; sh:order 10 ; sh:name "Deactivated" ; dash:editor dash:BooleanSelectEditor ;
+          sh:maxCount 1 ] .
+
+mge:PropertyShapeForm a sh:NodeShape ;
+    sh:targetClass sh:PropertyShape ;
+    sh:property
+        [ sh:path sh:name ; sh:order 1 ; sh:name "Name" ; dash:editor dash:TextFieldWithLangEditor ] ,
+        [ sh:path sh:description ; sh:order 2 ; sh:name "Description" ; dash:editor dash:TextAreaWithLangEditor ] ,
+        [ sh:path sh:order ; sh:order 3 ; sh:name "Order" ; dash:editor dash:TextFieldEditor ;
+          sh:datatype xsd:decimal ; sh:maxCount 1 ] ,
+        [ sh:path sh:group ; sh:order 4 ; sh:name "Group" ; dash:editor dash:InstancesSelectEditor ;
+          sh:class sh:PropertyGroup ; sh:maxCount 1 ] ,
+        [ sh:path tts:key ; sh:order 5 ; sh:name "Key" ; dash:editor dash:TextFieldEditor ; sh:maxCount 1 ] ,
+        [ sh:path dash:viewer ; sh:order 6 ; sh:name "Viewer" ; dash:editor dash:EnumSelectEditor ; sh:maxCount 1 ;
+          sh:in ( dash:LabelViewer dash:LiteralViewer dash:URIViewer dash:HTMLViewer dash:ImageViewer
+                  dash:DetailsViewer dash:ValueTableViewer ) ] ,
+        [ sh:path tts:facet ; sh:order 7 ; sh:name "Facet" ; dash:editor dash:EnumSelectEditor ; sh:maxCount 1 ;
+          sh:in ( tts:Facet-Values tts:Facet-Range tts:Facet-Text ) ;
+          sh:description "How the map and search filter on the property." ] ,
+        [ sh:path tts:time ; sh:order 8 ; sh:name "Time" ; dash:editor dash:EnumSelectEditor ; sh:maxCount 1 ;
+          sh:in ( tts:Time-Instant tts:Time-Start tts:Time-End ) ] ,
+        [ sh:path dash:hidden ; sh:order 9 ; sh:name "Hidden" ; dash:editor dash:BooleanSelectEditor ; sh:maxCount 1 ;
+          sh:description "Describe pages leave the row out." ] ,
+        [ sh:path tts:hiddenFrom ; sh:order 10 ; sh:name "Hidden from" ; dash:editor dash:EnumSelectEditor ;
+          sh:class tts:Reader ] ,
+        [ sh:path sh:deactivated ; sh:order 11 ; sh:name "Deactivated" ; dash:editor dash:BooleanSelectEditor ;
+          sh:maxCount 1 ] .

@@ -1,0 +1,1078 @@
+{
+  "title": "TripleTrail",
+  "uid": "tripletrail",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "tags": [
+    "tripletrail",
+    "sparql"
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "timezone": "",
+  "description": "Requests, latency, errors, limits and storage of a TripleTrail server, from its /$/metrics endpoint.",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus",
+        "current": {}
+      },
+      {
+        "name": "dataset",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(tripletrail_triples, dataset)",
+          "refId": "datasets"
+        },
+        "definition": "label_values(tripletrail_triples, dataset)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2,
+        "label": "Dataset"
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Uptime",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(tripletrail_uptime_seconds)",
+          "legendFormat": "{{dataset}}"
+        }
+      ],
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Quads",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(tripletrail_triples{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}}"
+        }
+      ],
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Named graphs",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(tripletrail_graphs{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}}"
+        }
+      ],
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Requests in flight",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(tripletrail_requests_in_flight)",
+          "legendFormat": "{{dataset}}"
+        }
+      ],
+      "id": 4
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests per second, by operation",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset, operation) (rate(tripletrail_requests_total{dataset=~\"$dataset\"}[$__rate_interval]))",
+          "legendFormat": "{{dataset}} {{operation}}"
+        }
+      ],
+      "id": 5
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors per second, by status",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset, status) (rate(tripletrail_requests_total{dataset=~\"$dataset\",status=~\"4..|5..\"}[$__rate_interval]))",
+          "legendFormat": "{{dataset}} {{status}}"
+        }
+      ],
+      "description": "4xx are the callers' mistakes (bad queries, refused access); 5xx are the server's, 503 includes timeouts.",
+      "id": 6
+    },
+    {
+      "type": "timeseries",
+      "title": "Query latency",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, dataset) (rate(tripletrail_request_duration_seconds_bucket{dataset=~\"$dataset\",operation=\"query\"}[$__rate_interval])))",
+          "legendFormat": "{{dataset}} p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, dataset) (rate(tripletrail_request_duration_seconds_bucket{dataset=~\"$dataset\",operation=\"query\"}[$__rate_interval])))",
+          "legendFormat": "{{dataset}} p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le, dataset) (rate(tripletrail_request_duration_seconds_bucket{dataset=~\"$dataset\",operation=\"query\"}[$__rate_interval])))",
+          "legendFormat": "{{dataset}} p99"
+        }
+      ],
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "Update latency",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, dataset) (rate(tripletrail_request_duration_seconds_bucket{dataset=~\"$dataset\",operation=\"update\"}[$__rate_interval])))",
+          "legendFormat": "{{dataset}} p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, dataset) (rate(tripletrail_request_duration_seconds_bucket{dataset=~\"$dataset\",operation=\"update\"}[$__rate_interval])))",
+          "legendFormat": "{{dataset}} p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le, dataset) (rate(tripletrail_request_duration_seconds_bucket{dataset=~\"$dataset\",operation=\"update\"}[$__rate_interval])))",
+          "legendFormat": "{{dataset}} p99"
+        }
+      ],
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Timeouts and budget trips per second",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset) (rate(tripletrail_timeouts_total{dataset=~\"$dataset\"}[$__rate_interval]))",
+          "legendFormat": "{{dataset}} timeout"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (dataset, budget) (rate(tripletrail_budget_trips_total{dataset=~\"$dataset\"}[$__rate_interval]))",
+          "legendFormat": "{{dataset}} {{budget}}"
+        }
+      ],
+      "description": "Queries and updates stopped by their timeout (answered 503), and queries stopped by the memory limit (memory), refused past max-rows (rows) or cut there with partial=true (partial).",
+      "id": 9
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests running and queued, per dataset",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset) (tripletrail_dataset_requests_running{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}} running"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (dataset) (tripletrail_dataset_requests_queued{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}} queued"
+        }
+      ],
+      "description": "Turns taken from the limits file's per-dataset concurrency.",
+      "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests rejected by limits",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset) (rate(tripletrail_dataset_requests_rejected_total{dataset=~\"$dataset\"}[$__rate_interval]))",
+          "legendFormat": "{{dataset}} dataset busy"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(tripletrail_caller_requests_rejected_total[$__rate_interval]))",
+          "legendFormat": "caller over its rate"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (dataset) (rate(tripletrail_dataset_writes_rejected_quota_total{dataset=~\"$dataset\"}[$__rate_interval]))",
+          "legendFormat": "{{dataset}} over quota"
+        }
+      ],
+      "id": 11
+    },
+    {
+      "type": "timeseries",
+      "title": "Result cache hit ratio",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(tripletrail_result_cache_hits_total[$__rate_interval])) / (sum(rate(tripletrail_result_cache_hits_total[$__rate_interval])) + sum(rate(tripletrail_result_cache_misses_total[$__rate_interval])))",
+          "legendFormat": "hit ratio"
+        }
+      ],
+      "id": 12
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 28,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(tripletrail_mapped_bytes)",
+          "legendFormat": "mapped store files"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(tripletrail_result_cache_bytes)",
+          "legendFormat": "result cache"
+        },
+        {
+          "refId": "C",
+          "expr": "max(process_resident_memory_bytes)",
+          "legendFormat": "resident"
+        }
+      ],
+      "id": 13
+    },
+    {
+      "type": "timeseries",
+      "title": "Spatial index ready",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 28,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "tripletrail_spatial_index_ready{dataset=~\"$dataset\"}",
+          "legendFormat": "{{dataset}}"
+        }
+      ],
+      "description": "1 once the dataset's spatial index is built.",
+      "id": 14
+    },
+    {
+      "type": "timeseries",
+      "title": "Commits per second",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset) (rate(tripletrail_commits_total{dataset=~\"$dataset\"}[$__rate_interval]))",
+          "legendFormat": "{{dataset}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (dataset) (rate(tripletrail_slow_commits_total{dataset=~\"$dataset\"}[$__rate_interval]))",
+          "legendFormat": "{{dataset}} slow"
+        }
+      ],
+      "description": "Transactions that changed an on-disk store, and those that took a second or more.",
+      "id": 15
+    },
+    {
+      "type": "timeseries",
+      "title": "Average commit time",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 36,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset) (rate(tripletrail_commit_seconds_total{dataset=~\"$dataset\"}[$__rate_interval])) / sum by (dataset) (rate(tripletrail_commits_total{dataset=~\"$dataset\"}[$__rate_interval]))",
+          "legendFormat": "{{dataset}}"
+        }
+      ],
+      "description": "Time a commit took until durable, averaged over the interval.",
+      "id": 16
+    },
+    {
+      "type": "timeseries",
+      "title": "Write-ahead log",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 36,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset) (tripletrail_wal_bytes{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}}"
+        }
+      ],
+      "description": "Synced bytes of the log being written; a checkpoint retires it.",
+      "id": 17
+    },
+    {
+      "type": "timeseries",
+      "title": "Checkpoints",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset) (rate(tripletrail_checkpoints_total{dataset=~\"$dataset\"}[$__rate_interval]))",
+          "legendFormat": "{{dataset}} per second"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (dataset) (tripletrail_last_checkpoint_seconds{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}} last (s)"
+        }
+      ],
+      "description": "Checkpoints per second, and the time the last one took.",
+      "id": 18
+    },
+    {
+      "type": "timeseries",
+      "title": "Runs and merges",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 44,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset) (tripletrail_runs{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}} runs"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (dataset) (tripletrail_merge_running{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}} merging"
+        }
+      ],
+      "description": "Sorted runs not merged into the segments yet, and whether a merge runs.",
+      "id": 19
+    },
+    {
+      "type": "timeseries",
+      "title": "Damaged files",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 44,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (dataset) (tripletrail_file_check{dataset=~\"$dataset\",state=\"damaged\"})",
+          "legendFormat": "{{dataset}}"
+        }
+      ],
+      "description": "1 when the check of a store's files found a damaged one: it then refuses writes.",
+      "id": 20
+    },
+    {
+      "type": "timeseries",
+      "title": "Replica lag",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 52,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (dataset) (tripletrail_replica_lag_seconds{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}}"
+        }
+      ],
+      "description": "Seconds since the replica last had everything its leader had on disk.",
+      "id": 21
+    },
+    {
+      "type": "timeseries",
+      "title": "Replica bytes behind",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 52,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (dataset) (tripletrail_replica_behind_bytes{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}}"
+        }
+      ],
+      "description": "Bytes of the leader's log the replica has not applied yet.",
+      "id": 22
+    },
+    {
+      "type": "timeseries",
+      "title": "Replicas of the leader",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 52,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dataset) (tripletrail_replication_followers{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}} replicas"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (dataset) (tripletrail_sync_replicas_waiting{dataset=~\"$dataset\"})",
+          "legendFormat": "{{dataset}} sync waiting"
+        }
+      ],
+      "description": "Replicas the leader heard from, and with --sync-replicas whether writes wait for them (0: they answer without).",
+      "id": 23
+    }
+  ]
+}

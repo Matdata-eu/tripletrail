@@ -1,0 +1,69 @@
+name: Fuzz
+
+# Runs on main, weekly and by hand, not on pull requests, to save runner time.
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - crates/**
+      - vendor/**
+      - fuzz/**
+      - .github/workflows/fuzz.yml
+  schedule:
+    # Weekly long run, Monday 03:00 UTC.
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target
+        default: "600"
+
+# A newer push to main replaces a fuzz run still going; scheduled and manual runs finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      # The corpus grows across runs: restore the latest, save this run's under a new key.
+      - uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      # The prebuilt cargo-fuzz is a musl binary and would default to its own target.
+      - run: cargo fuzz build --target x86_64-unknown-linux-gnu
+      - name: Run each target
+        run: |
+          case "${{ github.event_name }}" in
+            schedule) seconds=1800 ;;
+            workflow_dispatch) seconds="${{ inputs.seconds }}" ;;
+            *) seconds=60 ;;
+          esac
+          for target in $(cargo fuzz list); do
+            echo "::group::$target ($seconds s)"
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time="$seconds" -max_len=1024 \
+              -timeout=30 -rss_limit_mb=4096 -print_final_stats=1
+            echo "::endgroup::"
+          done
+      - name: Keep the crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts

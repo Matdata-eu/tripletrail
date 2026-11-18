@@ -1,0 +1,19 @@
+[package]
+name = "tripletrail-testsuite"
+description = "Runs the W3C SPARQL, RDF and SHACL test suites against TripleTrail and writes EARL and Markdown reports"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tripletrail = { workspace = true, features = ["remote-service"] }
+oxigraph.workspace = true
+spargebra.workspace = true
+oxsdatatypes = "0.2.4"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tripletrail-testdir.workspace = true
