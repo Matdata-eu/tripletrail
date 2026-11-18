@@ -2448,7 +2448,9 @@ curl -H 'Accept: text/turtle' https://data.example.org/op/BE123
   describe page (see [Describe pages](#describe-pages)); `?format=view` gives that page's view
   model as JSON.
 - **What is returned.** The concise bounded description over all graphs: the resource's
-  triples and those of the blank nodes they reach. For an IRI without a `#`, the resources
+  triples and those of the blank nodes they reach, the blank nodes named `b0`, `b1`… in the
+  order they come; Turtle declares prefixes for the namespaces it uses (well-known ones such
+  as `rdfs:` and `geo:`, others used twice or more after their last path segment). For an IRI without a `#`, the resources
   `IRI#...` come with it, so a hash-namespace vocabulary is one document. A description stops
   at 100,000 triples (with an `X-Truncated` header).
 - **Caching.** `Vary: Accept`, `Link` headers to the other formats, and an `ETag` that
@@ -2486,6 +2488,24 @@ With Traefik, the `Host` header is passed through and `X-Forwarded-Proto` is set
 Every resource has a readable page: its HTML answer at `/{ds}/describe?iri=<iri>` and, under a
 base IRI, when its IRI is dereferenced by a browser. It works without configuration and follows
 the dataset's DASH shapes when it has them (#140).
+
+- **Layout.** A header with the resource's classes, title and IRI, and its actions: Copy IRI,
+  Share (copies the page's URL with the open tab, `&tab=<key>`), Open in map
+  (`/$/ui/map/{ds}?feature=<iri>#zoom/lat/lon`, for longitude/latitude geometries), Explore
+  (`/$/ui/explore/{ds}?iri=<iri>`) and Export (the documents below). Then tabs, each a
+  `<section class="tab-panel" data-tab="…">`: `overview` (the map and the groups without
+  `rd:tab`), one per `rd:tab` of the shapes, `properties` (every property with its first 100
+  values; literals over 1,000 characters are cut), `incoming` (every link to the resource,
+  20 per property, read within 10,000 links), `graph` (one hop out and in, at most 24 nodes a
+  side and 6 per property; literal values only when there are at most 12), `model` (the
+  resource's classes and superclasses, at most 12, as UML boxes from the property shapes'
+  `sh:path`, `sh:datatype`/`sh:nodeKind`/`sh:in`, `sh:class`, `sh:minCount` and
+  `sh:maxCount`, with the classes whose shapes point at them; each property on the most
+  specific class; also as a table and as a Mermaid `classDiagram`) and `rdf` (the
+  description as Turtle in the page when it has at most 5,000 triples and 1 MiB, the other
+  formats fetched on a click). With the web UI, `/$/ui/describe.js` makes the sections tabs
+  and the buttons work; without it (`--no-ui`), or without script, the sections follow each
+  other and only the links work.
 
 - **From the shapes.** The page reads the shapes of the describe reader: the dataset's own
   (`/$/datasets/{ds}/shapes`), over those generated from its profile. The node shapes of the
@@ -2658,10 +2678,10 @@ the dataset's DASH shapes when it has them (#140).
   allows light use, not heavy or commercial traffic), and use your own tile server or `none`
   for private data. The page sends only its origin as `Referer` (`strict-origin`), as tile
   servers ask, never the resource's IRI. Without the web UI or script, the drawing stays.
-- **Referenced by.** The links to the resource that no row shows, per property, with up to 20
-  of the resources they come from (the first 10,000 links are read).
-- **JSON.** `?format=view` gives the view model (label, classes, groups of rows, incoming
-  links), for a page that draws it itself.
+- **Incoming links.** Every link to the resource, per property, with up to 20 of the resources
+  they come from (the first 10,000 links are read), on the page's Incoming links tab.
+- **JSON.** `?format=view` gives the view model (label, classes, groups of rows, and in
+  `incoming` the links to the resource that no row shows), for a page that draws it itself.
 
 The page has no `ETag`: it also depends on the shapes, which can change without a write to the
 data.

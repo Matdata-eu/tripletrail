@@ -244,6 +244,14 @@ pub(crate) enum Links {
 }
 
 impl Links {
+    /// The URL of the resource's page.
+    fn page(&self) -> String {
+        match self {
+            Links::Suffix(iri) => iri.clone(),
+            Links::Query(base) => base.clone(),
+        }
+    }
+
     fn url(&self, doc: Doc) -> String {
         match self {
             Links::Suffix(iri) => format!("{iri}.{}", doc.suffix()),
@@ -275,6 +283,8 @@ pub(crate) struct Answer<'a> {
     pub(crate) ui: bool,
     /// The raster tiles under that map and their attribution (`--map-tiles`), if any.
     pub(crate) basemap: Option<(&'a str, &'a str)>,
+    /// The dataset's name, for the page's links to its map and Explore page.
+    pub(crate) dataset: &'a str,
 }
 
 /// The description of `answer.iri`, or `304`/`404`.
@@ -340,7 +350,7 @@ pub(crate) fn answer(request: &Request, answer: &Answer<'_>) -> Result<Reply, Ht
         headers.push(("X-Truncated", MAX_TRIPLES.to_string()));
     }
     let body = match answer.doc {
-        Doc::Rdf(format) => crate::service_description::serialize(&triples, format)?,
+        Doc::Rdf(format) => document(&triples, format)?,
         Doc::Html | Doc::View => unreachable!("answered by page"),
     };
     let mut reply = Reply::bytes(200, answer.doc.media_type(), body);
@@ -384,6 +394,27 @@ fn page(
             .to_string()
             .into_bytes(),
         _ => {
+            // The RDF tab shows the description as Turtle when it is small enough.
+            let rdf = if view.own {
+                let (triples, truncated) =
+                    describe(answer.engine, &answer.iri, answer.readable, answer.rows)?;
+                let turtle = if triples.len() <= crate::describe_view::MAX_EMBEDDED_TRIPLES {
+                    Some(
+                        String::from_utf8(document(&triples, RdfFormat::Turtle)?)
+                            .unwrap_or_default(),
+                    )
+                    .filter(|t| t.len() <= crate::describe_view::MAX_EMBEDDED_BYTES)
+                } else {
+                    None
+                };
+                Some(crate::describe_view::PageRdf {
+                    turtle,
+                    triples: triples.len(),
+                    truncated,
+                })
+            } else {
+                None
+            };
             let links = crate::describe_view::PageLinks {
                 href: answer.href,
                 documents: DOCS
@@ -393,6 +424,9 @@ fn page(
                     .collect(),
                 live_map: answer.ui,
                 basemap: answer.basemap,
+                dataset: Some(answer.dataset),
+                page: answer.links.page(),
+                rdf,
             };
             crate::describe_view::html(&view, &links).into_bytes()
         }
@@ -405,6 +439,63 @@ fn page(
         }
     }
     Ok(reply)
+}
+
+/// A description as a document: Turtle with prefixes for the namespaces it uses. Blank nodes
+/// are named `b0`, `b1`... in the order they come, so the same description is the same text
+/// (the store's own names differ with what else it holds).
+fn document(triples: &[Triple], format: RdfFormat) -> Result<Vec<u8>, HttpError> {
+    use tripletrail::oxigraph::model::BlankNode;
+    let mut names: std::collections::HashMap<BlankNode, BlankNode> =
+        std::collections::HashMap::new();
+    let mut rename = |b: &BlankNode| {
+        let n = names.len();
+        names
+            .entry(b.clone())
+            .or_insert_with(|| BlankNode::new_unchecked(format!("b{n}")))
+            .clone()
+    };
+    let triples: Vec<Triple> = triples
+        .iter()
+        .map(|t| {
+            let subject = match &t.subject {
+                NamedOrBlankNode::BlankNode(b) => rename(b).into(),
+                s => s.clone(),
+            };
+            let object = match &t.object {
+                Term::BlankNode(b) => rename(b).into(),
+                o => o.clone(),
+            };
+            Triple::new(subject, t.predicate.clone(), object)
+        })
+        .collect();
+    let triples = triples.as_slice();
+    if format != RdfFormat::Turtle {
+        return crate::service_description::serialize(triples, format);
+    }
+    let iris = triples.iter().flat_map(|t| {
+        let s = match &t.subject {
+            NamedOrBlankNode::NamedNode(n) => Some(n.as_str()),
+            _ => None,
+        };
+        let o = match &t.object {
+            Term::NamedNode(n) => Some(n.as_str()),
+            Term::Literal(l) => Some(l.datatype().as_str()),
+            _ => None,
+        };
+        [s, Some(t.predicate.as_str()), o].into_iter().flatten()
+    });
+    let mut serializer = tripletrail::oxigraph::io::RdfSerializer::from_format(format);
+    for (prefix, iri) in crate::describe_view::prefixes(iris) {
+        serializer = serializer
+            .with_prefix(prefix, iri)
+            .map_err(|e| HttpError(500, e.to_string()))?;
+    }
+    let mut writer = serializer.for_writer(Vec::new());
+    for triple in triples {
+        writer.serialize_triple(triple)?;
+    }
+    Ok(writer.finish()?)
 }
 
 /// A weak validator: the same data, attachment and format give the same tag. `None` for
