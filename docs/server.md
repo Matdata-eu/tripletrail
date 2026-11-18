@@ -2688,6 +2688,13 @@ magnifier icon that opens it.
 nearest a vector, with their scores and descriptions in JSON-LD, for retrieval (GraphRAG): see
 [vector search](vector-search.md#retrieval-for-graphrag).
 
+The Search page's **Find similar** card asks it with a text or an IRI. It lists the
+properties with `tt:vector` values from the dataset's profile, and shows only when there are
+some. A text is turned into a vector in the browser by the user's AI service (the one set up
+for the Workbench's AI tab), whose OpenAI-compatible `POST {base URL}/embeddings` gets the text,
+the embedding model and the key; the server gets only the vector. The model is kept per service
+in the browser's `localStorage` (`tripletrail-ui_embedding-models`).
+
 ### The search builder
 
 The web UI's **Search** page (`/$/ui/search/{ds}`) builds a search from a class and conditions

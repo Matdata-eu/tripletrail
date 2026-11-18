@@ -373,7 +373,8 @@ curl -s -G http://localhost:7878/rail/search/similar \
 ```
 
 Each result also has its `score` and its `description`; `describe=false` leaves the
-descriptions out.
+descriptions out. The web UI's Search page asks the same with a text, turned into a vector in
+your browser by your own AI service: see [Find similar](10-maps-and-apis.md#find-similar).
 
 See [vector search](../vector-search.md) for the details.
 
