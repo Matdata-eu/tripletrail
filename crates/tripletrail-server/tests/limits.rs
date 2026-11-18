@@ -320,6 +320,11 @@ fn caller_limits() {
         metrics.contains("tripletrail_caller_requests_rejected_total{reason=\"concurrency\"} 1"),
         "{metrics}"
     );
+    // A client that sends one request after the other never runs into its own turn: the turn
+    // ends before the answer's last bytes go out (CI saw a 429 here).
+    for i in 0..300 {
+        assert_eq!(ask(Some("b-key")).0, 200, "request {i}");
+    }
 }
 
 #[test]
