@@ -546,6 +546,11 @@ body[data-page=workbench] main { max-width: none; padding: 8px 12px; }
 .sb-results td a:hover { text-decoration: underline; }
 .sb-none { padding: 16px; }
 .sb-sparql { margin-top: 12px; }
+.sb-similar-title { margin: 0 0 4px; font-size: 15px; }
+.sb-similar .sb-line { margin-top: 8px; }
+.sb-similar-text { width: 360px; }
+.sb-similar-model { width: 200px; }
+.sb-similar-results { margin-top: 12px; }
 .sb-sparql pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; padding: 8px 12px; background: var(--surface-2); border-radius: 6px; }
 @media (max-width: 600px) { .sb-value { width: 100%; } .sb-word { min-width: 0; } }
 

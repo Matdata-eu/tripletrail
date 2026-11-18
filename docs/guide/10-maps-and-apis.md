@@ -184,6 +184,25 @@ curl -s -G http://localhost:7878/ds/search/values --data-urlencode 'm={"class": 
 `/ds/search/classes` lists the classes and their properties with the kind of each, and
 `/ds/search/sparql` gives the SPARQL of a search. See [search](../server.md#search-by-name).
 
+### Find similar
+
+When the dataset has embeddings (`tt:vector` values, see [vectors](03-data.md)), the Search
+page also has a **Find similar** card: type a text, or paste a resource's IRI, pick the
+property holding the vectors, and get the ten nearest resources with how similar each is,
+each linking to its describe page and to **explore**.
+
+A text has to become a vector first, with the same embedding model that made the dataset's
+vectors. Your browser does that, with the AI service you set up for the Workbench's AI tab
+(**Key and model…**): it sends the text to that service's `/embeddings`, with your key, and
+gives TripleTrail only the numbers it gets back. The key never reaches the server. Name the
+embedding model next to the service (`text-embedding-3-small` for OpenAI, `mistral-embed` for
+Mistral, `nomic-embed-text` for Ollama are filled in); the browser remembers it per service.
+Anthropic has no embeddings, so pick another service for this. An IRI needs no AI service:
+the resource's own vector is used.
+
+The card asks [`/{dataset}/search/similar`](../vector-search.md#retrieval-for-graphrag), as
+an application would.
+
 ## The Explore page
 
 <http://localhost:7878/$/ui/explore/ds?iri=https://example.org/rail%23BXC> draws the graph

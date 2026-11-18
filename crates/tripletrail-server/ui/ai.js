@@ -141,5 +141,36 @@ window.TripleTrailAI = (function () {
     }
   }
 
-  return { PROVIDERS, connections, connection, saveConnection, removeConnection, converse, complete };
+  /** An embedding model to start from, for the services that have one. */
+  function embeddingModel(c) {
+    const by = { "api.openai.com": "text-embedding-3-small", "api.mistral.ai": "mistral-embed", "api.scaleway.ai": "bge-multilingual-gemma2", "localhost:11434": "nomic-embed-text", "openrouter.ai": "openai/text-embedding-3-small" };
+    return by[c.host] || "";
+  }
+
+  /**
+   * The vector of `text` from the service's OpenAI-compatible `embeddings` (#219): the text goes
+   * to the chosen provider only, never to TripleTrail's server, which is given the numbers.
+   */
+  async function embed(c, model, text, signal) {
+    let r;
+    try {
+      r = await fetch(c.baseUrl + "/embeddings", { method: "POST", headers: headers(c), body: JSON.stringify({ model, input: text }), signal, credentials: "omit" });
+    } catch (e) {
+      if (e && e.name === "AbortError") throw e;
+      throw new Error(`Could not reach ${c.host}. Check the base URL and your network; a local server must allow this page's origin (CORS).`);
+    }
+    const body = await r.text();
+    if (!r.ok) {
+      let detail = "";
+      try { const j = JSON.parse(body); detail = (j.error && j.error.message) || j.message || j.detail || ""; } catch (e) { detail = body.slice(0, 300); }
+      const what = r.status === 401 || r.status === 403 ? "The API key was refused" : r.status === 429 ? "The provider's rate limit or quota was hit" : r.status === 404 ? "This service or model has no embeddings" : "The AI service answered " + r.status;
+      throw new Error(what + (detail ? ": " + String(detail) : "."));
+    }
+    let v = null;
+    try { const j = JSON.parse(body); v = j.data && j.data[0] && j.data[0].embedding; } catch (e) { /* below */ }
+    if (!Array.isArray(v) || !v.length || !v.every(Number.isFinite)) throw new Error("The AI service gave no vector.");
+    return v;
+  }
+
+  return { PROVIDERS, connections, connection, saveConnection, removeConnection, converse, complete, embed, embeddingModel };
 })();

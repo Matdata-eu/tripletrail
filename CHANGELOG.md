@@ -9,6 +9,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Added
 
+- **Find similar** on the web UI's Search page (#219): type a text or paste a resource's IRI, pick the property holding the vectors, and get the ten nearest resources with their similarity, linked to their describe pages. A text is turned into a vector in the browser by the user's own AI service (the one set up for the Workbench's AI tab, with its key, through its OpenAI-compatible `/embeddings`) and the server gets only the numbers; the embedding model is remembered per service. The card shows when the dataset has `tt:vector` values. See [the guide](docs/guide/10-maps-and-apis.md#find-similar).
 - `GET /{ds}/search/similar` (#219): retrieval for GraphRAG. Give a property and a query vector (`vector=[…]`, computed by the application with its own embedding model) or a resource (`iri=`), and get the `k` nearest resources (10 by default, at most 100) with their scores and their concise bounded descriptions in JSON-LD; `describe=false` leaves the descriptions out. A caller limited to some graphs or rows finds and sees only what it may read. See [vector search](docs/vector-search.md#retrieval-for-graphrag).
 - Hybrid search in one SPARQL query, tested: `tt:search`, a spatial filter and `ORDER BY DESC(tt:cosine(…)) LIMIT k`, answered from the vector index. See [vector search](docs/vector-search.md#hybrid-search).
 
