@@ -115,7 +115,7 @@ fn any_iri_gets_a_page_without_configuration() {
     let page = r.into_string().unwrap();
     assert!(page.contains("<title>Brussel-Zuid</title>"), "{page}");
     assert!(page.contains("<h2>Attributes</h2>") && page.contains("BE00001"));
-    assert!(page.contains(">Line 50</a>") && page.contains("Referenced by"));
+    assert!(page.contains(">Line 50</a>") && page.contains("Incoming links"));
     // Links stay on the describe service, and the documents are offered.
     assert!(
         page.contains("describe?iri=http%3A%2F%2Fexample.com%2FL50"),
@@ -183,7 +183,9 @@ ex:PlaceShape a sh:NodeShape ; sh:targetClass ex:Place ;
         .unwrap()
         .into_string()
         .unwrap();
-    assert!(!page.contains("s3cr3t"));
+    // A hidden row is off the overview; All properties and the RDF tab list every triple.
+    let overview = &page[..page.find("id=\"tab-properties\"").unwrap()];
+    assert!(!overview.contains("s3cr3t"), "{overview}");
     assert!(
         page.contains("<a href=\"http://example.com/t1\">http://example.com/t1</a>"),
         "{page}"
@@ -252,7 +254,7 @@ fn a_resource_with_many_values_has_a_bounded_page() {
     .into_string()
     .unwrap();
     assert!(
-        page.contains("Referenced by") && !page.contains("Download"),
+        page.contains("Incoming links") && !page.contains("Download"),
         "{page}"
     );
 }
@@ -1125,11 +1127,24 @@ ex:far ex:at "POINT(500 900)"^^geo:wktLiteral .
         bbox[0] > 4.0 && bbox[2] < 10.0 && bbox[1] > 50.0 && bbox[3] < 60.0,
         "{bbox:?}"
     );
-    // Coordinates that are not longitude/latitude keep the drawing only.
+    // The header opens the dataset's map at the resource, with it selected, and Explore; the
+    // page's script makes the tabs and buttons work.
+    assert!(
+        page.contains("href=\"/$/ui/map/kg?feature=http%3A%2F%2Fexample.com%2Fst#"),
+        "{page}"
+    );
+    assert!(page.contains("href=\"/$/ui/explore/kg?iri=http%3A%2F%2Fexample.com%2Fst\""));
+    assert!(page.contains("<script type=\"module\" src=\"/$/ui/describe.js\">"));
+    let js = ureq::get(&format!("{base}/$/ui/describe.js"))
+        .call()
+        .unwrap();
+    assert_eq!(js.content_type(), "text/javascript");
+    // Coordinates that are not longitude/latitude keep the drawing only, and open no map.
     assert!(
         far.contains("<svg class=\"map\"") && !far.contains("mg-live-map"),
         "{far}"
     );
+    assert!(!far.contains("/$/ui/map/") && far.contains("/$/ui/explore/kg"));
     // The script and MapLibre are served by the web UI.
     let js = ureq::get(&format!("{base}/$/ui/describe-map.js"))
         .call()
@@ -1146,10 +1161,14 @@ ex:far ex:at "POINT(500 900)"^^geo:wktLiteral .
             .unwrap();
         assert_eq!(r.status(), 200, "{f}");
     }
-    // Without the web UI, the page draws the map only.
+    // Without the web UI, the page draws the map only, without script or links to the UI.
     let (_, page, _) = page_with(false, None);
     assert!(
         page.contains("<svg class=\"map\"") && !page.contains("mg-live-map"),
+        "{page}"
+    );
+    assert!(
+        !page.contains("/$/ui/") && !page.contains("<script"),
         "{page}"
     );
     // With --map-tiles, the map names its tiles and attribution; the page sends no Referer.
@@ -2095,4 +2114,95 @@ fn the_map_shows_what_is_around_the_resource() {
     );
     // The map row is the map, not a row of WKT.
     assert!(!page.contains(">Map</th>"), "{page}");
+}
+
+#[test]
+fn a_page_has_tabs_a_graph_its_data_model_and_its_rdf() {
+    let base = start(None);
+    let page = ureq::get(&format!("{base}/kg/describe?iri={IRI}&format=html"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    // The overview from the shapes, then the tabs every resource has, in this order.
+    let tabs: Vec<&str> = page
+        .split("<section class=\"tab-panel\" id=\"tab-")
+        .skip(1)
+        .map(|s| &s[..s.find('"').unwrap()])
+        .collect();
+    assert_eq!(
+        tabs,
+        [
+            "overview",
+            "properties",
+            "incoming",
+            "graph",
+            "model",
+            "rdf"
+        ],
+        "{page}"
+    );
+    assert!(
+        page.contains("data-label=\"All properties\" data-count=\"7\""),
+        "{page}"
+    );
+    // The header: the IRI to copy, the page to share, the files to download.
+    assert!(page.contains("data-copy=\"http://example.com/BE1\""));
+    assert!(page.contains("data-share=\"/kg/describe?iri=http%3A%2F%2Fexample.com%2FBE1\""));
+    assert!(page.contains("<details class=\"menu\"><summary class=\"btn\">Export</summary>"));
+    assert!(page.contains("format=jsonld\" download>JSON-LD</a>"));
+    // All properties lists every triple, also of the rows a shape hides.
+    let properties = &page[page.find("id=\"tab-properties\"").unwrap()..];
+    assert!(
+        properties.contains("s3cr3t")
+            && properties.contains("<span class=\"curie\">rdfs:label</span>")
+    );
+    // Incoming links lists every link, also those a row shows.
+    let incoming =
+        &page[page.find("id=\"tab-incoming\"").unwrap()..page.find("id=\"tab-graph\"").unwrap()];
+    assert!(
+        incoming.contains(">Train 1</a>") && incoming.contains("stopsAt"),
+        "{incoming}"
+    );
+    // The graph: what links here on the left, what it links to on the right.
+    let graph = &page[page.find("<svg class=\"graph\"").unwrap()..];
+    let graph = &graph[..graph.find("</svg>").unwrap()];
+    assert!(
+        graph.contains(">Train 1</text>") && graph.contains(">Line 50</text>"),
+        "{graph}"
+    );
+    assert!(
+        graph.contains("<g class=\"node class\">") && graph.contains("<g class=\"node root\">")
+    );
+    // The data model: the class and its superclass, with the attributes the resource has.
+    let model = &page[page.find("<svg class=\"uml\"").unwrap()..];
+    let model = &model[..model.find("</svg>").unwrap()];
+    assert!(
+        model.contains(">OperationalPoint</text>") && model.contains(">Place</text>"),
+        "{model}"
+    );
+    assert!(
+        model.contains("class=\"generalization\"") && model.contains("uopid: string [1]"),
+        "{model}"
+    );
+    assert!(page.contains("Place &lt;|-- OperationalPoint"), "{page}");
+    // The RDF: Turtle with prefixes in the page, the other formats a click away.
+    assert!(
+        page.contains("<code id=\"mg-rdf\" data-format=\"ttl\">@prefix"),
+        "{page}"
+    );
+    assert!(
+        page.contains("@prefix example: &lt;http://example.com/&gt;"),
+        "{page}"
+    );
+    assert!(page.contains("data-format=\"nt\">N-Triples</a>"));
+    let ttl = ureq::get(&format!("{base}/kg/describe?iri={IRI}&format=ttl"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        ttl.contains("example:BE1 a example:OperationalPoint"),
+        "{ttl}"
+    );
 }

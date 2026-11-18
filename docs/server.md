@@ -2230,7 +2230,13 @@ terminationGracePeriodSeconds: 45
 
 ## Web UI
 
-`/$/ui/` (and `/`, which redirects there) has these pages:
+`/$/ui/` (and `/`, which redirects there) has these pages, each over the full width of the
+window. An IRI shown on a page (a feature on the map, a node on Explore, a search result, a
+shape, a dataset's endpoint) has a button after it that copies it. **Share** in the top bar
+copies a link that opens the same view: the page's own link, which holds what it shows, and on
+the Query page MatGUI's tab as `?query=…&tabTitle=…&outputFormat=…` (never its request headers,
+which hold the admin token or a "view as"). Opening such a link adds the query as a tab and
+then takes it out of the address bar.
 
 - **Datasets**: totals, every dataset and alias with its mode and readiness, and per dataset
   its statistics, back up, snapshot, detach, upload (Graph Store Protocol, with progress) and,
@@ -2244,8 +2250,9 @@ terminationGracePeriodSeconds: 45
   their counts, and the features under a click. A feature's describe page opens in a panel
   beside the map (at once when the click hit one feature), and its links to other resources
   open there too. The page's link holds the view, so it can be shared: the position in its
-  hash (`#zoom/lat/lon`), the hidden layers as `hide=id,id` and the filters as the tiles take
-  them (`{collection}.{key}=value`, `.min`, `.max`) in its query. A collection's filter panel
+  hash (`#zoom/lat/lon`), the hidden layers as `hide=id,id`, the feature open beside the map as
+  `feature=IRI` and the filters as the tiles take them (`{collection}.{key}=value`, `.min`,
+  `.max`) in its query. A collection's filter panel
   opens its features in the OGC API (*OGC API*) and copies their GeoJSON link for a GIS
   (*Copy GIS link*), with the filters as CQL2 (`IN`, `>=`, `<=`). *Colour by* draws a collection in a colour
   per value of one of its values facets (its 10 most frequent values under the filters, the
@@ -2274,7 +2281,7 @@ terminationGracePeriodSeconds: 45
   (`geo:asWKT`, or `geo:hasGeometry/geo:asWKT`, the first of each, as `geof:asGeoJSON`) in
   their graph colours. Selecting a node selects it on the map, and a click on a feature selects
   its node. The map fits what is shown until it is moved.
-- **Shapes** (`/$/ui/shapes/{dataset}`): the dataset's node shapes by class, with their layer,
+- **Shapes** (`/$/ui/shapes/{dataset}?shape={IRI}`): the dataset's node shapes by class, with their layer,
   and a table of each one's property shapes to change what the readers read (names per
   language, order, groups, keys, hidden, hidden from, deactivated); the Turtle of an own file
   with live checks; the kept versions with rollback. See
@@ -2441,7 +2448,9 @@ curl -H 'Accept: text/turtle' https://data.example.org/op/BE123
   describe page (see [Describe pages](#describe-pages)); `?format=view` gives that page's view
   model as JSON.
 - **What is returned.** The concise bounded description over all graphs: the resource's
-  triples and those of the blank nodes they reach. For an IRI without a `#`, the resources
+  triples and those of the blank nodes they reach, the blank nodes named `b0`, `b1`… in the
+  order they come; Turtle declares prefixes for the namespaces it uses (well-known ones such
+  as `rdfs:` and `geo:`, others used twice or more after their last path segment). For an IRI without a `#`, the resources
   `IRI#...` come with it, so a hash-namespace vocabulary is one document. A description stops
   at 100,000 triples (with an `X-Truncated` header).
 - **Caching.** `Vary: Accept`, `Link` headers to the other formats, and an `ETag` that
@@ -2479,6 +2488,24 @@ With Traefik, the `Host` header is passed through and `X-Forwarded-Proto` is set
 Every resource has a readable page: its HTML answer at `/{ds}/describe?iri=<iri>` and, under a
 base IRI, when its IRI is dereferenced by a browser. It works without configuration and follows
 the dataset's DASH shapes when it has them (#140).
+
+- **Layout.** A header with the resource's classes, title and IRI, and its actions: Copy IRI,
+  Share (copies the page's URL with the open tab, `&tab=<key>`), Open in map
+  (`/$/ui/map/{ds}?feature=<iri>#zoom/lat/lon`, for longitude/latitude geometries), Explore
+  (`/$/ui/explore/{ds}?iri=<iri>`) and Export (the documents below). Then tabs, each a
+  `<section class="tab-panel" data-tab="…">`: `overview` (the map and the groups without
+  `rd:tab`), one per `rd:tab` of the shapes, `properties` (every property with its first 100
+  values; literals over 1,000 characters are cut), `incoming` (every link to the resource,
+  20 per property, read within 10,000 links), `graph` (one hop out and in, at most 24 nodes a
+  side and 6 per property; literal values only when there are at most 12), `model` (the
+  resource's classes and superclasses, at most 12, as UML boxes from the property shapes'
+  `sh:path`, `sh:datatype`/`sh:nodeKind`/`sh:in`, `sh:class`, `sh:minCount` and
+  `sh:maxCount`, with the classes whose shapes point at them; each property on the most
+  specific class; also as a table and as a Mermaid `classDiagram`) and `rdf` (the
+  description as Turtle in the page when it has at most 5,000 triples and 1 MiB, the other
+  formats fetched on a click). With the web UI, `/$/ui/describe.js` makes the sections tabs
+  and the buttons work; without it (`--no-ui`), or without script, the sections follow each
+  other and only the links work.
 
 - **From the shapes.** The page reads the shapes of the describe reader: the dataset's own
   (`/$/datasets/{ds}/shapes`), over those generated from its profile. The node shapes of the
@@ -2651,10 +2678,10 @@ the dataset's DASH shapes when it has them (#140).
   allows light use, not heavy or commercial traffic), and use your own tile server or `none`
   for private data. The page sends only its origin as `Referer` (`strict-origin`), as tile
   servers ask, never the resource's IRI. Without the web UI or script, the drawing stays.
-- **Referenced by.** The links to the resource that no row shows, per property, with up to 20
-  of the resources they come from (the first 10,000 links are read).
-- **JSON.** `?format=view` gives the view model (label, classes, groups of rows, incoming
-  links), for a page that draws it itself.
+- **Incoming links.** Every link to the resource, per property, with up to 20 of the resources
+  they come from (the first 10,000 links are read), on the page's Incoming links tab.
+- **JSON.** `?format=view` gives the view model (label, classes, groups of rows, and in
+  `incoming` the links to the resource that no row shows), for a page that draws it itself.
 
 The page has no `ETag`: it also depends on the shapes, which can change without a write to the
 data.
@@ -2687,6 +2714,13 @@ magnifier icon that opens it.
 `GET /{ds}/search/similar?property=…&vector=[…]` (or `&iri=…`) gives the `k` resources
 nearest a vector, with their scores and descriptions in JSON-LD, for retrieval (GraphRAG): see
 [vector search](vector-search.md#retrieval-for-graphrag).
+
+The Search page's **Find similar** card asks it with a text or an IRI. It lists the
+properties with `tt:vector` values from the dataset's profile, and shows only when there are
+some. A text is turned into a vector in the browser by the user's AI service (the one set up
+for the Workbench's AI tab), whose OpenAI-compatible `POST {base URL}/embeddings` gets the text,
+the embedding model and the key; the server gets only the vector. The model is kept per service
+in the browser's `localStorage` (`tripletrail-ui_embedding-models`).
 
 ### The search builder
 

@@ -251,7 +251,7 @@ window.TripleTrailAccess = (function () {
         const shown = el("code", { class: "access-key" }, r.key);
         document.getElementById("access-new-key").replaceChildren(
           el("p", { class: "access-warning", role: "alert" }, "Copy the key now: it is not stored and will not be shown again. "),
-          el("p", {}, shown, " ", el("button", { type: "button", class: "btn small", onclick: () => navigator.clipboard && navigator.clipboard.writeText(r.key) }, "Copy")));
+          el("p", {}, shown, " ", el("button", { type: "button", class: "btn small", onclick: () => ui.copyText(r.key, "Key") }, "Copy")));
       } catch (e) {
         fill(out, el("p", { class: "error" }, "Not created: " + e.message));
       }

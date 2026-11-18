@@ -187,6 +187,10 @@ limited to some graphs or rows finds and sees only what it may read. A missing `
 `vector` that is not one, both `vector` and `iri` or neither, or a `k` out of range is a
 400; a resource without a vector finds nothing.
 
+The text of a search is the caller's to turn into a vector: TripleTrail keeps no model and no
+key. The web UI's Search page does it in the browser with the user's own AI service (see
+[Find similar](guide/10-maps-and-apis.md#find-similar)).
+
 ```sh
 curl -s -G http://localhost:7878/rail/search/similar \
   --data-urlencode property=https://example.org/rail#embedding \

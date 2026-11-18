@@ -91,7 +91,9 @@ window.TripleTrailSearch = (function () {
           el("button", { class: "btn", type: "button", onclick: openInQuery, title: "Open the SPARQL on the Query page" }, "Open in Query"),
           el("span", { class: "muted small", id: "sb-count", role: "status" }))),
       el("div", { class: "card sb-results", id: "sb-results", hidden: true }),
-      el("details", { class: "sb-sparql" }, el("summary", { class: "small muted" }, "The SPARQL of the last search"), el("pre", { id: "sb-sparql" })));
+      el("details", { class: "sb-sparql" }, el("summary", { class: "small muted" }, "The SPARQL of the last search"), el("pre", { id: "sb-sparql" })),
+      el("div", { class: "card sb-card sb-similar", id: "sb-similar", hidden: true }));
+    similar(ds);
     if (!classes.length) { builder(); return; }
     builder();
     if (linked) run();
@@ -283,7 +285,7 @@ window.TripleTrailSearch = (function () {
       ? el("table", { class: "grid" },
         el("thead", {}, el("tr", {}, el("th", {}, r.title), r.columns.map((c) => el("th", {}, c.title)))),
         el("tbody", {}, r.rows.map((row) => el("tr", {},
-          el("td", { class: "name" }, el("a", { href: row.describe, title: row.iri }, row.label || short(row.iri)), " ",
+          el("td", { class: "name" }, el("a", { href: row.describe, title: row.iri }, row.label || short(row.iri)), ui.copyButton(row.iri),
             el("a", { class: "muted small", href: "/$/ui/explore/" + encodeURIComponent(shown.ds) + "?iri=" + encodeURIComponent(row.iri), "data-route": true,
               title: "Walk the graph from " + (row.label || row.iri) }, "explore")),
           r.columns.map((c) => cell(row.values[c.key], c, row.moreValues && row.moreValues[c.key]))))))
@@ -292,10 +294,120 @@ window.TripleTrailSearch = (function () {
   }
   const short = (iri) => iri.replace(/^.*[/#](?=[^/#]+$)/, "");
 
+  // ---------- Find similar (#219, #236) ----------
+  // The resources whose vector (a `tt:vector` property) is nearest a text or a resource, from
+  // /{ds}/search/similar. A text is turned into a vector in this browser by the user's own AI
+  // service (the one set up for the Workbench's AI tab), so the key never reaches the server.
+  const VECTOR = "http://w3id.org/tripletrail/fn#vector";
+  const MODELS_KEY = "tripletrail-ui_embedding-models";
+  const savedModels = () => { try { return JSON.parse(localStorage.getItem(MODELS_KEY) || "{}") || {}; } catch (e) { return {}; } };
+  const saveModel = (id, model) => { try { localStorage.setItem(MODELS_KEY, JSON.stringify({ ...savedModels(), [id]: model })); } catch (e) { /* asked again next time */ } };
+  let similarAsked = 0;
+
+  /** The card, shown when the dataset has a property with `tt:vector` values. */
+  async function similar(ds) {
+    let props = [];
+    try {
+      const profile = await ui.api("GET", "/$/datasets/" + encodeURIComponent(ds) + "/profile", { params: { sample: 1000 } });
+      const seen = new Map();
+      for (const c of profile.classes || []) for (const p of c.properties || []) {
+        const n = ((p.datatypes || []).find((d) => d.datatype === VECTOR) || {}).count || 0;
+        if (n) seen.set(p.property, { iri: p.property, label: p.label || short(p.property), count: (seen.get(p.property) || { count: 0 }).count + n });
+      }
+      props = [...seen.values()].sort((a, b) => b.count - a.count);
+    } catch (e) { return; } // no profile to read: no card
+    const box = document.getElementById("sb-similar");
+    if (!box || !shown || shown.ds !== ds || !props.length) return;
+    const AI = window.TripleTrailAI;
+    const services = AI ? AI.connections() : [];
+    const property = el("select", { "aria-label": "Vector property" }, props.map((p) => el("option", { value: p.iri, title: p.iri }, p.label)));
+    const text = el("input", { class: "sb-value sb-similar-text", type: "search", placeholder: "Text, or a resource's IRI", "aria-label": "Text or IRI to find similar resources to" });
+    const service = el("select", { "aria-label": "AI service for the text's vector" },
+      services.length ? services.map((c) => el("option", { value: c.id }, c.label)) : el("option", { value: "" }, "No AI service set up"));
+    const current = services.length ? AI.connection() : null;
+    if (current) service.value = current.id;
+    const model = el("input", { class: "sb-value sb-similar-model", "aria-label": "Embedding model", placeholder: "Embedding model" });
+    const fillModel = () => {
+      const c = services.find((x) => x.id === service.value);
+      model.value = c ? savedModels()[c.id] || AI.embeddingModel(c) : "";
+      model.disabled = !c;
+    };
+    service.addEventListener("change", fillModel);
+    fillModel();
+    const status = el("span", { class: "muted small", role: "status" });
+    const results = el("div", { class: "sb-results sb-similar-results", hidden: true });
+    const find = async () => {
+      const q = text.value.trim();
+      if (!q) { text.focus(); return; }
+      const mine = ++similarAsked;
+      status.className = "muted small";
+      const params = { property: property.value, k: 10 };
+      try {
+        if (iriOk(q)) params.iri = q;
+        else {
+          const c = services.find((x) => x.id === service.value);
+          if (!c) throw new Error("Set up an AI service (Workbench, AI tab, “Key and model…”) to search by text, or give a resource's IRI.");
+          if (!model.value.trim()) { model.focus(); throw new Error("Name the service's embedding model, the one that made the dataset's vectors."); }
+          saveModel(c.id, model.value.trim());
+          status.textContent = "Asking " + c.label + " for the text's vector…";
+          params.vector = JSON.stringify(await AI.embed(c, model.value.trim(), q));
+        }
+        status.textContent = "Searching…";
+        const r = await ui.api("GET", "/" + encodeURIComponent(ds) + "/search/similar", { params });
+        if (mine !== similarAsked) return;
+        status.textContent = r.results.length ? "" : "Nothing found: is the property's vector as long as the model's?";
+        resultsTable(ds, results, r.results);
+      } catch (e) {
+        if (mine !== similarAsked) return;
+        status.textContent = e.message;
+        status.className = "error small";
+        results.hidden = true;
+      }
+    };
+    text.addEventListener("keydown", (e) => { if (e.key === "Enter") find(); });
+    box.replaceChildren(
+      el("h3", { class: "sb-similar-title" }, "Find similar"),
+      el("p", { class: "muted small" }, "The resources whose vector is nearest a text or a resource. A text is turned into a vector in this browser by your AI service, with your key; the server is given only the numbers."),
+      el("div", { class: "sb-line" }, el("span", { class: "sb-word" }, "near"), text, el("span", { class: "sb-word" }, "by"), property),
+      el("div", { class: "sb-line" }, el("span", { class: "sb-word" }, "with"), service, model,
+        services.length ? null : el("a", { class: "small", href: "/$/ui/workbench", "data-route": "" }, "Set up an AI service")),
+      el("div", { class: "sb-actions" }, el("button", { class: "btn primary", type: "button", onclick: find }, "Find similar"), status),
+      results);
+    box.hidden = false;
+  }
+
+  /** The label of `iri` in its JSON-LD description, if it has one. */
+  function labelOf(iri, doc) {
+    const nodes = Array.isArray(doc) ? doc : doc && Array.isArray(doc["@graph"]) ? doc["@graph"] : [doc];
+    const node = nodes.find((n) => n && n["@id"] === iri);
+    if (!node) return null;
+    for (const key of Object.keys(node)) {
+      if (!/[/#](label|prefLabel|name|title)$/.test(key)) continue;
+      const v = [].concat(node[key])[0];
+      const s = v && typeof v === "object" ? v["@value"] : v;
+      if (typeof s === "string" && s) return s;
+    }
+    return null;
+  }
+
+  function resultsTable(ds, box, rows) {
+    box.replaceChildren(rows.length
+      ? el("table", { class: "grid" },
+        el("thead", {}, el("tr", {}, el("th", {}, "Resource"), el("th", { class: "num" }, "Similarity"))),
+        el("tbody", {}, rows.map((r) => {
+          const label = labelOf(r.iri, r.description) || short(r.iri);
+          return el("tr", {},
+            el("td", { class: "name" }, el("a", { href: "/" + encodeURIComponent(ds) + "/describe?iri=" + encodeURIComponent(r.iri), title: r.iri }, label), " ",
+              el("a", { class: "muted small", href: "/$/ui/explore/" + encodeURIComponent(ds) + "?iri=" + encodeURIComponent(r.iri), "data-route": true, title: "Walk the graph from " + label }, "explore")),
+            el("td", { class: "num" }, r.score.toFixed(3)));
+        })))
+      : el("p", { class: "muted sb-none" }, "Nothing found."));
+    box.hidden = false;
+  }
+
   async function copyLink() {
     writeModel();
-    try { await navigator.clipboard.writeText(location.href); ui.toast("Link copied"); }
-    catch (e) { ui.toast("Copy the address bar's link to share this search"); }
+    await ui.copyText(location.href, "Link");
   }
   async function openInQuery() {
     let q;

@@ -25,7 +25,8 @@ a geometry: here Station and Section.
 - **Search** finds features by the words of their names.
 - **Views**, when the shapes name some, show one theme at a time: see
   [Name views of the map](#name-views-of-the-map).
-- The page's link keeps the view and filters, so it can be shared.
+- The page's link keeps the view, the filters and the feature open beside the map
+  (`feature=IRI`), so it can be shared: **Share** in the top bar copies it.
 
 The map fetches its background from OpenStreetMap, which then learns where viewers look. For
 private data, or heavy use, start the server with `--map-tiles` naming your own tile server,
@@ -33,15 +34,53 @@ or `--map-tiles none`.
 
 ## Describe pages
 
-Every resource has a page at `/ds/describe?iri=…`: its properties grouped, its links with
-their labels, what links to it, and its geometry on a map. Open
-<http://localhost:7878/ds/describe?iri=https://example.org/rail%23LV> for Leuven. The same URL
-gives RDF to a program that asks for it:
+Every resource has a page at `/ds/describe?iri=…`. Open
+<http://localhost:7878/ds/describe?iri=https://example.org/rail%23LV> for Leuven.
+
+- **The header** names the resource's classes, its label and its IRI, with buttons: **Copy
+  IRI**, **Share** (copies a link to the page and the tab you are on), **Open in map** (the
+  dataset's map at the resource, with it selected; only for a resource with a geometry),
+  **Explore** (walk the graph from it, see [The Explore page](#the-explore-page)) and
+  **Export** (the description as Turtle, JSON-LD, N-Triples or RDF/XML).
+- **Overview** has the map of its geometries and its properties, grouped as the dataset's
+  shapes say ([Make it yours: shapes](#make-it-yours-shapes)). Shapes can add tabs of their own.
+- **All properties** lists every triple of the resource, **Incoming links** every link to it.
+- **Graph** draws its neighbourhood: what links to it on the left, its classes, links and
+  values on the right. Click a node to open its page.
+- **Data model** draws its classes and their superclasses as UML class boxes, from the
+  shapes: their attributes with type and multiplicity (a filled dot when this resource has
+  it), the classes they point at and the classes that point at them. Below it, every attribute
+  as a table, and the model as a Mermaid class diagram to copy.
+- **RDF** shows the description as Turtle, or JSON-LD, N-Triples or RDF/XML at a click, to read,
+  copy or download.
+
+The tab is in the address (`&tab=graph`), so a link opens the same view. Without the web UI
+(`--no-ui`), or without script, the page shows the same sections one under the other.
+
+The page lists its tabs for a program too:
+
+<!-- test: run -->
+```sh
+curl -s -G http://localhost:7878/ds/describe -H 'Accept: text/html' \
+  --data-urlencode 'iri=https://example.org/rail#LV' | grep -o 'data-label="[^"]*"'
+```
+
+<!-- test: output -->
+```text
+data-label="Overview"
+data-label="All properties"
+data-label="Incoming links"
+data-label="Graph"
+data-label="Data model"
+data-label="RDF"
+```
+
+The same URL gives RDF to a program that asks for it:
 
 <!-- test: run -->
 ```sh
 curl -s -G http://localhost:7878/ds/describe -H 'Accept: application/n-triples' \
-  --data-urlencode 'iri=https://example.org/rail#LV' | grep -v '_:'
+  --data-urlencode 'iri=https://example.org/rail#LV'
 ```
 
 <!-- test: output unordered -->
@@ -49,9 +88,12 @@ curl -s -G http://localhost:7878/ds/describe -H 'Accept: application/n-triples' 
 <https://example.org/rail#LV> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/rail#Station> .
 <https://example.org/rail#LV> <http://www.w3.org/2000/01/rdf-schema#label> "Leuven" .
 <https://example.org/rail#LV> <https://example.org/rail#code> "LV" .
+<https://example.org/rail#LV> <http://www.opengis.net/ont/geosparql#hasGeometry> _:b0 .
+_:b0 <http://www.opengis.net/ont/geosparql#asWKT> "POINT(4.7158 50.8813)"^^<http://www.opengis.net/ont/geosparql#wktLiteral> .
 ```
 
-(The `grep` drops the two lines of the geometry, a blank node with a new label every time.) With
+Blank nodes are named `b0`, `b1`… in the order they come, so the same description is the same
+text. Turtle declares prefixes for the namespaces it uses (`rail:LV a rail:Station`). With
 `--base-iri ds=https://data.example.org/`, IRIs under that prefix are served at their own URLs
 as Linked Data: see [Linked Data](../server.md#linked-data).
 
@@ -141,6 +183,25 @@ curl -s -G http://localhost:7878/ds/search/values --data-urlencode 'm={"class": 
 
 `/ds/search/classes` lists the classes and their properties with the kind of each, and
 `/ds/search/sparql` gives the SPARQL of a search. See [search](../server.md#search-by-name).
+
+### Find similar
+
+When the dataset has embeddings (`tt:vector` values, see [vectors](03-data.md)), the Search
+page also has a **Find similar** card: type a text, or paste a resource's IRI, pick the
+property holding the vectors, and get the ten nearest resources with how similar each is,
+each linking to its describe page and to **explore**.
+
+A text has to become a vector first, with the same embedding model that made the dataset's
+vectors. Your browser does that, with the AI service you set up for the Workbench's AI tab
+(**Key and model…**): it sends the text to that service's `/embeddings`, with your key, and
+gives TripleTrail only the numbers it gets back. The key never reaches the server. Name the
+embedding model next to the service (`text-embedding-3-small` for OpenAI, `mistral-embed` for
+Mistral, `nomic-embed-text` for Ollama are filled in); the browser remembers it per service.
+Anthropic has no embeddings, so pick another service for this. An IRI needs no AI service:
+the resource's own vector is used.
+
+The card asks [`/{dataset}/search/similar`](../vector-search.md#retrieval-for-graphrag), as
+an application would.
 
 ## The Explore page
 
@@ -613,6 +674,9 @@ what the readers read:
   **Profiles**: the use cases it belongs to. A name typed under **New profile** makes one and puts the shape in
   it. A shape in no profile is in all of them, and the box above the list shows only the
   shapes of one profile.
+
+The page's link names the shape shown (`?shape=IRI`), so **Share** in the top bar copies a
+link that opens the same shape.
 
 **Diagram** draws the shape with its properties, the shapes they link to (by `sh:class`) on
 the right and the shapes that link to it on the left; pick one to show it.

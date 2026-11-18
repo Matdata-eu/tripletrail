@@ -2100,6 +2100,7 @@ fn route(
                     rows: rows.as_ref(),
                     shapes: &shapes,
                     ui: state.options.ui,
+                    dataset: &entry.name,
                     basemap: state.options.map_tiles.as_deref().map(|t| {
                         (
                             t,
@@ -2778,6 +2779,7 @@ fn dereference(
             rows: rows.as_ref(),
             shapes: &shapes,
             ui: state.options.ui,
+            dataset: &entry.name,
             basemap: state.options.map_tiles.as_deref().map(|t| {
                 (
                     t,

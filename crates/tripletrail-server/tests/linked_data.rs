@@ -148,7 +148,8 @@ fn recipe_3_hash_namespace_is_one_document() {
     let ttl = get(&base, "/vocab", Some("text/turtle"))
         .into_string()
         .unwrap();
-    assert!(ttl.contains("vocab#Track"), "{ttl}");
+    // Turtle names the namespaces it uses with prefixes.
+    assert!(ttl.contains("#> .") && ttl.contains("vocab:Track"), "{ttl}");
 }
 
 #[test]
