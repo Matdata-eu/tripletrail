@@ -107,12 +107,12 @@ Two intended differences from Jena: without a property, every indexed property i
 not only the index's default field (usually `rdfs:label`), so write `rdfs:label` for Jena's
 usual answer; and scores are BM25 scores, which differ from Lucene's.
 
-## Blazegraph's `bds:search` and Stardog's `textMatch`
+## Blazegraph, Stardog, Virtuoso and Jena's `apf:textMatch`
 
-Queries written for Blazegraph and Stardog run on the same index. Both match literals rather
-than resources: the variable before them is the literal matched, with one row per literal (its
-best score), and a triple such as `?s rdfs:label ?o` gives the resource. As with the others,
-only the indexed properties' literals are searched.
+Queries written for Blazegraph, Stardog, Virtuoso and Jena's older LARQ run on the same index.
+They match literals rather than resources: the variable before them is the literal matched,
+with one row per literal (its best score), and a triple such as `?s rdfs:label ?o` gives the
+resource. As with the others, only the indexed properties' literals are searched.
 
 Blazegraph's form is `?o bds:search "words"`, with its options as triples on `?o`:
 
@@ -133,9 +133,41 @@ a BM25 score does not. So are the other options (`bds:matchExact`, `bds:matchReg
 Stardog's form is `?literal <tag:stardog:api:property:textMatch> ("query" limit)`, or
 `(?literal ?score) textMatch …`, the limit optional; the query string is read in Lucene's
 syntax, as for `text:query`. A score threshold (`("query" 0.5 10)`) is refused, for the same
-reason as `bds:minRelevance`. Stardog's `SERVICE fts:textMatch` form is not supported.
+reason as `bds:minRelevance`. Jena's `apf:textMatch` (`<http://jena.hpl.hp.com/ARQ/property#textMatch>`,
+LARQ's `pf:textMatch`) takes the same forms and answers the same.
 
-The query string of both can be a variable bound by the rest of the query, as above.
+Stardog's search service is answered too:
+
+```sparql
+PREFIX fts: <tag:stardog:api:search:>
+SELECT ?literal ?score WHERE {
+  SERVICE fts:textMatch {
+    [] fts:query "brussel*" ; fts:result ?literal ; fts:score ?score ;
+       fts:limit 10 ; fts:offset 0 .
+  }
+}
+```
+
+| Option | |
+|---|---|
+| `fts:query` | the query string, in Lucene's syntax; a constant or a variable |
+| `fts:result ?literal` | the literal matched (needed) |
+| `fts:score ?score` | the BM25 score |
+| `fts:limit n` | the best `n` literals only (after the offset) |
+| `fts:offset n` | the best `n` literals are left out |
+
+`fts:threshold` is refused, as the threshold of `textMatch` is, and so is `fts:highlight`.
+
+Virtuoso's form is `?literal bif:contains "words"`, the string in Virtuoso's text expression
+syntax: words and phrases joined by `AND`, `OR` or `AND NOT` (in any case), words side by side
+all required, a phrase in double or single quotes (`"'brussel zuid'"`), and a quoted word
+ending in `*` for the words it starts (`"'brus*'"`). `bif:` is a prefix Virtuoso declares
+itself; here the query declares it, as `PREFIX bif: <bif:>`. Refused rather than read another
+way: `NEAR`, parentheses, `AND` and `OR` in one string (they need parentheses), and a wildcard
+in a phrase. Virtuoso's `OPTION (score ?sc)` is not SPARQL, so `bif:contains` gives no score;
+use another form for one.
+
+The query string of each can be a variable bound by the rest of the query, as above.
 
 ## In updates
 

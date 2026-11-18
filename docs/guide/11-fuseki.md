@@ -188,8 +188,10 @@ Without the option, that query answers 400: `ex:code` is not an indexed property
 TripleTrail's own `tt:search` ranks the matches with a score: see
 [full-text search](../full-text-search.md).
 
-Full-text queries written for Blazegraph (`bds:search`) and Stardog (`textMatch`) run on the
-same index too. They match literals, so the resource comes from a triple that has the literal:
+Full-text queries written for Blazegraph (`bds:search`), Stardog (`textMatch` and
+`SERVICE fts:textMatch`), Virtuoso (`bif:contains`) and Jena's older `apf:textMatch` run on
+the same index too. They match literals, so the resource comes from a triple that has the
+literal:
 
 <!-- test: query -->
 ```sparql
@@ -205,6 +207,50 @@ SELECT ?station ?label WHERE {
 ```text
 station,label
 https://example.org/rail#BXC,Brussels-Central
+```
+
+Virtuoso's string has its own syntax: words side by side must all match, and `AND`, `OR`,
+`AND NOT`, phrases in quotes and a quoted word ending in `*` work as in Virtuoso. Declare the
+`bif:` prefix, which Virtuoso has built in:
+
+<!-- test: query -->
+```sparql
+PREFIX bif: <bif:>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?station WHERE {
+  ?label bif:contains "'brussels*' AND NOT central" .
+  ?station rdfs:label ?label .
+}
+ORDER BY ?station
+```
+
+<!-- test: output -->
+```text
+station
+https://example.org/rail#BXN
+https://example.org/rail#BXS
+```
+
+Stardog's search service, with a score and a limit:
+
+<!-- test: query -->
+```sparql
+PREFIX fts: <tag:stardog:api:search:>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?station WHERE {
+  SERVICE fts:textMatch {
+    [] fts:query "central" ; fts:result ?label ; fts:score ?score ; fts:limit 5 .
+  }
+  ?station rdfs:label ?label .
+}
+ORDER BY ?station
+```
+
+<!-- test: output -->
+```text
+station
+https://example.org/rail#ANT
+https://example.org/rail#BXC
 ```
 
 ### Spatial search

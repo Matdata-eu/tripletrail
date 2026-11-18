@@ -876,3 +876,142 @@ fn a_search_an_update_cannot_answer_is_refused() {
         .to_string();
     assert!(err.contains("access rules"), "{err}");
 }
+
+#[test]
+fn jena_apf_text_match_reads_the_same_index() {
+    let e = engine();
+    let mut got = rows(
+        &e,
+        r#"PREFIX apf: <http://jena.hpl.hp.com/ARQ/property#>
+           SELECT ?l WHERE { ?l apf:textMatch ("+brussel -zuid" 10) }"#,
+    );
+    got.sort();
+    assert_eq!(got, [[r#""Brussel centraal""#], [r#""Brussel-Noord""#]]);
+    let got = rows(
+        &e,
+        r#"PREFIX apf: <http://jena.hpl.hp.com/ARQ/property#>
+           SELECT ?l ?score WHERE { (?l ?score) apf:textMatch "zuid" } ORDER BY DESC(?score)"#,
+    );
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0][0], r#""Brussel-Zuid""#);
+}
+
+#[test]
+fn virtuoso_bif_contains_reads_the_same_index() {
+    let e = engine();
+    let q = |text: &str| {
+        let mut got: Vec<String> = rows(
+            &e,
+            &format!("PREFIX bif: <bif:>\nSELECT ?l WHERE {{ ?l bif:contains {text} }}"),
+        )
+        .into_iter()
+        .map(|r| r[0].clone())
+        .collect();
+        got.sort();
+        got
+    };
+    assert_eq!(
+        q(r#""brussel AND NOT zuid""#),
+        [r#""Brussel centraal""#, r#""Brussel-Noord""#]
+    );
+    // Words side by side are AND'ed; AND, OR and NOT in any case.
+    assert_eq!(q(r#""brussel zuid""#), [r#""Brussel-Zuid""#]);
+    assert_eq!(q(r#""brussel and zuid""#), [r#""Brussel-Zuid""#]);
+    assert_eq!(
+        q(r#""noord or centraal""#),
+        [r#""Brussel centraal""#, r#""Brussel-Noord""#]
+    );
+    // Phrases in double or single quotes, and a quoted word ending in *.
+    assert_eq!(
+        q(r#"'"near the zuid"'"#),
+        [r#""Station in Gent, near the Zuid park""#]
+    );
+    assert_eq!(
+        q(r#""'zuid park'""#),
+        [r#""Station in Gent, near the Zuid park""#]
+    );
+    assert_eq!(q(r#"'"the zuid near"'"#), Vec::<String>::new());
+    assert_eq!(q(r#""'brus*'""#).len(), 3);
+    // Refused rather than read another way.
+    for (text, why) in [
+        (r#""brussel and zuid or gent""#, "parentheses"),
+        (r#""brussel and (zuid or gent)""#, "parentheses"),
+        (r#""gent near zuid""#, "NEAR"),
+        (r#""not zuid""#, "NOT must follow AND"),
+        (r#""or zuid""#, "starts with"),
+        (r#""brussel or not zuid""#, "NOT must follow AND"),
+        (r#""brussel and""#, "no word"),
+        (r#""'zuid par*'""#, "wildcard in a phrase"),
+        (r#""b*l""#, "wildcard other than at the end"),
+        (r#""'zuid park""#, "not closed"),
+    ] {
+        let err = refused(
+            &e,
+            &format!("PREFIX bif: <bif:>\nSELECT * WHERE {{ ?l bif:contains {text} }}"),
+        );
+        assert!(err.contains(why), "{text}: {err}");
+    }
+}
+
+#[test]
+fn stardog_search_service_reads_the_same_index() {
+    let e = engine();
+    let q = |body: &str| {
+        rows(
+            &e,
+            &format!("PREFIX fts: <tag:stardog:api:search:>\n{body}"),
+        )
+    };
+    let mut got = q(r#"SELECT ?l WHERE {
+        SERVICE fts:textMatch { [] fts:query "+brussel -zuid" ; fts:result ?l } }"#);
+    got.sort();
+    assert_eq!(got, [[r#""Brussel centraal""#], [r#""Brussel-Noord""#]]);
+    // Scores, a limit and an offset, and the resource from the rest of the query.
+    let all = q(r#"SELECT ?l WHERE {
+        SERVICE fts:textMatch { [] fts:query "brussel" ; fts:result ?l ; fts:score ?s } }
+        ORDER BY DESC(?s) STR(?l)"#);
+    assert_eq!(all.len(), 3);
+    let second = q(r#"SELECT ?l WHERE {
+        SERVICE fts:textMatch {
+          [] fts:query "brussel" ; fts:result ?l ; fts:score ?s ; fts:limit 1 ; fts:offset 1 } }"#);
+    assert_eq!(second.len(), 1);
+    let mut got = q(r#"SELECT ?s WHERE {
+        ?s rdfs:label ?l
+        SERVICE fts:textMatch { [] fts:query "zuid" ; fts:result ?l } }"#);
+    got.sort();
+    assert_eq!(got, [["<http://example.com/bxl>"]]);
+    // A query string bound by the rest of the query.
+    let got = q(r#"SELECT ?l WHERE {
+        VALUES ?words { "noord" }
+        SERVICE fts:textMatch { [] fts:query ?words ; fts:result ?l } }"#);
+    assert_eq!(got, [[r#""Brussel-Noord""#]]);
+    for (options, why) in [
+        (
+            r#"fts:query "brussel" ; fts:result ?l ; fts:threshold 0.5"#,
+            "BM25",
+        ),
+        (
+            r#"fts:query "brussel" ; fts:result ?l ; fts:highlight ?h"#,
+            "not supported",
+        ),
+        (r#"fts:query "brussel""#, "fts:result ?literal is needed"),
+        (r#"fts:result ?l"#, "fts:query is needed"),
+        (
+            r#"fts:query "brussel" ; fts:result ?l ; fts:limit -1"#,
+            "whole number",
+        ),
+        (
+            r#"fts:query "brussel" ; fts:result ?l ; fts:result ?m"#,
+            "twice",
+        ),
+    ] {
+        let err = refused(
+            &e,
+            &format!(
+                "PREFIX fts: <tag:stardog:api:search:>\n\
+                 SELECT * WHERE {{ SERVICE fts:textMatch {{ [] {options} }} }}"
+            ),
+        );
+        assert!(err.contains(why), "{options}: {err}");
+    }
+}

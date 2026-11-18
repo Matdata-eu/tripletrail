@@ -47,6 +47,14 @@ const BDS: &str = "http://www.bigdata.com/rdf/search#";
 pub const BDS_SEARCH: &str = "http://www.bigdata.com/rdf/search#search";
 /// Stardog's `textMatch`, answered from the same index.
 pub const TEXT_MATCH: &str = "tag:stardog:api:property:textMatch";
+/// Jena ARQ's `apf:textMatch` (LARQ's `pf:textMatch`), the form Stardog's `textMatch` took.
+pub const APF_TEXT_MATCH: &str = "http://jena.hpl.hp.com/ARQ/property#textMatch";
+/// Virtuoso's `?o bif:contains "words"` (Virtuoso declares `bif:` as `<bif:>`).
+pub const BIF_CONTAINS: &str = "bif:contains";
+/// Stardog's search service namespace: `SERVICE fts:textMatch { [] fts:query "words" … }`.
+const FTS: &str = "tag:stardog:api:search:";
+/// Stardog's `SERVICE fts:textMatch`.
+pub const FTS_TEXT_MATCH: &str = "tag:stardog:api:search:textMatch";
 const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
 const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
 const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
@@ -754,11 +762,34 @@ struct Call {
 }
 
 impl Call {
-    /// A query string, in the syntax of the call's engine (Lucene's for `text:query` and
-    /// `textMatch`), with its options.
+    /// A call of `function` with nothing asked for yet.
+    fn new(function: &'static str, subject: TermPattern) -> Self {
+        Self {
+            function,
+            subject,
+            property: None,
+            query: TextQuery::default(),
+            query_var: None,
+            score: None,
+            literal: None,
+            limit: None,
+            lang: None,
+            highlight: None,
+            per_literal: false,
+            rank: None,
+            skip: 0,
+            all_terms: false,
+            prefix_terms: false,
+            nearest: None,
+        }
+    }
+
+    /// A query string, in the syntax of the call's engine (Lucene's for `text:query` and the
+    /// `textMatch`es, Virtuoso's for `bif:contains`), with its options.
     fn parse(&self, query: &str) -> Result<TextQuery, String> {
         let mut parsed = match self.function {
-            "text:query" | "textMatch" => lucene(query)?,
+            "text:query" | "textMatch" | "apf:textMatch" | "fts:textMatch" => lucene(query)?,
+            "bif:contains" => virtuoso(query)?,
             _ => TextQuery::plain(query),
         };
         for clause in &mut parsed.clauses {
@@ -965,8 +996,8 @@ pub fn calls_search(pattern: &GraphPattern) -> bool {
         | G::Project { inner, .. }
         | G::Distinct { inner }
         | G::Reduced { inner }
-        | G::Slice { inner, .. }
-        | G::Service { inner, .. } => calls_search(inner),
+        | G::Slice { inner, .. } => calls_search(inner),
+        G::Service { name, inner, .. } => is_fts(name) || calls_search(inner),
     }
 }
 
@@ -998,7 +1029,8 @@ fn expression_calls_search(e: &spargebra::algebra::Expression) -> bool {
 
 fn is_search(t: &TriplePattern) -> bool {
     matches!(&t.predicate, NamedNodePattern::NamedNode(n)
-        if [SEARCH, TEXT_QUERY, BDS_SEARCH, TEXT_MATCH, NEAREST].contains(&n.as_str()))
+        if [SEARCH, TEXT_QUERY, BDS_SEARCH, TEXT_MATCH, APF_TEXT_MATCH, BIF_CONTAINS, NEAREST]
+            .contains(&n.as_str()))
 }
 
 /// A Blazegraph option of a `bds:search`: `?o bds:relevance ?score` and the like.
@@ -1148,6 +1180,15 @@ impl<'c, C: SearchContext> Rewrite<'c, C> {
             G::Bgp { patterns } if patterns.iter().any(|t| is_search(t) || is_bds_option(t)) => {
                 self.bgp(patterns, outer)?
             }
+            // Stardog's search service: its matches, as a call's.
+            G::Service { name, inner, .. } if is_fts(&name) => {
+                let call = fts_call(&inner)?;
+                let index = self.ctx.index()?;
+                match &call.query_var {
+                    None => table(&call, &index, self.ctx)?,
+                    Some(var) => self.lateral_table(&call, var, &index, outer, &[])?,
+                }
+            }
             // Each side is joined with the other.
             G::Join { left, right } => {
                 let lo = with(&right, &left);
@@ -1244,6 +1285,9 @@ impl<'c, C: SearchContext> Rewrite<'c, C> {
         let properties = self.ctx.properties();
         let s = |b: Box<GraphPattern>| Box::new(self.strip(*b));
         match p {
+            G::Service { name, .. } if is_fts(&name) => G::Bgp {
+                patterns: Vec::new(),
+            },
             G::Bgp { patterns } if patterns.iter().any(is_search) => {
                 let kept: Vec<TriplePattern> =
                     patterns.iter().filter(|t| !is_search(t)).cloned().collect();
@@ -1502,6 +1546,7 @@ fn lateral(p: &GraphPattern) -> bool {
     use GraphPattern as G;
     match p {
         G::Bgp { patterns } => patterns.iter().any(is_search),
+        G::Service { name, .. } => is_fts(name),
         G::Join { left, right }
         | G::Lateral { left, right }
         | G::LeftJoin { left, right, .. }
@@ -1575,6 +1620,10 @@ fn calls(
             "bds:search"
         } else if iri(t, TEXT_MATCH) {
             "textMatch"
+        } else if iri(t, APF_TEXT_MATCH) {
+            "apf:textMatch"
+        } else if iri(t, BIF_CONTAINS) {
+            "bif:contains"
         } else if iri(t, NEAREST) {
             "tt:nearest"
         } else {
@@ -1583,30 +1632,18 @@ fn calls(
         let bad = |m: &str| Error::Request(format!("{function}: {m}"));
         let mut subject = items(&t.subject, &bad)?.into_iter();
         let mut args = items(&t.object, &bad)?.into_iter().peekable();
-        let mut call = Call {
+        let mut call = Call::new(
             function,
-            subject: subject.next().unwrap_or_else(|| t.subject.clone()),
-            property: None,
-            query: TextQuery::default(),
-            query_var: None,
-            score: None,
-            literal: None,
-            limit: None,
-            lang: None,
-            highlight: None,
-            per_literal: false,
-            rank: None,
-            skip: 0,
-            all_terms: false,
-            prefix_terms: false,
-            nearest: None,
-        };
+            subject.next().unwrap_or_else(|| t.subject.clone()),
+        );
         if function == "tt:nearest" {
             nearest(&mut call, subject, args, &bad)?;
         } else if function == "bds:search" {
             bds(&mut call, t, &patterns, &bad)?;
-        } else if function == "textMatch" {
+        } else if function == "textMatch" || function == "apf:textMatch" {
             text_match(&mut call, subject, args, &bad)?;
+        } else if function == "bif:contains" {
+            bif_contains(&mut call, subject, t, &bad)?;
         } else {
             if jena {
                 // (?s ?score ?literal) text:query (property "query" limit)
@@ -1692,23 +1729,7 @@ fn calls(
                 }
             }
         }
-        let mut names: Vec<&str> = Vec::new();
-        if let TermPattern::Variable(v) = &call.subject {
-            names.push(v.as_str());
-        }
-        for v in [&call.score, &call.literal, &call.query_var, &call.rank]
-            .into_iter()
-            .flatten()
-        {
-            if names.contains(&v.as_str()) {
-                return Err(bad(&format!(
-                    "?{} is given twice: the subject, score, literal and query each need a \
-                     variable of their own",
-                    v.as_str()
-                )));
-            }
-            names.push(v.as_str());
-        }
+        distinct_variables(&call, &bad)?;
         calls.push(call);
     }
     if let Some(o) = patterns.iter().find(|o| {
@@ -1732,6 +1753,28 @@ fn calls(
         })
         .collect();
     Ok((calls, left))
+}
+
+/// The subject, score, literal, query and rank of `call` are different variables.
+fn distinct_variables(call: &Call, bad: &dyn Fn(&str) -> Error) -> Result<(), Error> {
+    let mut names: Vec<&str> = Vec::new();
+    if let TermPattern::Variable(v) = &call.subject {
+        names.push(v.as_str());
+    }
+    for v in [&call.score, &call.literal, &call.query_var, &call.rank]
+        .into_iter()
+        .flatten()
+    {
+        if names.contains(&v.as_str()) {
+            return Err(bad(&format!(
+                "?{} is given twice: the subject, score, literal and query each need a \
+                 variable of their own",
+                v.as_str()
+            )));
+        }
+        names.push(v.as_str());
+    }
+    Ok(())
 }
 
 /// `?s tt:nearest (property query k ?score ?vector)` (#236): the `k` resources whose vector
@@ -1974,6 +2017,263 @@ fn text_match(
         }
     }
     Ok(())
+}
+
+/// Virtuoso's `?o bif:contains "words"`: `?o` is the literal matched, the string in
+/// Virtuoso's syntax. Virtuoso's `OPTION (score ?sc)` is not SPARQL, so no score is given.
+fn bif_contains(
+    call: &mut Call,
+    mut subject: impl Iterator<Item = TermPattern>,
+    t: &TriplePattern,
+    bad: &dyn Fn(&str) -> Error,
+) -> Result<(), Error> {
+    if subject.next().is_some() {
+        return Err(bad(
+            "the subject must be a single variable: the literal matched",
+        ));
+    }
+    literal_subject(call, bad)?;
+    match &t.object {
+        TermPattern::Literal(l) => call.query = call.parse(l.value()).map_err(|m| bad(&m))?,
+        TermPattern::Variable(v) => call.query_var = Some(v.clone()),
+        _ => return Err(bad("the object must be the query string")),
+    }
+    Ok(())
+}
+
+/// Stardog's `SERVICE fts:textMatch { [] fts:query "words" ; fts:result ?literal ;
+/// fts:score ?score ; fts:limit n ; fts:offset n }`: the literals matched, as `textMatch`
+/// gives them, the query string in Lucene's syntax.
+fn fts_call(inner: &GraphPattern) -> Result<Call, Error> {
+    let bad = |m: &str| Error::Request(format!("fts:textMatch: {m}"));
+    let GraphPattern::Bgp { patterns } = inner else {
+        return Err(bad(
+            "the service's pattern must be fts: options of one node, as [] fts:query \"words\" ; \
+             fts:result ?literal",
+        ));
+    };
+    let mut call = Call::new(
+        "fts:textMatch",
+        TermPattern::BlankNode(spargebra::term::BlankNode::default()),
+    );
+    call.per_literal = true;
+    let mut query = None;
+    let mut seen: Vec<&str> = Vec::new();
+    for t in patterns {
+        let name = match &t.predicate {
+            NamedNodePattern::NamedNode(p) if p.as_str().starts_with(FTS) => {
+                &p.as_str()[FTS.len()..]
+            }
+            p => return Err(bad(&format!("{p} is not an fts: option"))),
+        };
+        if t.subject != patterns[0].subject {
+            return Err(bad("the options must all be on one node"));
+        }
+        if seen.contains(&name) {
+            return Err(bad(&format!("fts:{name} is given twice")));
+        }
+        seen.push(name);
+        let variable = || match &t.object {
+            TermPattern::Variable(v) => Ok(v.clone()),
+            _ => Err(bad(&format!("fts:{name} takes a variable"))),
+        };
+        let number = || match &t.object {
+            TermPattern::Literal(l) => l
+                .value()
+                .parse::<usize>()
+                .map_err(|_| bad(&format!("fts:{name} takes a whole number of 0 or more"))),
+            _ => Err(bad(&format!("fts:{name} takes a whole number"))),
+        };
+        match name {
+            "query" => match &t.object {
+                TermPattern::Literal(l) => query = Some(l.value().to_owned()),
+                TermPattern::Variable(v) => call.query_var = Some(v.clone()),
+                _ => return Err(bad("fts:query takes the query string, or a variable")),
+            },
+            "result" => call.literal = Some(variable()?),
+            "score" => call.score = Some(variable()?),
+            "limit" => call.limit = Some(number()?),
+            "offset" => call.skip = number()?,
+            "threshold" => {
+                return Err(bad(
+                    "fts:threshold is not supported: scores are BM25 scores here, not \
+                     Lucene's; give fts:limit, or FILTER on the score",
+                ));
+            }
+            _ => {
+                return Err(bad(&format!(
+                    "fts:{name} is not supported; fts:query, result, score, limit and offset are"
+                )));
+            }
+        }
+    }
+    if call.literal.is_none() {
+        return Err(bad(
+            "fts:result ?literal is needed: the variable of the literal matched",
+        ));
+    }
+    // The limit counts from the offset; a call's limit is a place, as bds:maxRank.
+    call.limit = call.limit.map(|l| l.saturating_add(call.skip));
+    match query {
+        Some(q) => call.query = call.parse(&q).map_err(|m| bad(&m))?,
+        None if call.query_var.is_none() => return Err(bad("fts:query is needed")),
+        None => {}
+    }
+    distinct_variables(&call, &bad)?;
+    Ok(call)
+}
+
+fn is_fts(name: &NamedNodePattern) -> bool {
+    matches!(name, NamedNodePattern::NamedNode(n) if n.as_str() == FTS_TEXT_MATCH)
+}
+
+/// A `bif:contains` string in Virtuoso's text expression syntax: words and phrases joined by
+/// `AND`, `OR` or `AND NOT` (in any case; words side by side are AND'ed), a phrase in double
+/// or single quotes, and a quoted word ending in `*` matching the words it starts. Refused
+/// rather than read differently: `NEAR`, parentheses, `AND` and `OR` in one expression
+/// (they need parentheses), `NOT` other than after `AND`, and `*` other than ending a word.
+fn virtuoso(query: &str) -> Result<TextQuery, String> {
+    #[derive(PartialEq)]
+    enum Token {
+        Words(String, bool),
+        And,
+        Or,
+        Not,
+    }
+    let mut tokens = Vec::new();
+    let mut chars = query.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        if c == '(' || c == ')' {
+            return Err("parentheses in the query are not supported".into());
+        }
+        if c == '"' || c == '\'' {
+            chars.next();
+            let mut phrase = String::new();
+            loop {
+                match chars.next() {
+                    Some(d) if d == c => break,
+                    Some(d) => phrase.push(d),
+                    None => return Err(format!("a phrase is not closed ({c}{phrase})")),
+                }
+            }
+            tokens.push(Token::Words(phrase, true));
+            continue;
+        }
+        let mut word = String::new();
+        while let Some(&d) = chars.peek() {
+            if d.is_whitespace() || matches!(d, '"' | '\'' | '(' | ')') {
+                break;
+            }
+            word.push(d);
+            chars.next();
+        }
+        tokens.push(match word.to_ascii_lowercase().as_str() {
+            "and" => Token::And,
+            "or" => Token::Or,
+            "not" => Token::Not,
+            "near" => return Err("NEAR in the query is not supported".into()),
+            _ => Token::Words(word, false),
+        });
+    }
+    let mut clauses: Vec<Clause> = Vec::new();
+    let (mut and, mut or) = (false, false);
+    let mut tokens = tokens.into_iter().peekable();
+    let mut first = true;
+    loop {
+        // What joins the next word or phrase to those before.
+        let occur = if first {
+            Occur::Must
+        } else {
+            match tokens.peek() {
+                None => break,
+                // Side by side: AND.
+                Some(Token::Words(..)) => {
+                    and = true;
+                    Occur::Must
+                }
+                Some(Token::And) => {
+                    tokens.next();
+                    and = true;
+                    if tokens.next_if(|t| *t == Token::Not).is_some() {
+                        Occur::MustNot
+                    } else {
+                        Occur::Must
+                    }
+                }
+                Some(Token::Or) => {
+                    tokens.next();
+                    or = true;
+                    Occur::Should
+                }
+                Some(Token::Not) => {
+                    return Err("NOT must follow AND, as in \"rail AND NOT tram\"".into());
+                }
+            }
+        };
+        match tokens.next() {
+            Some(Token::Words(text, quoted)) => {
+                clauses.extend(virtuoso_operand(&text, quoted, occur)?);
+            }
+            None if first => return Err("the query has no words".into()),
+            Some(Token::Not) => {
+                return Err("NOT must follow AND, as in \"rail AND NOT tram\"".into());
+            }
+            _ if first => return Err("the query starts with AND, OR or NOT".into()),
+            _ => return Err("AND or OR with no word or phrase after it".into()),
+        }
+        first = false;
+    }
+    if and && or {
+        return Err("AND and OR in one query need parentheses, which are not supported".into());
+    }
+    if or {
+        // Any may match: the first operand too.
+        for c in &mut clauses {
+            c.occur = Occur::Should;
+        }
+    }
+    Ok(TextQuery { clauses })
+}
+
+/// The clauses of one word or phrase of a `bif:contains` string.
+fn virtuoso_operand(text: &str, quoted: bool, occur: Occur) -> Result<Vec<Clause>, String> {
+    let (stem, prefix) = match text.strip_suffix('*') {
+        Some(stem) => (stem, true),
+        None => (text, false),
+    };
+    if stem.contains('*') {
+        return Err(format!(
+            "a wildcard other than at the end of a word (\"{text}\")"
+        ));
+    }
+    let found: Vec<String> = words(stem).collect();
+    if prefix && found.len() != 1 {
+        return Err(format!(
+            "a wildcard in a phrase is not supported (\"{text}\")"
+        ));
+    }
+    Ok(if quoted && found.len() > 1 {
+        vec![Clause {
+            occur,
+            words: found,
+            prefix: false,
+            stem: None,
+        }]
+    } else {
+        found
+            .into_iter()
+            .map(|word| Clause {
+                occur,
+                words: vec![word],
+                prefix,
+                stem: None,
+            })
+            .collect()
+    })
 }
 
 /// A `text:query` string in Lucene's syntax (#830). Words are OR'ed, as by Lucene's default;
