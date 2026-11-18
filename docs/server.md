@@ -2230,7 +2230,13 @@ terminationGracePeriodSeconds: 45
 
 ## Web UI
 
-`/$/ui/` (and `/`, which redirects there) has these pages:
+`/$/ui/` (and `/`, which redirects there) has these pages, each over the full width of the
+window. An IRI shown on a page (a feature on the map, a node on Explore, a search result, a
+shape, a dataset's endpoint) has a button after it that copies it. **Share** in the top bar
+copies a link that opens the same view: the page's own link, which holds what it shows, and on
+the Query page MatGUI's tab as `?query=…&tabTitle=…&outputFormat=…` (never its request headers,
+which hold the admin token or a "view as"). Opening such a link adds the query as a tab and
+then takes it out of the address bar.
 
 - **Datasets**: totals, every dataset and alias with its mode and readiness, and per dataset
   its statistics, back up, snapshot, detach, upload (Graph Store Protocol, with progress) and,
@@ -2244,8 +2250,9 @@ terminationGracePeriodSeconds: 45
   their counts, and the features under a click. A feature's describe page opens in a panel
   beside the map (at once when the click hit one feature), and its links to other resources
   open there too. The page's link holds the view, so it can be shared: the position in its
-  hash (`#zoom/lat/lon`), the hidden layers as `hide=id,id` and the filters as the tiles take
-  them (`{collection}.{key}=value`, `.min`, `.max`) in its query. A collection's filter panel
+  hash (`#zoom/lat/lon`), the hidden layers as `hide=id,id`, the feature open beside the map as
+  `feature=IRI` and the filters as the tiles take them (`{collection}.{key}=value`, `.min`,
+  `.max`) in its query. A collection's filter panel
   opens its features in the OGC API (*OGC API*) and copies their GeoJSON link for a GIS
   (*Copy GIS link*), with the filters as CQL2 (`IN`, `>=`, `<=`). *Colour by* draws a collection in a colour
   per value of one of its values facets (its 10 most frequent values under the filters, the
@@ -2274,7 +2281,7 @@ terminationGracePeriodSeconds: 45
   (`geo:asWKT`, or `geo:hasGeometry/geo:asWKT`, the first of each, as `geof:asGeoJSON`) in
   their graph colours. Selecting a node selects it on the map, and a click on a feature selects
   its node. The map fits what is shown until it is moved.
-- **Shapes** (`/$/ui/shapes/{dataset}`): the dataset's node shapes by class, with their layer,
+- **Shapes** (`/$/ui/shapes/{dataset}?shape={IRI}`): the dataset's node shapes by class, with their layer,
   and a table of each one's property shapes to change what the readers read (names per
   language, order, groups, keys, hidden, hidden from, deactivated); the Turtle of an own file
   with live checks; the kept versions with rollback. See

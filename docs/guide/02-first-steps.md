@@ -51,6 +51,11 @@ Open <http://localhost:7878/> in a browser.
 - **Map** shows the whole dataset on OpenStreetMap: a layer for the stations and one for the
   sections. Click a station to read everything known about it.
 
+Wherever a page shows an IRI, such as `https://example.org/rail#BXC` beside the station you
+clicked, the small button after it copies the IRI. **Share** in the top bar copies a link to
+what you see: a colleague who opens it gets the same page, with the same query, map position,
+filters, open feature or shape. They still need their own access to the dataset.
+
 ## Ask a question
 
 SPARQL queries describe the triples they look for, with `?variables` where the answer goes.

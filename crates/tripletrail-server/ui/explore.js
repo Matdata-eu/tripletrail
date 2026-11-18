@@ -480,7 +480,7 @@ window.TripleTrailExplore = (function () {
     const { el } = ui;
     const head = [
       el("h3", {}, n.label),
-      n.iri ? el("p", { class: "mono small ex-iri" }, n.iri) : el("p", { class: "muted small" }, "A blank node: it can be shown, not expanded."),
+      n.iri ? el("p", { class: "mono small ex-iri with-copy" }, el("span", {}, n.iri), ui.copyButton(n.iri)) : el("p", { class: "muted small" }, "A blank node: it can be shown, not expanded."),
       n.classes.length ? el("p", { class: "small" }, "Type: ", ...n.classes.flatMap((c, i) => [i ? ", " : "", el("span", { title: c }, shortName(c))])) : null,
       el("div", { class: "toolbar" },
         n.iri ? (state.open.has(n.iri)

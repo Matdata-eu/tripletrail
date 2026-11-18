@@ -1876,6 +1876,16 @@ fn the_web_ui_and_its_embedded_matgui() {
         .into_string()
         .unwrap();
     assert_eq!(shared, page);
+    // Share links: the top bar's button, and the links it copies (the open feature of the map,
+    // the Query page's tab, the Shapes page's shape) open the same page.
+    assert!(page.contains("id=\"share-btn\""));
+    for link in [
+        "/$/ui/map/kg?feature=urn%3Aa",
+        "/$/ui/query/kg?query=ASK%20%7B%7D&tabTitle=Ask",
+        "/$/ui/shapes/kg?shape=urn%3As",
+    ] {
+        assert_eq!(get(&base, link).unwrap().into_string().unwrap(), page);
+    }
     assert!(
         get(&base, "/$/ui/map.js")
             .unwrap()

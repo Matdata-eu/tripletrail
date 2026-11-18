@@ -25,7 +25,8 @@ a geometry: here Station and Section.
 - **Search** finds features by the words of their names.
 - **Views**, when the shapes name some, show one theme at a time: see
   [Name views of the map](#name-views-of-the-map).
-- The page's link keeps the view and filters, so it can be shared.
+- The page's link keeps the view, the filters and the feature open beside the map
+  (`feature=IRI`), so it can be shared: **Share** in the top bar copies it.
 
 The map fetches its background from OpenStreetMap, which then learns where viewers look. For
 private data, or heavy use, start the server with `--map-tiles` naming your own tile server,
@@ -613,6 +614,9 @@ what the readers read:
   **Profiles**: the use cases it belongs to. A name typed under **New profile** makes one and puts the shape in
   it. A shape in no profile is in all of them, and the box above the list shows only the
   shapes of one profile.
+
+The page's link names the shape shown (`?shape=IRI`), so **Share** in the top bar copies a
+link that opens the same shape.
 
 **Diagram** draws the shape with its properties, the shapes they link to (by `sh:class`) on
 the right and the shapes that link to it on the left; pick one to show it.

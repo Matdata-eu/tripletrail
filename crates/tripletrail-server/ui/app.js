@@ -91,6 +91,46 @@
     setTimeout(() => t.remove(), kind === "bad" ? 8000 : 4000);
   }
 
+  // ---------- copy and share ----------
+  /** Puts `text` on the clipboard, and says so: `what` names it ("IRI", "Link"). Pages served
+   *  over plain HTTP (not localhost) have no Clipboard API: a hidden text area does it there. */
+  async function copyText(text, what = "Text") {
+    let done = false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); done = true; }
+    } catch (e) { /* the fallback below */ }
+    if (!done) {
+      const area = el("textarea", { readonly: true, "aria-hidden": "true", style: "position:fixed;top:0;left:0;opacity:0;pointer-events:none" });
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      try { done = document.execCommand("copy"); } catch (e) { done = false; }
+      area.remove();
+    }
+    if (done) toast(what + " copied");
+    else prompt("Copy the " + what.toLowerCase() + ":", text);
+    return done;
+  }
+  const COPY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  const DONE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5 10 17l9-10"/></svg>';
+  /** A small button that copies `text` (an IRI, by default) to the clipboard. */
+  function copyButton(text, what = "IRI") {
+    const b = el("button", { type: "button", class: "copy-btn", title: "Copy the " + what.toLowerCase() + ": " + text, "aria-label": "Copy the " + what.toLowerCase() });
+    b.innerHTML = COPY_ICON;
+    b.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (await copyText(text, what)) {
+        b.innerHTML = DONE_ICON;
+        b.classList.add("done");
+        setTimeout(() => { b.innerHTML = COPY_ICON; b.classList.remove("done"); }, 1500);
+      }
+    });
+    return b;
+  }
+  /** `text` (an IRI, an endpoint) followed by its copy button. */
+  const withCopy = (text, what) => el("span", { class: "with-copy" }, el("span", { class: "mono" }, text), copyButton(text, what));
+
   // ---------- API ----------
   class ApiError extends Error {
     constructor(status, message) { super(message); this.status = status; }
@@ -300,7 +340,7 @@
     if (ds.alias) {
       const s = allStats["/" + ds.target] || {};
       stats($("#ds-stats"), [["Points at", ds.target], ["Triples", fmtNum(s.triples)], ["Previous", ds.previous || "–"]]);
-      kv($("#ds-kv"), [["Since", fmtTime(ds.since)], ["Mode", ds.mode], ["Endpoint", location.origin + "/" + ds.name + "/sparql"]]);
+      kv($("#ds-kv"), [["Since", fmtTime(ds.since)], ["Mode", ds.mode], ["Endpoint", withCopy(location.origin + "/" + ds.name + "/sparql", "Endpoint")]]);
       $("#swap-to").replaceChildren(...realDatasets().map((r) => el("option", { value: r.name, selected: r.name === ds.target }, r.name)));
       $("#rollback-btn").disabled = !ds.previous || !byName(ds.previous);
       $("#rollback-btn").title = ds.previous ? "Swap back to " + ds.previous : "Nothing to roll back to";
@@ -319,7 +359,7 @@
         ["Store", s.store], ["Location", s.location], ["Attached", fmtTime(s.attached)],
         ["Last write", s.lastWrite ? fmtTime(s.lastWrite) : null], ["Last swap", s.lastSwap ? fmtTime(s.lastSwap) : null],
         ["Aliases", (s.aliases || []).join(", ")], ["Spatial index", s.spatialIndexReady ? "ready" : "building"],
-        ["Endpoint", location.origin + "/" + ds.name + "/sparql"],
+        ["Endpoint", withCopy(location.origin + "/" + ds.name + "/sparql", "Endpoint")],
       ]);
       actions.push(btn("Back up", () => backup(ds)));
       if (ds.store === "tripletrail" || ds.mode === "read-write") actions.push(btn("Snapshot…", () => snapshot(ds)));
@@ -503,6 +543,8 @@
       });
       applyTheme();
       yasgui.on("tabSelect", () => setTimeout(syncSelectFromTab));
+      // A shared link's query is in a tab now: the link loses it, so a reload adds no other.
+      if (new URLSearchParams(location.search).has("query")) history.replaceState(null, "", location.pathname + location.hash);
     }
     // A query another page opened here (the Search page's "Open in Query"), in a new tab.
     let pending = null;
@@ -672,9 +714,32 @@
     }
     else renderServer();
   }
+  // ---------- share: a link that opens the same view ----------
+  // Every page keeps what it shows in its link (the Map its position, layers and filters, the
+  // Search page its model, Explore what is open, Shapes the shape picked), so the link is the
+  // view. The Query page's link carries MatGUI's tab: the query, its title and the result view,
+  // never the request headers (they hold the admin token or a "view as").
+  function shareLink() {
+    const url = new URL(location.href);
+    if (page === "query") {
+      const tab = yasgui && yasgui.getTab();
+      const name = $("#query-ds").value;
+      if (name && !name.startsWith(WS)) url.pathname = UI + "query/" + encodeURIComponent(name);
+      url.search = "";
+      if (tab) {
+        if (tab.getQuery()) url.searchParams.set("query", tab.getQuery());
+        if (tab.getName()) url.searchParams.set("tabTitle", tab.getName());
+        const settings = tab.getPersistedJson && tab.getPersistedJson().yasr && tab.getPersistedJson().yasr.settings;
+        if (settings && settings.selectedPlugin) url.searchParams.set("outputFormat", settings.selectedPlugin);
+      }
+    }
+    return url.href;
+  }
+  $("#share-btn").addEventListener("click", () => copyText(shareLink(), "Link"));
+
   // What the Workbench (workbench.js) uses of this page.
   viewAsBanner();
-  const shared = { api, el, toast, fail, go, store, viewAs, TOKEN_KEY, ApiError, openToken, confirmDialog, fmtNum, fmtBytes, fmtTime, explain: (url, q) => explain(url, q) };
+  const shared = { api, el, toast, fail, go, copyText, copyButton, withCopy, store, viewAs, TOKEN_KEY, ApiError, openToken, confirmDialog, fmtNum, fmtBytes, fmtTime, explain: (url, q) => explain(url, q) };
   window.addEventListener("popstate", route);
   // MatGUI keeps its share links and map position in the URL's hash, so pages are paths.
   function go(path, replace) {

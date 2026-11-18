@@ -176,6 +176,14 @@ window.TripleTrailMap = (function () {
     map.on("click", (e) => pick(name, e, collections, pickable()));
     searchBox(name, find, found, collections);
     if (!positioned) fit(name);
+    // The link's open feature (`feature=IRI`), beside the map again.
+    const open = new URLSearchParams(location.search).get("feature");
+    if (open) {
+      detail(name, open, short(open));
+      labels(name, [open]).then((found) => {
+        for (const [iri, label] of found) for (const t of document.querySelectorAll("#map-detail .map-detail-head strong")) if (t.title === iri) t.textContent = label;
+      }).catch(() => { /* the short name stays */ });
+    }
   }
 
   /** The search box: the features whose labels hold the words typed (the server's full-text
@@ -335,6 +343,8 @@ window.TripleTrailMap = (function () {
     if (hidden.size) q.set("hide", [...hidden].join(","));
     if (view) q.set("view", view);
     if (preview) q.set("preview", preview);
+    const open = new URLSearchParams(location.search).get("feature");
+    if (open) q.set("feature", open);
     const search = q.toString();
     history.replaceState(history.state, "", location.pathname + (search ? "?" + search : "") + location.hash);
   }
@@ -651,7 +661,7 @@ window.TripleTrailMap = (function () {
         detail(ds, iri, a.textContent);
       } }, short(iri));
       links.set(iri, a);
-      return el("li", {}, el("span", { class: "map-swatch", style: "background:" + c.color, title: c.title }), el("span", {}, a, el("span", { class: "muted small" }, " " + c.title)));
+      return el("li", {}, el("span", { class: "map-swatch", style: "background:" + c.color, title: c.title }), el("span", {}, a, el("span", { class: "muted small" }, " " + c.title)), ui.copyButton(iri));
     }));
     const body = el("div", { class: "map-popup" }, list,
       seen.size > MAX_PICKED ? el("p", { class: "muted small" }, `and ${seen.size - MAX_PICKED} more: zoom in`) : null);
@@ -668,6 +678,14 @@ window.TripleTrailMap = (function () {
     } catch (err) { /* the short names stay */ }
   }
 
+  /** The feature open beside the map, in the page's link (`feature=IRI`), so a shared link
+   *  opens it too; null when the panel closes. */
+  function setFeature(iri) {
+    const url = new URL(location.href);
+    if (iri) url.searchParams.set("feature", iri); else url.searchParams.delete("feature");
+    if (url.href !== location.href) history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+  }
+
   const describeUrl = (ds, iri) => service(ds, "describe?iri=" + encodeURIComponent(iri));
 
   /** The detail panel: the feature's describe page beside the map, fetched with the caller's
@@ -678,6 +696,7 @@ window.TripleTrailMap = (function () {
     if (!panel) return;
     const wrap = panel.parentElement;
     const close = el("button", { class: "icon-btn close", type: "button", title: "Close", "aria-label": "Close", onclick: () => {
+      setFeature(null);
       panel.hidden = true;
       wrap.classList.remove("with-detail");
       if (map) map.resize();
@@ -686,12 +705,14 @@ window.TripleTrailMap = (function () {
     panel.replaceChildren(
       el("div", { class: "map-detail-head" },
         el("strong", { class: "map-name", title: iri }, title),
+        ui.copyButton(iri),
         el("a", { class: "btn small", href: describeUrl(ds, iri), target: "_blank", rel: "noopener" }, "Open page"),
         el("a", { class: "btn small", href: "/$/ui/explore/" + encodeURIComponent(ds) + "?iri=" + encodeURIComponent(iri), "data-route": true,
           title: "Walk the graph from this feature" }, "Explore"),
         close),
       frame);
     panel.hidden = false;
+    setFeature(iri);
     if (!wrap.classList.contains("with-detail")) {
       wrap.classList.add("with-detail");
       if (map) map.resize();
