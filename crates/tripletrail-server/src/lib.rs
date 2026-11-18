@@ -2004,6 +2004,11 @@ fn route(
         }
     };
     let asked = segments.first().copied().unwrap_or_default();
+    // `search/similar` reads as a GET also when its parameters come as a form.
+    let reads = matches!(method, Method::Get | Method::Head)
+        || (service == "search"
+            && method == Method::Post
+            && segments.get(2..) == Some(&["similar"][..]));
     // A caller that may read only some graphs gets the services that keep to them.
     let partial_ok = matches!(
         service,
@@ -2013,7 +2018,7 @@ fn route(
         || (matches!(
             service,
             "get" | "describe" | "ogc" | "tiles" | "api" | "search"
-        ) && matches!(method, Method::Get | Method::Head))
+        ) && reads)
         // REST writes go through the engine, which checks each graph written (#201).
         || service == "api";
     // Row rules apply to queries, explain, descriptions, Graph Store reads, OGC and tiles
@@ -2025,7 +2030,7 @@ fn route(
         || (matches!(
             service,
             "describe" | "get" | "ogc" | "tiles" | "api" | "search"
-        ) && matches!(method, Method::Get | Method::Head));
+        ) && reads);
     check_access(
         state,
         context,
@@ -2236,7 +2241,9 @@ fn route(
                     let kind = request_header(request, "Content-Type")
                         .and_then(|t| t.split(';').next())
                         .map(str::trim);
-                    if kind != Some("application/x-www-form-urlencoded") {
+                    if !kind.is_some_and(|k| {
+                        k.eq_ignore_ascii_case("application/x-www-form-urlencoded")
+                    }) {
                         return Err(HttpError(
                             415,
                             "POST takes Content-Type: application/x-www-form-urlencoded".to_owned(),

@@ -1898,6 +1898,39 @@ fn describe_pages_and_explain_keep_to_row_rules() {
     }
     let (_, page) = get(&full, &paths[0].0, "text/html");
     assert!(page.contains("P one") && !page.contains("123"), "{page}");
+    // The resources nearest a vector, also with the parameters as a form (the Search page's
+    // way): only the rows the caller may see. On servers of their own, last: run
+    // before them, these servers made the describe pages above differ (their class diagrams).
+    let vectors = "ex:p1 ex:emb \"[1, 0]\" . ex:p2 ex:emb \"[1, 0.1]\" .\n";
+    let full_v = serve(format!("{prefixes}{visible}{hidden}{vectors}"), true);
+    let only_v = serve(
+        format!("{prefixes}{visible}ex:p1 ex:emb \"[1, 0]\" .\n"),
+        false,
+    );
+    let emb = encode("http://example.org/emb");
+    for form in [
+        format!("property={emb}&vector=%5B1,0.1%5D"),
+        format!("property={emb}&iri={}", encode("http://example.org/p2")),
+    ] {
+        let post = |base: &str| match ureq::post(&format!("{base}/dim/search/similar"))
+            .set("X-API-Key", "north")
+            .set("Content-Type", "application/x-www-form-urlencoded")
+            .send_string(&form)
+        {
+            Ok(r) => (r.status(), r.into_string().unwrap()),
+            Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap_or_default()),
+            Err(e) => panic!("{e}"),
+        };
+        let (a, b) = (post(&full_v), post(&only_v));
+        assert_eq!((a.0, b.0), (200, 200), "{form}: {}", a.1);
+        assert_eq!(
+            a.1.replace(host(&full_v), "HOST"),
+            b.1.replace(host(&only_v), "HOST"),
+            "{form}"
+        );
+        let get = |base: &str| get(base, &format!("/dim/search/similar?{form}"), "*/*");
+        assert_eq!(get(&full_v), a, "{form}");
+    }
 }
 
 /// Compiling row rules for a description or a Graph Store read keeps to the query timeout,

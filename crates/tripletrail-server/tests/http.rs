@@ -2016,6 +2016,14 @@ ex:twice rdfs:label "Two vectors" ; ex:embedding "[1, 0, 0.1]"^^tt:vector , "[1,
         .set("Content-Type", "application/json")
         .send_string("{}");
     assert!(matches!(json, Err(ureq::Error::Status(415, _))));
+    // Media types are case-insensitive.
+    let upper = ureq::post(&base)
+        .set(
+            "Content-Type",
+            "Application/X-WWW-Form-Urlencoded; charset=UTF-8",
+        )
+        .send_string("property=http%3A%2F%2Fexample.com%2Fembedding&vector=%5B1,0,0.1%5D&k=1");
+    assert_eq!(upper.map(|r| r.status()).ok(), Some(200));
     // Only `similar` takes a POST.
     let classes = base.replace("similar", "classes");
     let posted = ureq::post(&classes).send_form(&[]);

@@ -181,7 +181,8 @@ context an application hands a language model.
 The same parameters can be sent as a form, `POST` with
 `Content-Type: application/x-www-form-urlencoded`: a vector of 768 numbers takes about 17 KB of
 URL, more than most proxies take (nginx refuses a request line past 8 KB with 414). Another
-content type is a 415.
+content type is a 415. A parameter both in the URL and in the form takes the URL's value. A
+caller limited to some graphs or rows is answered as for the `GET`.
 
 The answer is JSON: `{"property", "k", "results": [{"iri", "score", "description"}]}`, best
 first, each resource once with its best score: a resource with several vectors does not
