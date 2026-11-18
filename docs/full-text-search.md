@@ -107,10 +107,10 @@ Two intended differences from Jena: without a property, every indexed property i
 not only the index's default field (usually `rdfs:label`), so write `rdfs:label` for Jena's
 usual answer; and scores are BM25 scores, which differ from Lucene's.
 
-## Blazegraph, Stardog, Virtuoso and Jena's `apf:textMatch`
+## Blazegraph, Stardog, Virtuoso, QLever, GraphDB and Jena's `apf:textMatch`
 
-Queries written for Blazegraph, Stardog, Virtuoso and Jena's older LARQ run on the same index.
-They match literals rather than resources: the variable before them is the literal matched,
+Queries written for Blazegraph, Stardog, Virtuoso, QLever, GraphDB and Jena's older LARQ run
+on the same index. All but GraphDB's match literals rather than resources: the variable before them is the literal matched,
 with one row per literal (its best score), and a triple such as `?s rdfs:label ?o` gives the
 resource. As with the others, only the indexed properties' literals are searched.
 
@@ -166,6 +166,44 @@ itself; here the query declares it, as `PREFIX bif: <bif:>`. Refused rather than
 way: `NEAR`, parentheses, `AND` and `OR` in one string (they need parentheses), and a wildcard
 in a phrase. Virtuoso's `OPTION (score ?sc)` is not SPARQL, so `bif:contains` gives no score;
 use another form for one.
+
+QLever's search service and its older `ql:contains-word` are answered with the literals as
+the text records:
+
+```sparql
+PREFIX textSearch: <https://qlever.cs.uni-freiburg.de/textSearch/>
+SELECT ?text ?score WHERE {
+  SERVICE textSearch: {
+    ?text textSearch:contains [ textSearch:word "brussel" ; textSearch:score ?score ] ;
+          textSearch:contains [ textSearch:word "zui*" ] .
+  }
+}
+```
+
+Each `textSearch:word` must match, a word ending in `*` matching the words it starts, as does
+each word of `?text ql:contains-word "brussel zui*"`. The score is the BM25 score of all the
+words of a text variable, so a text variable takes one `textSearch:score`. Entity searches
+(`textSearch:entity`, `ql:contains-entity`) are refused: the literals mention no entities, so
+the resource comes from a triple that has the literal. So is `textSearch:prefix-match`.
+
+GraphDB's connectors (Lucene, Elasticsearch, Solr and OpenSearch, with their own namespaces)
+find resources, as `tt:search` does: those whose indexed literals match. The index named is
+not looked up; every name reads the same index.
+
+```sparql
+PREFIX luc: <http://www.ontotext.com/connectors/lucene#>
+PREFIX luc-index: <http://www.ontotext.com/connectors/lucene/instance#>
+SELECT ?entity ?score WHERE {
+  ?search a luc-index:my_index ;
+      luc:query "brussel*" ;
+      luc:entities ?entity ;
+      luc:limit 10 ; luc:offset 0 .
+  ?entity luc:score ?score .
+}
+```
+
+The query is read in Lucene's syntax. `luc:limit` and `luc:offset` count entities; other
+options (snippets, `luc:orderBy`, `luc:totalHits`, facets) are refused.
 
 The query string of each can be a variable bound by the rest of the query, as above.
 

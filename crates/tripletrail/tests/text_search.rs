@@ -1015,3 +1015,138 @@ fn stardog_search_service_reads_the_same_index() {
         assert!(err.contains(why), "{options}: {err}");
     }
 }
+
+#[test]
+fn graphdb_connectors_read_the_same_index() {
+    let e = engine();
+    for (ns, prefix) in [
+        ("http://www.ontotext.com/connectors/lucene", "luc"),
+        (
+            "http://www.ontotext.com/connectors/elasticsearch",
+            "elastic",
+        ),
+        ("http://www.ontotext.com/connectors/solr", "solr"),
+    ] {
+        let q = |body: &str| {
+            let mut got = rows(
+                &e,
+                &format!(
+                    "PREFIX {prefix}: <{ns}#>\nPREFIX {prefix}-index: <{ns}/instance#>\n{body}"
+                ),
+            );
+            got.sort();
+            got
+        };
+        assert_eq!(
+            q(&format!(
+                r#"SELECT ?e WHERE {{
+                    ?search a {prefix}-index:stations ;
+                        {prefix}:query "+brussel -zuid" ;
+                        {prefix}:entities ?e . }}"#
+            )),
+            [["<http://example.com/bxn>"], ["<http://example.com/named>"]],
+            "{prefix}"
+        );
+        // The score on the entity, a limit, and the entity joined with the rest.
+        let got = q(&format!(
+            r#"SELECT ?e ?score WHERE {{
+                ?search a {prefix}-index:stations ; {prefix}:query "zuid" ;
+                    {prefix}:entities ?e ; {prefix}:limit 1 .
+                ?e {prefix}:score ?score ; a ex:Station . }}"#
+        ));
+        assert_eq!(got.len(), 1, "{prefix}");
+        assert!(got[0][1].contains("double"), "{got:?}");
+    }
+    for (body, why) in [
+        (
+            r#"?s luc:query "zuid" ; luc:entities ?e ; luc:snippets ?x"#,
+            "not supported",
+        ),
+        (r#"?s luc:query "zuid""#, "luc:entities ?entity is needed"),
+        (
+            r#"?s luc:query "zuid" ; luc:entities ?e ; luc:limit "x""#,
+            "whole number",
+        ),
+        (r#"?e luc:score ?score"#, "nothing searches"),
+        (r#"?s luc:query "name:zuid" ; luc:entities ?e"#, "field"),
+    ] {
+        let err = refused(
+            &e,
+            &format!(
+                "PREFIX luc: <http://www.ontotext.com/connectors/lucene#>\nSELECT * WHERE {{ {body} }}"
+            ),
+        );
+        assert!(err.contains(why), "{body}: {err}");
+    }
+}
+
+#[test]
+fn qlever_text_search_reads_the_same_index() {
+    let e = engine();
+    let q = |body: &str| {
+        let mut got = rows(
+            &e,
+            &format!(
+                "PREFIX textSearch: <https://qlever.cs.uni-freiburg.de/textSearch/>\n\
+                 PREFIX ql: <http://qlever.cs.uni-freiburg.de/builtin-functions/>\n{body}"
+            ),
+        );
+        got.sort();
+        got
+    };
+    // Each word required; a word ending in * matches the words it starts.
+    assert_eq!(
+        q(r#"SELECT ?t WHERE { SERVICE textSearch: {
+            ?t textSearch:contains [ textSearch:word "brussel" ] ;
+               textSearch:contains [ textSearch:word "noo*" ] } }"#),
+        [[r#""Brussel-Noord""#]]
+    );
+    let got = q(r#"SELECT ?t ?score WHERE { SERVICE textSearch: {
+            ?t textSearch:contains [ textSearch:word "zuid" ; textSearch:score ?score ] } }"#);
+    assert_eq!(got.len(), 2);
+    // The resource from a triple that has the literal.
+    assert_eq!(
+        q(r#"SELECT ?s WHERE { ?s rdfs:label ?t
+            SERVICE textSearch: { ?t textSearch:contains [ textSearch:word "pieters" ] } }"#),
+        [["<http://example.com/gent>"]]
+    );
+    // The older form: every word of the string required.
+    assert_eq!(
+        q(r#"SELECT ?t WHERE { ?t ql:contains-word "brussel zui*" }"#),
+        [[r#""Brussel-Zuid""#]]
+    );
+    for (body, why) in [
+        (
+            r#"SERVICE textSearch: { ?t textSearch:contains [ textSearch:word "zuid" ] ;
+               textSearch:contains [ textSearch:entity ?e ] }"#,
+            "mention no entities",
+        ),
+        (r#"?t ql:contains-entity ?e"#, "mention no entities"),
+        (
+            r#"SERVICE textSearch: { ?t textSearch:contains [ textSearch:word "" ] }"#,
+            "not empty",
+        ),
+        (
+            r#"SERVICE textSearch: { ?t textSearch:contains [ textSearch:score ?s ] }"#,
+            "needs textSearch:word",
+        ),
+        (
+            r#"SERVICE textSearch: { ?t textSearch:contains [ textSearch:word "a" ; textSearch:word "b" ] }"#,
+            "twice",
+        ),
+        (
+            r#"SERVICE textSearch: { ?x ex:p ?y }"#,
+            "textSearch:contains is needed",
+        ),
+    ] {
+        let err = refused(
+            &e,
+            &format!(
+                "PREFIX textSearch: <https://qlever.cs.uni-freiburg.de/textSearch/>\n\
+                 PREFIX ql: <http://qlever.cs.uni-freiburg.de/builtin-functions/>\n\
+                 SELECT * WHERE {{ {body} }}"
+            ),
+        );
+        assert!(err.contains(why), "{body}: {err}");
+    }
+}

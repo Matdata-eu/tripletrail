@@ -189,9 +189,9 @@ TripleTrail's own `tt:search` ranks the matches with a score: see
 [full-text search](../full-text-search.md).
 
 Full-text queries written for Blazegraph (`bds:search`), Stardog (`textMatch` and
-`SERVICE fts:textMatch`), Virtuoso (`bif:contains`) and Jena's older `apf:textMatch` run on
-the same index too. They match literals, so the resource comes from a triple that has the
-literal:
+`SERVICE fts:textMatch`), Virtuoso (`bif:contains`), QLever (`textSearch:` and
+`ql:contains-word`) and Jena's older `apf:textMatch` run on the same index too. They match
+literals, so the resource comes from a triple that has the literal:
 
 <!-- test: query -->
 ```sparql
@@ -251,6 +251,28 @@ ORDER BY ?station
 station
 https://example.org/rail#ANT
 https://example.org/rail#BXC
+```
+
+GraphDB's Lucene, Elasticsearch, Solr and OpenSearch connectors find resources rather than
+literals; whatever index is named, it is the same index:
+
+<!-- test: query -->
+```sparql
+PREFIX luc: <http://www.ontotext.com/connectors/lucene#>
+PREFIX luc-index: <http://www.ontotext.com/connectors/lucene/instance#>
+SELECT ?station WHERE {
+  ?search a luc-index:stations ;
+      luc:query "brussels -central" ;
+      luc:entities ?station .
+}
+ORDER BY ?station
+```
+
+<!-- test: output -->
+```text
+station
+https://example.org/rail#BXN
+https://example.org/rail#BXS
 ```
 
 ### Spatial search

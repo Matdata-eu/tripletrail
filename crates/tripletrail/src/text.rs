@@ -51,6 +51,30 @@ pub const TEXT_MATCH: &str = "tag:stardog:api:property:textMatch";
 pub const APF_TEXT_MATCH: &str = "http://jena.hpl.hp.com/ARQ/property#textMatch";
 /// Virtuoso's `?o bif:contains "words"` (Virtuoso declares `bif:` as `<bif:>`).
 pub const BIF_CONTAINS: &str = "bif:contains";
+/// GraphDB's connectors, each searched as `?search a <…/instance#index> ; <…#query> "words" ;
+/// <…#entities> ?entity . ?entity <…#score> ?score`: their namespaces, and the prefix their
+/// documentation uses, for messages.
+const CONNECTORS: [(&str, &str); 4] = [
+    ("http://www.ontotext.com/connectors/lucene", "luc"),
+    (
+        "http://www.ontotext.com/connectors/elasticsearch",
+        "elastic",
+    ),
+    ("http://www.ontotext.com/connectors/solr", "solr"),
+    (
+        "http://www.ontotext.com/connectors/opensearch",
+        "opensearch",
+    ),
+];
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+/// QLever's older form: `?t ql:contains-word "words"`.
+pub const QL_CONTAINS_WORD: &str =
+    "http://qlever.cs.uni-freiburg.de/builtin-functions/contains-word";
+const QL_CONTAINS_ENTITY: &str =
+    "http://qlever.cs.uni-freiburg.de/builtin-functions/contains-entity";
+/// QLever's text search service: `SERVICE textSearch: { ?t textSearch:contains [ textSearch:word
+/// "word" ; textSearch:score ?score ] }`.
+pub const QLEVER_TEXT_SEARCH: &str = "https://qlever.cs.uni-freiburg.de/textSearch/";
 /// Stardog's search service namespace: `SERVICE fts:textMatch { [] fts:query "words" … }`.
 const FTS: &str = "tag:stardog:api:search:";
 /// Stardog's `SERVICE fts:textMatch`.
@@ -788,8 +812,10 @@ impl Call {
     /// `textMatch`es, Virtuoso's for `bif:contains`), with its options.
     fn parse(&self, query: &str) -> Result<TextQuery, String> {
         let mut parsed = match self.function {
-            "text:query" | "textMatch" | "apf:textMatch" | "fts:textMatch" => lucene(query)?,
+            "text:query" | "textMatch" | "apf:textMatch" | "fts:textMatch" | "luc:query"
+            | "elastic:query" | "solr:query" | "opensearch:query" => lucene(query)?,
             "bif:contains" => virtuoso(query)?,
+            "ql:contains-word" | "textSearch:word" => qlever_words(query)?,
             _ => TextQuery::plain(query),
         };
         for clause in &mut parsed.clauses {
@@ -955,7 +981,7 @@ pub fn query_calls_search(query: &spargebra::Query) -> bool {
 pub fn calls_search(pattern: &GraphPattern) -> bool {
     use GraphPattern as G;
     match pattern {
-        G::Bgp { patterns } => patterns.iter().any(|t| is_search(t) || is_bds_option(t)),
+        G::Bgp { patterns } => patterns.iter().any(|t| is_search(t) || is_option(t)),
         G::Path { .. } | G::Values { .. } => false,
         G::Join { left, right }
         | G::Lateral { left, right }
@@ -997,7 +1023,7 @@ pub fn calls_search(pattern: &GraphPattern) -> bool {
         | G::Distinct { inner }
         | G::Reduced { inner }
         | G::Slice { inner, .. } => calls_search(inner),
-        G::Service { name, inner, .. } => is_fts(name) || calls_search(inner),
+        G::Service { name, inner, .. } => is_fts(name) || is_qlever(name) || calls_search(inner),
     }
 }
 
@@ -1029,8 +1055,38 @@ fn expression_calls_search(e: &spargebra::algebra::Expression) -> bool {
 
 fn is_search(t: &TriplePattern) -> bool {
     matches!(&t.predicate, NamedNodePattern::NamedNode(n)
-        if [SEARCH, TEXT_QUERY, BDS_SEARCH, TEXT_MATCH, APF_TEXT_MATCH, BIF_CONTAINS, NEAREST]
+        if [SEARCH, TEXT_QUERY, BDS_SEARCH, TEXT_MATCH, APF_TEXT_MATCH, BIF_CONTAINS,
+            QL_CONTAINS_WORD, QL_CONTAINS_ENTITY, NEAREST]
             .contains(&n.as_str()))
+        || connector_option(t).is_some_and(|(_, name)| name == "query")
+}
+
+/// The GraphDB connector of `t` and the option it gives (`query`, `entities`, `score`, …;
+/// `type` for `?search a <…/instance#index>`), if it is one.
+fn connector_option(t: &TriplePattern) -> Option<(&'static str, &str)> {
+    let NamedNodePattern::NamedNode(p) = &t.predicate else {
+        return None;
+    };
+    CONNECTORS.iter().find_map(|&(ns, prefix)| {
+        if p.as_str() == RDF_TYPE {
+            match &t.object {
+                TermPattern::NamedNode(o)
+                    if o.as_str().strip_prefix(ns)?.starts_with("/instance#") =>
+                {
+                    Some((prefix, "type"))
+                }
+                _ => None,
+            }
+        } else {
+            Some((prefix, p.as_str().strip_prefix(ns)?.strip_prefix('#')?))
+        }
+    })
+}
+
+/// An option of another engine's search on its own triple: Blazegraph's or a GraphDB
+/// connector's.
+fn is_option(t: &TriplePattern) -> bool {
+    is_bds_option(t) || connector_option(t).is_some()
 }
 
 /// A Blazegraph option of a `bds:search`: `?o bds:relevance ?score` and the like.
@@ -1177,7 +1233,7 @@ impl<'c, C: SearchContext> Rewrite<'c, C> {
         };
         let r = |b: Box<GraphPattern>, o: &[GraphPattern]| self.pattern(*b, o).map(Box::new);
         Ok(match p {
-            G::Bgp { patterns } if patterns.iter().any(|t| is_search(t) || is_bds_option(t)) => {
+            G::Bgp { patterns } if patterns.iter().any(|t| is_search(t) || is_option(t)) => {
                 self.bgp(patterns, outer)?
             }
             // Stardog's search service: its matches, as a call's.
@@ -1188,6 +1244,20 @@ impl<'c, C: SearchContext> Rewrite<'c, C> {
                     None => table(&call, &index, self.ctx)?,
                     Some(var) => self.lateral_table(&call, var, &index, outer, &[])?,
                 }
+            }
+            // QLever's: a call per text variable, joined.
+            G::Service { name, inner, .. } if is_qlever(&name) => {
+                let index = self.ctx.index()?;
+                let mut out = GraphPattern::Bgp {
+                    patterns: Vec::new(),
+                };
+                for call in qlever_calls(&inner)? {
+                    out = GraphPattern::Join {
+                        left: Box::new(out),
+                        right: Box::new(table(&call, &index, self.ctx)?),
+                    };
+                }
+                out
             }
             // Each side is joined with the other.
             G::Join { left, right } => {
@@ -1285,7 +1355,7 @@ impl<'c, C: SearchContext> Rewrite<'c, C> {
         let properties = self.ctx.properties();
         let s = |b: Box<GraphPattern>| Box::new(self.strip(*b));
         match p {
-            G::Service { name, .. } if is_fts(&name) => G::Bgp {
+            G::Service { name, .. } if is_fts(&name) || is_qlever(&name) => G::Bgp {
                 patterns: Vec::new(),
             },
             G::Bgp { patterns } if patterns.iter().any(is_search) => {
@@ -1546,7 +1616,7 @@ fn lateral(p: &GraphPattern) -> bool {
     use GraphPattern as G;
     match p {
         G::Bgp { patterns } => patterns.iter().any(is_search),
-        G::Service { name, .. } => is_fts(name),
+        G::Service { name, .. } => is_fts(name) || is_qlever(name),
         G::Join { left, right }
         | G::Lateral { left, right }
         | G::LeftJoin { left, right, .. }
@@ -1624,6 +1694,17 @@ fn calls(
             "apf:textMatch"
         } else if iri(t, BIF_CONTAINS) {
             "bif:contains"
+        } else if iri(t, QL_CONTAINS_WORD) {
+            "ql:contains-word"
+        } else if iri(t, QL_CONTAINS_ENTITY) {
+            "ql:contains-entity"
+        } else if let Some((prefix, _)) = connector_option(t) {
+            match prefix {
+                "luc" => "luc:query",
+                "elastic" => "elastic:query",
+                "solr" => "solr:query",
+                _ => "opensearch:query",
+            }
         } else if iri(t, NEAREST) {
             "tt:nearest"
         } else {
@@ -1642,8 +1723,15 @@ fn calls(
             bds(&mut call, t, &patterns, &bad)?;
         } else if function == "textMatch" || function == "apf:textMatch" {
             text_match(&mut call, subject, args, &bad)?;
-        } else if function == "bif:contains" {
+        } else if function == "bif:contains" || function == "ql:contains-word" {
             bif_contains(&mut call, subject, t, &bad)?;
+        } else if function == "ql:contains-entity" {
+            return Err(bad(
+                "is not supported: the text records here are the literals of the data, which \
+                 mention no entities; find the resource with a triple that has the literal",
+            ));
+        } else if function.ends_with(":query") && function != "text:query" {
+            connector(&mut call, t, &patterns, &bad)?;
         } else {
             if jena {
                 // (?s ?score ?literal) text:query (property "query" limit)
@@ -1743,11 +1831,25 @@ fn calls(
             o.predicate, o.subject
         )));
     }
+    // A connector's options: on a node that searches, or the score of what it finds.
+    if let Some(o) = patterns.iter().find(|o| {
+        connector_option(o).is_some_and(|(_, name)| {
+            !patterns.iter().any(|t| {
+                connector_option(t).is_some_and(|(_, n)| n == "query") && t.subject == o.subject
+            }) && !(name == "score" && calls.iter().any(|c| c.subject == o.subject))
+        })
+    }) {
+        return Err(Error::Request(format!(
+            "{} is an option of a GraphDB connector's search, but nothing searches with its \
+             query on {}",
+            o.predicate, o.subject
+        )));
+    }
     let left = patterns
         .into_iter()
         .filter(|t| {
             !is_search(t)
-                && !is_bds_option(t)
+                && !is_option(t)
                 && !matches!(&t.subject, TermPattern::BlankNode(b)
                     if used.contains(b.as_str()) && (iri(t, RDF_FIRST) || iri(t, RDF_REST)))
         })
@@ -2039,6 +2141,222 @@ fn bif_contains(
         _ => return Err(bad("the object must be the query string")),
     }
     Ok(())
+}
+
+/// A GraphDB connector's search: `?search a <…/instance#index> ; luc:query "words" ;
+/// luc:entities ?entity ; luc:limit n ; luc:offset n . ?entity luc:score ?score`, the query
+/// in Lucene's syntax. The entities are the resources whose indexed literals match: one index
+/// answers whatever index is named.
+fn connector(
+    call: &mut Call,
+    t: &TriplePattern,
+    patterns: &[TriplePattern],
+    bad: &dyn Fn(&str) -> Error,
+) -> Result<(), Error> {
+    let prefix = call.function.trim_end_matches(":query");
+    let mut entities = None;
+    let mut query = None;
+    let mut seen: Vec<&str> = Vec::new();
+    for o in patterns.iter().filter(|o| o.subject == t.subject) {
+        let Some((_, name)) = connector_option(o) else {
+            continue;
+        };
+        if name != "type" && seen.contains(&name) {
+            return Err(bad(&format!("{prefix}:{name} is given twice")));
+        }
+        seen.push(name);
+        let number = || match &o.object {
+            TermPattern::Literal(l) => l.value().parse::<usize>().map_err(|_| {
+                bad(&format!(
+                    "{prefix}:{name} takes a whole number of 0 or more"
+                ))
+            }),
+            _ => Err(bad(&format!("{prefix}:{name} takes a whole number"))),
+        };
+        match name {
+            "type" => {}
+            "query" => match &o.object {
+                TermPattern::Literal(l) => query = Some(l.value().to_owned()),
+                TermPattern::Variable(v) => call.query_var = Some(v.clone()),
+                _ => return Err(bad("the query must be a string, or a variable")),
+            },
+            "entities" => match &o.object {
+                TermPattern::Variable(v) => entities = Some(v.clone()),
+                _ => return Err(bad(&format!("{prefix}:entities takes a variable"))),
+            },
+            "limit" => call.limit = Some(number()?),
+            "offset" => call.skip = number()?,
+            _ => {
+                return Err(bad(&format!(
+                    "{prefix}:{name} is not supported; {prefix}:query, entities, limit and \
+                     offset are, with {prefix}:score on the entity"
+                )));
+            }
+        }
+    }
+    let Some(entity) = entities else {
+        return Err(bad(&format!(
+            "{prefix}:entities ?entity is needed: the variable of the resources found"
+        )));
+    };
+    for o in patterns.iter().filter(|o| {
+        o.subject == TermPattern::Variable(entity.clone())
+            && connector_option(o).is_some_and(|(_, n)| n == "score")
+    }) {
+        match &o.object {
+            TermPattern::Variable(v) if call.score.is_none() => call.score = Some(v.clone()),
+            TermPattern::Variable(_) => return Err(bad(&format!("{prefix}:score is given twice"))),
+            _ => return Err(bad(&format!("{prefix}:score takes a variable"))),
+        }
+    }
+    call.subject = TermPattern::Variable(entity);
+    call.limit = call.limit.map(|l| l.saturating_add(call.skip));
+    if let Some(q) = query {
+        call.query = call.parse(&q).map_err(|m| bad(&m))?;
+    }
+    Ok(())
+}
+
+fn is_qlever(name: &NamedNodePattern) -> bool {
+    matches!(name, NamedNodePattern::NamedNode(n) if n.as_str() == QLEVER_TEXT_SEARCH)
+}
+
+/// QLever's `SERVICE textSearch: { ?t textSearch:contains [ textSearch:word "word*" ;
+/// textSearch:score ?score ] }`: a call per text variable, whose records are the literals
+/// matched, each of its words required. Entity searches are refused: the literals mention no
+/// entities.
+fn qlever_calls(inner: &GraphPattern) -> Result<Vec<Call>, Error> {
+    let bad = |m: &str| Error::Request(format!("textSearch: {m}"));
+    let GraphPattern::Bgp { patterns } = inner else {
+        return Err(bad("the service's pattern must be triples"));
+    };
+    let option = |t: &TriplePattern| match &t.predicate {
+        NamedNodePattern::NamedNode(p) => p
+            .as_str()
+            .strip_prefix(QLEVER_TEXT_SEARCH)
+            .map(str::to_owned),
+        NamedNodePattern::Variable(_) => None,
+    };
+    let mut calls: Vec<Call> = Vec::new();
+    let mut configs: Vec<TermPattern> = Vec::new();
+    for t in patterns {
+        if option(t).as_deref() != Some("contains") {
+            continue;
+        }
+        let TermPattern::Variable(text) = &t.subject else {
+            return Err(bad(
+                "the subject of textSearch:contains must be a variable: the text",
+            ));
+        };
+        if configs.contains(&t.object) {
+            return Err(bad("a configuration is linked to several text variables"));
+        }
+        configs.push(t.object.clone());
+        let (mut word, mut score) = (None, None);
+        let mut seen: Vec<String> = Vec::new();
+        for o in patterns.iter().filter(|o| o.subject == t.object) {
+            let Some(name) = option(o) else {
+                return Err(bad(&format!("{} is not a textSearch: option", o.predicate)));
+            };
+            if seen.contains(&name) {
+                return Err(bad(&format!(
+                    "textSearch:{name} is given twice in a configuration"
+                )));
+            }
+            seen.push(name.clone());
+            match (name.as_str(), &o.object) {
+                ("word", TermPattern::Literal(l)) if !l.value().trim().is_empty() => {
+                    word = Some(l.value().to_owned());
+                }
+                ("word", _) => return Err(bad("textSearch:word takes a word, not empty")),
+                ("score", TermPattern::Variable(v)) => score = Some(v.clone()),
+                ("score", _) => return Err(bad("textSearch:score takes a variable")),
+                ("entity", _) => {
+                    return Err(bad(
+                        "textSearch:entity is not supported: the text records here are the \
+                         literals of the data, which mention no entities; find the resource \
+                         with a triple that has the literal",
+                    ));
+                }
+                (other, _) => {
+                    return Err(bad(&format!(
+                        "textSearch:{other} is not supported; textSearch:word and score are"
+                    )));
+                }
+            }
+        }
+        let Some(word) = word else {
+            return Err(bad("a configuration needs textSearch:word"));
+        };
+        let mut call = match calls.iter().position(|c| c.literal.as_ref() == Some(text)) {
+            Some(i) => calls.remove(i),
+            None => {
+                let mut call = Call::new(
+                    "textSearch:word",
+                    TermPattern::BlankNode(spargebra::term::BlankNode::default()),
+                );
+                call.literal = Some(text.clone());
+                call.per_literal = true;
+                call
+            }
+        };
+        call.query
+            .clauses
+            .extend(call.parse(&word).map_err(|m| bad(&m))?.clauses);
+        if let Some(score) = score {
+            if call.score.is_some() {
+                return Err(bad(
+                    "one textSearch:score per text variable: the score here is that of all its \
+                     words together",
+                ));
+            }
+            call.score = Some(score);
+        }
+        calls.push(call);
+    }
+    if calls.is_empty() {
+        return Err(bad("textSearch:contains is needed"));
+    }
+    if let Some(t) = patterns
+        .iter()
+        .find(|t| option(t).as_deref() != Some("contains") && !configs.contains(&t.subject))
+    {
+        return Err(bad(&format!(
+            "{t} is not on a configuration of textSearch:contains"
+        )));
+    }
+    for call in &calls {
+        distinct_variables(call, &bad)?;
+    }
+    Ok(calls)
+}
+
+/// QLever's words: each required, a trailing `*` matching the words it starts.
+fn qlever_words(query: &str) -> Result<TextQuery, String> {
+    let mut clauses = Vec::new();
+    for token in query.split_whitespace() {
+        let (stem, prefix) = match token.strip_suffix('*') {
+            Some(stem) => (stem, true),
+            None => (token, false),
+        };
+        if stem.contains('*') || (prefix && stem.is_empty()) {
+            return Err(format!(
+                "a wildcard other than at the end of a word (\"{token}\")"
+            ));
+        }
+        for word in words(stem) {
+            clauses.push(Clause {
+                occur: Occur::Must,
+                words: vec![word],
+                prefix,
+                stem: None,
+            });
+        }
+    }
+    if clauses.is_empty() {
+        return Err("the query has no words".into());
+    }
+    Ok(TextQuery { clauses })
 }
 
 /// Stardog's `SERVICE fts:textMatch { [] fts:query "words" ; fts:result ?literal ;
