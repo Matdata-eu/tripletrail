@@ -20,6 +20,8 @@
 //!   node, its own rows.
 //! - Links to the resource that no row shows are listed per property, with a sample of the
 //!   resources they come from.
+//! - The page around the rows ([`page`]): a header with the actions, and the tabs every
+//!   resource has (All properties, Incoming links, Graph, Data model, RDF).
 
 use crate::HttpError;
 use serde_json::{Value as Json, json};
@@ -31,6 +33,9 @@ use tripletrail::oxigraph::model::{
     TermRef,
 };
 use tripletrail::{Engine, ReadableGraphs};
+
+mod page;
+pub(crate) use page::{MAX_EMBEDDED_BYTES, MAX_EMBEDDED_TRIPLES, PageRdf, prefixes};
 
 const SH: &str = "http://www.w3.org/ns/shacl#";
 const DASH: &str = "http://datashapes.org/dash#";
@@ -91,6 +96,14 @@ pub(crate) struct View {
     /// What the map shows around them (`rd:context` of a map row: the section of line a
     /// track is part of...), drawn muted; at most [`MAX_GEOMETRIES`].
     pub(crate) context: Vec<Geometry>,
+    /// Every property of the resource with its values (the first [`MAX_VALUES`] of each), the
+    /// type first, for the All properties tab and the graph.
+    pub(crate) properties: Vec<Incoming>,
+    /// Every link to the resource by property, also those a row shows, for the Incoming links
+    /// tab and the graph.
+    pub(crate) links_in: Vec<Incoming>,
+    /// The data model of the resource's classes, from the shapes.
+    pub(crate) model: page::Model,
 }
 
 /// A geometry of the resource, for the map.
@@ -2262,9 +2275,27 @@ pub(crate) fn build(
     groups.sort_by_key(|g| tabs.iter().position(|t| *t == g.tab));
     badges.sort_by(|a, b| a.order.total_cmp(&b.order));
 
-    // The links to the resource no row shows.
+    // The links to the resource no row shows (`incoming`), and all of them (`links_in`).
     let mut incoming: Vec<Incoming> = Vec::new();
+    let mut links_in: Vec<Incoming> = Vec::new();
     for q in &incoming_quads {
+        let i = match links_in.iter().position(|i| i.property.iri == q.predicate) {
+            Some(i) => i,
+            None => {
+                links_in.push(Incoming {
+                    property: ctx.link(&q.predicate),
+                    subjects: Vec::new(),
+                    count: 0,
+                });
+                links_in.len() - 1
+            }
+        };
+        links_in[i].count += 1;
+        if links_in[i].subjects.len() < MAX_INCOMING {
+            links_in[i]
+                .subjects
+                .push(ctx.value(&q.subject.clone().into(), MAX_DEPTH));
+        }
         if used.contains(&(q.predicate.clone(), true)) {
             continue;
         }
@@ -2287,6 +2318,38 @@ pub(crate) fn build(
         }
     }
     incoming.sort_by_key(|i| std::cmp::Reverse(i.count));
+    links_in.sort_by_key(|i| std::cmp::Reverse(i.count));
+    // Every property, the type and the label first, then by name.
+    let mut properties: Vec<Incoming> = outgoing
+        .iter()
+        .enumerate()
+        .map(|(i, (p, terms))| Incoming {
+            property: ctx.link(p),
+            subjects: terms.iter().map(|t| ctx.value(t, 0)).collect(),
+            count: count(i),
+        })
+        .collect();
+    let rank = |p: &NamedNode| match p.as_str() {
+        s if s == rdf::TYPE.as_str() => 0,
+        s if s == rdfs::LABEL.as_str() => 1,
+        _ => 2,
+    };
+    properties.sort_by_cached_key(|i| {
+        (
+            rank(&i.property.iri),
+            i.property
+                .label
+                .clone()
+                .unwrap_or_else(|| local_name(i.property.iri.as_str()).to_owned())
+                .to_lowercase(),
+        )
+    });
+    let model = page::model(
+        &ctx,
+        &types,
+        &outgoing.iter().map(|(p, _)| p.clone()).collect(),
+        &links_in.iter().map(|i| i.property.iri.clone()).collect(),
+    );
 
     // One more than shown, to know there are more; none of the hidden properties.
     let mut geometries = Vec::new();
@@ -2323,6 +2386,9 @@ pub(crate) fn build(
         incoming_truncated,
         truncated: outgoing_truncated,
         own: !outgoing.is_empty(),
+        properties,
+        links_in,
+        model,
     }))
 }
 
@@ -2443,6 +2509,12 @@ pub(crate) struct PageLinks<'a> {
     pub(crate) live_map: bool,
     /// The raster tiles under it and their attribution (`--map-tiles`); none: no base map.
     pub(crate) basemap: Option<(&'a str, &'a str)>,
+    /// The dataset, for the links to its map and Explore page (with the web UI).
+    pub(crate) dataset: Option<&'a str>,
+    /// The URL of this page, for Share.
+    pub(crate) page: String,
+    /// The resource's description for the RDF tab; none when it has no triples of its own.
+    pub(crate) rdf: Option<page::PageRdf>,
 }
 
 fn html_link(out: &mut String, links: &PageLinks<'_>, l: &Link) {
@@ -5378,16 +5450,51 @@ fn viewer_for(v: &Value) -> &'static str {
 }
 
 const STYLE: &str = "\
-:root{--fg:#1d2433;--muted:#5b6475;--line:#e3e6ec;--bg:#fff;--chip:#eef2f8;--accent:#1f5fbf}\
-@media (prefers-color-scheme:dark){:root{--fg:#e6e9ef;--muted:#9aa3b2;--line:#2c3240;--bg:#151922;--chip:#222937;--accent:#7fb0ff}}\
-body{font-family:system-ui,sans-serif;margin:0;color:var(--fg);background:var(--bg);line-height:1.45}\
-main{max-width:64rem;margin:0 auto;padding:1.25rem 1rem 3rem}\
-h1{font-size:1.5rem;margin:.2rem 0;word-break:break-word}h2{font-size:1.05rem;margin:1.6rem 0 .4rem;\
+:root{--fg:#1d2433;--muted:#5b6475;--line:#e3e6ec;--line-strong:#b9c0cc;--bg:#fff;--page:#f4f6f9;--chip:#eef2f8;--accent:#1f5fbf;--on-accent:#fff;--signal:#c0392b;\
+--code:#f6f8fb;--tok-iri:#1f5fbf;--tok-string:#2e7d32;--tok-name:#7b3fa0;--tok-keyword:#b3471d;--tok-comment:#7a8394}\
+@media (prefers-color-scheme:dark){:root{--fg:#e6e9ef;--muted:#9aa3b2;--line:#2c3240;--line-strong:#465064;--bg:#1a1f2a;--page:#11151c;--chip:#242b39;--accent:#7fb0ff;--on-accent:#0b1220;--signal:#ff7b6b;\
+--code:#141922;--tok-iri:#7fb0ff;--tok-string:#8fd18f;--tok-name:#d0a8ef;--tok-keyword:#ffab7a;--tok-comment:#8a93a3}}\
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;color:var(--fg);background:var(--page);line-height:1.45}\
+main{max-width:80rem;margin:0 auto;padding:1rem 1rem 3rem}\
+h1{font-size:1.6rem;margin:.3rem 0 .2rem;word-break:break-word}h2{font-size:1.05rem;margin:1.6rem 0 .4rem;\
 border-bottom:1px solid var(--line);padding-bottom:.25rem}\
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}\
-.iri{color:var(--muted);font-size:.85rem;word-break:break-all}\
-.chips{margin:.5rem 0}.chip{display:inline-block;background:var(--chip);border-radius:1rem;padding:.1rem .6rem;\
-margin:0 .3rem .3rem 0;font-size:.85rem}\
+.chips{margin:0 0 .2rem}.chip{display:inline-block;background:var(--chip);border-radius:1rem;padding:.1rem .65rem;margin:0 .3rem .3rem 0;font-size:.82rem}\
+.page-head{background:var(--bg);border:1px solid var(--line);border-radius:.6rem;padding:.9rem 1.2rem 1rem}\
+.iri-line{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem .8rem}.iri{color:var(--muted);font-family:ui-monospace,monospace;font-size:.85rem;word-break:break-all}\
+.actions{display:inline-flex;flex-wrap:wrap;gap:.35rem;align-items:center}\
+.btn{display:inline-flex;align-items:center;gap:.3rem;font:inherit;font-size:.82rem;line-height:1.2;color:var(--fg);background:var(--bg);border:1px solid var(--line-strong);\
+border-radius:.35rem;padding:.28rem .65rem;cursor:pointer;text-decoration:none;white-space:nowrap}.btn:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}\
+.btn[hidden]{display:none}.menu{position:relative}.menu>summary{list-style:none}.menu>summary::-webkit-details-marker{display:none}.menu>summary::after{content:'\\25BE';font-size:.7rem}\
+.menu-items{position:absolute;right:0;z-index:5;margin-top:.25rem;background:var(--bg);border:1px solid var(--line-strong);border-radius:.4rem;padding:.3rem 0;min-width:9rem;box-shadow:0 6px 20px rgba(0,0,0,.12)}\
+.menu-items a{display:block;padding:.3rem .8rem;color:var(--fg)}.menu-items a:hover{background:var(--chip);text-decoration:none}\
+.card{background:var(--bg);border:1px solid var(--line);border-radius:.6rem;padding:.5rem 1rem 1rem;margin:1rem 0;overflow-x:auto}\
+.card>h2:first-child,.card>h3:first-child{margin-top:.4rem}details.card>summary{cursor:pointer;font-weight:600;padding:.3rem 0}\
+.tabs{display:flex;gap:.15rem;border-bottom:1px solid var(--line);margin:1rem 0 0;overflow-x:auto;scrollbar-width:thin}\
+.tab-btn{font:inherit;font-size:.92rem;background:none;border:0;border-bottom:2px solid transparent;padding:.55rem .85rem;color:var(--muted);cursor:pointer;white-space:nowrap}\
+.tab-btn:hover{color:var(--fg)}.tab-btn[aria-selected=true]{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}\
+.tab-count{margin-left:.4rem;font-size:.75rem;background:var(--chip);border-radius:1rem;padding:0 .45rem;font-weight:400}\
+body.tabbed .tab-panel>h2.tab{display:none}.tab-panel[hidden]{display:none}\
+table.triples th{width:30%}.prop{font-weight:500;color:var(--fg)}.curie{font-family:ui-monospace,monospace;font-size:.75rem;color:var(--muted)}\
+ul.plain{list-style:none;padding:0;margin:0}ul.plain li{padding:.05rem 0}\
+.diagram{overflow:auto;max-height:44rem}.diagram svg{display:block;font-family:system-ui,sans-serif}\
+.graph .edge,.uml .association{fill:none;stroke:var(--line-strong);stroke-width:1.4}.graph .arrow{fill:var(--line-strong)}.edge-label{font-size:11px;fill:var(--muted);font-family:ui-monospace,monospace}\
+.graph .node rect{fill:var(--bg);stroke:var(--accent);stroke-width:1.5}.graph .node text{font-size:12px;fill:var(--accent);text-anchor:middle}\
+.graph .node.root rect{stroke:var(--signal);stroke-width:3}.graph .node.root text{fill:var(--fg);font-weight:600}\
+.graph .node.class rect{fill:var(--accent);stroke:var(--accent)}.graph .node.class text{fill:var(--on-accent)}\
+.graph .node.literal rect{stroke:var(--fg);stroke-width:1}.graph .node.literal text{fill:var(--fg);font-family:ui-monospace,monospace}\
+.graph .node.more rect{stroke:var(--line-strong);stroke-dasharray:4 3}.graph .node.more text{fill:var(--muted)}.graph a:hover rect{stroke:var(--signal)}\
+.uml .box rect{fill:var(--bg);stroke:var(--fg);stroke-width:1.2}.uml .box.own rect{stroke:var(--accent);stroke-width:2}.uml .box.other rect{fill:var(--chip);stroke:var(--line-strong)}\
+.uml .head{font-size:13px;font-weight:600;fill:var(--fg);text-anchor:middle}.uml a:hover .head{fill:var(--accent)}.uml .sep{stroke:var(--line-strong)}\
+.uml .member text,.uml .more-line{font-size:12px;fill:var(--fg);font-family:ui-monospace,monospace}.uml .more-line{fill:var(--muted)}.uml .member.assoc text{fill:var(--accent)}\
+.uml .dot{fill:none;stroke:var(--muted);stroke-width:1.2}.uml .dot.used{fill:var(--accent);stroke:var(--accent)}.uml .association.used{stroke:var(--accent)}\
+.uml .generalization{fill:none;stroke:var(--fg);stroke-width:1.2}.uml .gen{fill:var(--bg);stroke:var(--fg)}.uml .assoc-head{fill:none;stroke:var(--line-strong);stroke-width:1.4}\
+span.dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;border:1.5px solid var(--muted);vertical-align:middle}span.dot.used{background:var(--accent);border-color:var(--accent)}\
+.code-tools{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:.4rem 0}.grow{flex:1}\
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:.35rem;overflow:hidden}.seg-btn{font-size:.82rem;padding:.28rem .7rem;color:var(--fg);border-left:1px solid var(--line-strong)}\
+.seg-btn:first-child{border-left:0}.seg-btn:hover{background:var(--chip);text-decoration:none}.seg-btn[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}\
+pre.code{background:var(--code);border:1px solid var(--line);border-radius:.4rem;padding:.8rem;font-size:.8rem;line-height:1.5;max-height:40rem;overflow:auto;white-space:pre;margin:0}\
+.tok-iri{color:var(--tok-iri)}.tok-string{color:var(--tok-string)}.tok-name,.tok-key,.tok-tag{color:var(--tok-name)}.tok-keyword,.tok-attr{color:var(--tok-keyword)}.tok-comment{color:var(--tok-comment)}\
 .docs{font-size:.8rem;color:var(--muted)}.docs a{margin-right:.5rem}\
 table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;padding:.3rem .5rem;\
 border-bottom:1px solid var(--line)}th{width:28%;font-weight:500;color:var(--muted)}\
@@ -5766,6 +5873,146 @@ fn draw(
 }
 
 /// The page of `view`.
+/// The rows of a group as a card under heading `h`; false (and nothing written) when none of
+/// its rows draws anything.
+fn html_group(out: &mut String, view: &View, links: &PageLinks<'_>, g: &Group, h: &str) -> bool {
+    let group_start = out.len();
+    out.push_str("<section class=\"card group\">");
+    if !g.label.is_empty() {
+        let _ = write!(out, "<{h}>{}</{h}>", escape(&g.label));
+    }
+    out.push_str("<table>");
+    let mut written = 0;
+    // A map row is the page's map, drawn above.
+    for r in g
+        .rows
+        .iter()
+        .filter(|r| r.widget.as_deref() != Some("MapViewer"))
+    {
+        let row_start = out.len();
+        let _ = write!(
+            out,
+            "<tr><th title=\"{}\">{}</th><td>",
+            escape(&r.path.clone().unwrap_or_else(|| format!(
+                "{}{}",
+                if r.inverse { "^" } else { "" },
+                r.property.as_str()
+            ))),
+            escape(&r.label)
+        );
+        // A generic widget draws the row; a widget not drawn here falls back to its
+        // values, table and named paths.
+        let mut known = true;
+        let drawn = match r.widget.as_deref() {
+            Some("DocumentViewer") => html_documents(out, links, r),
+            Some("ScaleBarViewer") => html_scale_bar(out, r),
+            Some("ConceptTreeViewer") => html_concept_tree(out, links, r, &view.iri),
+            Some("FacilitiesViewer") => html_facilities(out, links, r),
+            Some("KeyFiguresViewer") => html_key_figures(out, links, r),
+            Some("LrsLocationViewer") => html_lrs_location(out, links, r),
+            Some("StepChartViewer") => html_step_chart(out, r),
+            Some("LineStopsViewer") => html_line_stops(out, links, r),
+            Some("RouteDiagramViewer") => html_route_diagram(out, links, r),
+            Some("AlongLineViewer") => html_along_line(out, r),
+            Some("LineProfileViewer") => html_line_profile(out, r),
+            Some("LinePositionViewer") => html_line_position(out, links, r, &view.iri),
+            Some("PlatformViewer") => html_platform(out, r),
+            Some("CrossSectionViewer") => html_cross_section(out, r),
+            Some("TrackLayoutViewer") => html_track_layout(out, links, r),
+            Some("TopologyViewer") => html_topology(out, links, r, &view.iri),
+            Some("PositionedViewer") => html_positioned(out, links, r, &view.iri),
+            Some("ChangesViewer") => html_changes(out, links, r),
+            Some("DataStatusViewer") => html_data_status(out, links, r),
+            Some("ParameterIndexViewer") => html_parameters(out, links, r),
+            Some("SymbolViewer") => html_symbols(out, links, r),
+            Some("ConnectionsViewer") => {
+                html_connections(out, links, r, &view.iri, &view.geometries)
+            }
+            _ => {
+                known = false;
+                false
+            }
+        };
+        // A widget drawn here with nothing to draw (an along-the-line strip without the
+        // section's kilometres), on a row with nothing else, is left out, as rinf-describe
+        // does; so is a line profile or list of stops whose sections have no kilometres.
+        if known
+            && !drawn
+            && ((r.viewer == "WidgetViewer" && r.values.is_empty() && r.table.is_none())
+                || matches!(
+                    r.widget.as_deref(),
+                    Some("LineProfileViewer" | "LineStopsViewer")
+                ))
+        {
+            out.truncate(row_start);
+            continue;
+        }
+        written += 1;
+        if let Some(t) = &r.table {
+            if !drawn {
+                html_table(out, links, &r.values, t);
+            }
+            if t.truncated {
+                out.push_str(
+                    "<div class=\"more\">Not every cell was read: \
+                         an empty cell further down may have values.</div>",
+                );
+            }
+        }
+        let list = r.values.len() > 1 && r.table.is_none() && !drawn;
+        if list {
+            out.push_str("<ul>");
+        }
+        for v in r.values.iter().filter(|_| r.table.is_none() && !drawn) {
+            if list {
+                out.push_str("<li>");
+            }
+            html_value(out, links, v, r.viewer);
+            if list {
+                out.push_str("</li>");
+            }
+        }
+        if list {
+            out.push_str("</ul>");
+        }
+        if let Some(u) = r.unit.as_ref().filter(|_| !drawn) {
+            let _ = write!(out, " <span class=\"unit\">{}</span>", escape(u));
+        }
+        if !drawn {
+            html_params(out, links, r);
+        }
+        if r.more > 0 {
+            let _ = write!(out, "<div class=\"more\">and {} more</div>", r.more);
+        }
+        if r.truncated {
+            out.push_str(
+                "<div class=\"more\">Not every linked resource was read: \
+                     this is of the first ones.</div>",
+            );
+        }
+        out.push_str("</td></tr>");
+    }
+    if written == 0 {
+        out.truncate(group_start);
+        return false;
+    }
+    out.push_str("</table></section>");
+    true
+}
+
+/// A slug for a tab's key: lower case letters, digits and `-`.
+fn slug(label: &str) -> String {
+    let mut s = String::new();
+    for c in label.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            s.push(c);
+        } else if !s.ends_with('-') && !s.is_empty() {
+            s.push('-');
+        }
+    }
+    s.trim_end_matches('-').to_owned()
+}
+
 pub(crate) fn html(view: &View, links: &PageLinks<'_>) -> String {
     let title = view
         .label
@@ -5775,21 +6022,10 @@ pub(crate) fn html(view: &View, links: &PageLinks<'_>) -> String {
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <meta name=\"referrer\" content=\"strict-origin\">\
-         <title>{}</title><style>{STYLE}</style></head><body><main><h1>{}</h1>\
-         <div class=\"iri\">{}</div>",
+         <title>{}</title><style>{STYLE}</style></head><body><main>",
         escape(title),
-        escape(title),
-        escape(view.iri.as_str())
     );
-    if !view.classes.is_empty() {
-        out.push_str("<div class=\"chips\">");
-        for c in &view.classes {
-            out.push_str("<span class=\"chip\">");
-            html_link(&mut out, links, c);
-            out.push_str("</span>");
-        }
-        out.push_str("</div>");
-    }
+    page::header(&mut out, view, links, title);
     if !view.badges.is_empty() {
         out.push_str("<div class=\"badges\">");
         for b in &view.badges {
@@ -5810,192 +6046,122 @@ pub(crate) fn html(view: &View, links: &PageLinks<'_>) -> String {
         }
         out.push_str("</div>");
     }
-    if view.own && !links.documents.is_empty() {
-        out.push_str("<div class=\"docs\">Download: ");
-        for (name, url) in &links.documents {
-            let _ = write!(out, "<a href=\"{}\">{}</a>", escape(url), escape(name));
-        }
-        out.push_str("</div>");
-    }
+    out.push_str("</header>");
+
+    // The tabs: (key, label, content). The overview has the map and the groups without a tab.
+    let mut tabs: Vec<(String, String, String)> = Vec::new();
+    let mut overview = String::new();
     if !view.geometries.is_empty() || !view.context.is_empty() {
-        map(&mut out, &view.geometries, &view.context, links);
-        if view.geometries_truncated {
-            let _ = write!(
-                out,
-                "<div class=\"more\">The first {MAX_GEOMETRIES} geometries are drawn.</div>"
-            );
+        let start = overview.len();
+        overview.push_str("<section class=\"card map-card\">");
+        let inner = overview.len();
+        map(&mut overview, &view.geometries, &view.context, links);
+        if overview.len() == inner {
+            overview.truncate(start);
+        } else {
+            if view.geometries_truncated {
+                let _ = write!(
+                    overview,
+                    "<div class=\"more\">The first {MAX_GEOMETRIES} geometries are drawn.</div>"
+                );
+            }
+            overview.push_str("</section>");
         }
     }
     if view.truncated {
         let _ = write!(
-            out,
+            overview,
             "<p class=\"more\">Only the first {MAX_OUTGOING_SCAN} triples of this resource are shown.</p>"
         );
     }
-    let mut tab: Option<&str> = None;
+    for g in view.groups.iter().filter(|g| g.tab.is_none()) {
+        html_group(&mut overview, view, links, g, "h2");
+    }
+    if !overview.is_empty() {
+        tabs.push(("overview".to_owned(), "Overview".to_owned(), overview));
+    }
+    let mut shape_tabs: Vec<&str> = Vec::new();
     for g in &view.groups {
-        // A group whose rows all draw nothing is left out, with its tab's heading when it is
-        // the tab's first.
-        let group_start = out.len();
-        let before = tab;
-        // A tab is a heading over its groups.
-        if g.tab.as_deref() != tab {
-            tab = g.tab.as_deref();
-            if let Some(t) = tab {
-                let _ = write!(out, "<h2 class=\"tab\">{}</h2>", escape(t));
+        if let Some(t) = g.tab.as_deref().filter(|t| !shape_tabs.contains(t)) {
+            shape_tabs.push(t);
+        }
+    }
+    for t in shape_tabs {
+        let mut content = String::new();
+        let mut any = false;
+        for g in view.groups.iter().filter(|g| g.tab.as_deref() == Some(t)) {
+            any |= html_group(&mut content, view, links, g, "h3");
+        }
+        if any {
+            let mut key = slug(t);
+            if key.is_empty() {
+                key = "tab".to_owned();
             }
-        }
-        let h = if tab.is_some() { "h3" } else { "h2" };
-        if !g.label.is_empty() {
-            let _ = write!(out, "<{h}>{}</{h}>", escape(&g.label));
-        }
-        out.push_str("<table>");
-        let mut written = 0;
-        // A map row is the page's map, drawn above.
-        for r in g
-            .rows
-            .iter()
-            .filter(|r| r.widget.as_deref() != Some("MapViewer"))
-        {
-            let row_start = out.len();
-            let _ = write!(
-                out,
-                "<tr><th title=\"{}\">{}</th><td>",
-                escape(&r.path.clone().unwrap_or_else(|| format!(
-                    "{}{}",
-                    if r.inverse { "^" } else { "" },
-                    r.property.as_str()
-                ))),
-                escape(&r.label)
-            );
-            // A generic widget draws the row; a widget not drawn here falls back to its
-            // values, table and named paths.
-            let mut known = true;
-            let drawn = match r.widget.as_deref() {
-                Some("DocumentViewer") => html_documents(&mut out, links, r),
-                Some("ScaleBarViewer") => html_scale_bar(&mut out, r),
-                Some("ConceptTreeViewer") => html_concept_tree(&mut out, links, r, &view.iri),
-                Some("FacilitiesViewer") => html_facilities(&mut out, links, r),
-                Some("KeyFiguresViewer") => html_key_figures(&mut out, links, r),
-                Some("LrsLocationViewer") => html_lrs_location(&mut out, links, r),
-                Some("StepChartViewer") => html_step_chart(&mut out, r),
-                Some("LineStopsViewer") => html_line_stops(&mut out, links, r),
-                Some("RouteDiagramViewer") => html_route_diagram(&mut out, links, r),
-                Some("AlongLineViewer") => html_along_line(&mut out, r),
-                Some("LineProfileViewer") => html_line_profile(&mut out, r),
-                Some("LinePositionViewer") => html_line_position(&mut out, links, r, &view.iri),
-                Some("PlatformViewer") => html_platform(&mut out, r),
-                Some("CrossSectionViewer") => html_cross_section(&mut out, r),
-                Some("TrackLayoutViewer") => html_track_layout(&mut out, links, r),
-                Some("TopologyViewer") => html_topology(&mut out, links, r, &view.iri),
-                Some("PositionedViewer") => html_positioned(&mut out, links, r, &view.iri),
-                Some("ChangesViewer") => html_changes(&mut out, links, r),
-                Some("DataStatusViewer") => html_data_status(&mut out, links, r),
-                Some("ParameterIndexViewer") => html_parameters(&mut out, links, r),
-                Some("SymbolViewer") => html_symbols(&mut out, links, r),
-                Some("ConnectionsViewer") => {
-                    html_connections(&mut out, links, r, &view.iri, &view.geometries)
-                }
-                _ => {
-                    known = false;
-                    false
-                }
-            };
-            // A widget drawn here with nothing to draw (an along-the-line strip without the
-            // section's kilometres), on a row with nothing else, is left out, as rinf-describe
-            // does; so is a line profile or list of stops whose sections have no kilometres.
-            if known
-                && !drawn
-                && ((r.viewer == "WidgetViewer" && r.values.is_empty() && r.table.is_none())
-                    || matches!(
-                        r.widget.as_deref(),
-                        Some("LineProfileViewer" | "LineStopsViewer")
-                    ))
+            while tabs.iter().any(|(k, _, _)| *k == key)
+                || ["properties", "incoming", "graph", "model", "rdf"].contains(&key.as_str())
             {
-                out.truncate(row_start);
-                continue;
+                key.push_str("-2");
             }
-            written += 1;
-            if let Some(t) = &r.table {
-                if !drawn {
-                    html_table(&mut out, links, &r.values, t);
-                }
-                if t.truncated {
-                    out.push_str(
-                        "<div class=\"more\">Not every cell was read: \
-                         an empty cell further down may have values.</div>",
-                    );
-                }
-            }
-            let list = r.values.len() > 1 && r.table.is_none() && !drawn;
-            if list {
-                out.push_str("<ul>");
-            }
-            for v in r.values.iter().filter(|_| r.table.is_none() && !drawn) {
-                if list {
-                    out.push_str("<li>");
-                }
-                html_value(&mut out, links, v, r.viewer);
-                if list {
-                    out.push_str("</li>");
-                }
-            }
-            if list {
-                out.push_str("</ul>");
-            }
-            if let Some(u) = r.unit.as_ref().filter(|_| !drawn) {
-                let _ = write!(out, " <span class=\"unit\">{}</span>", escape(u));
-            }
-            if !drawn {
-                html_params(&mut out, links, r);
-            }
-            if r.more > 0 {
-                let _ = write!(out, "<div class=\"more\">and {} more</div>", r.more);
-            }
-            if r.truncated {
-                out.push_str(
-                    "<div class=\"more\">Not every linked resource was read: \
-                     this is of the first ones.</div>",
-                );
-            }
-            out.push_str("</td></tr>");
+            tabs.push((key, t.to_owned(), content));
         }
-        if written == 0 {
-            out.truncate(group_start);
-            tab = before;
-            continue;
-        }
-        out.push_str("</table>");
     }
-    if !view.incoming.is_empty() {
-        out.push_str("<h2>Referenced by</h2><table>");
-        for i in &view.incoming {
-            out.push_str("<tr><th>");
-            html_link(&mut out, links, &i.property);
-            out.push_str("</th><td><ul>");
-            for s in &i.subjects {
-                out.push_str("<li>");
-                html_value(&mut out, links, s, "LabelViewer");
-                out.push_str("</li>");
-            }
-            out.push_str("</ul>");
-            if i.count > i.subjects.len() {
-                let _ = write!(
-                    out,
-                    "<div class=\"more\">{} links{}</div>",
-                    i.count,
-                    if view.incoming_truncated {
-                        " or more"
-                    } else {
-                        ""
-                    }
-                );
-            }
-            out.push_str("</td></tr>");
-        }
-        out.push_str("</table>");
+    if !view.properties.is_empty() {
+        let mut content = String::new();
+        page::properties_panel(&mut content, view, links);
+        tabs.push((
+            "properties".to_owned(),
+            "All properties".to_owned(),
+            content,
+        ));
     }
-    out.push_str("</main></body></html>\n");
+    if !view.links_in.is_empty() {
+        let mut content = String::new();
+        page::incoming_panel(&mut content, view, links);
+        tabs.push(("incoming".to_owned(), "Incoming links".to_owned(), content));
+    }
+    {
+        let mut content = String::new();
+        page::graph_panel(&mut content, view, links);
+        tabs.push(("graph".to_owned(), "Graph".to_owned(), content));
+    }
+    {
+        let mut content = String::new();
+        page::model_panel(&mut content, view, links);
+        if !content.is_empty() {
+            tabs.push(("model".to_owned(), "Data model".to_owned(), content));
+        }
+    }
+    if view.own {
+        let mut content = String::new();
+        page::rdf_panel(&mut content, links);
+        if !content.is_empty() {
+            tabs.push(("rdf".to_owned(), "RDF".to_owned(), content));
+        }
+    }
+    let count = |key: &str| match key {
+        "properties" => Some(view.properties.iter().map(|p| p.count).sum::<usize>()),
+        "incoming" => Some(view.links_in.iter().map(|p| p.count).sum::<usize>()),
+        _ => None,
+    };
+    for (key, label, content) in &tabs {
+        let _ = write!(
+            out,
+            "<section class=\"tab-panel\" id=\"tab-{0}\" data-tab=\"{0}\" data-label=\"{1}\"{2}>",
+            escape(key),
+            escape(label),
+            count(key).map_or(String::new(), |n| format!(" data-count=\"{n}\""))
+        );
+        if key != "overview" {
+            let _ = write!(out, "<h2 class=\"tab\">{}</h2>", escape(label));
+        }
+        out.push_str(content);
+        out.push_str("</section>");
+    }
+    out.push_str("</main>");
+    if links.live_map {
+        out.push_str("<script type=\"module\" src=\"/$/ui/describe.js\"></script>");
+    }
+    out.push_str("</body></html>\n");
     out
 }
 

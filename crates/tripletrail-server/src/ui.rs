@@ -19,6 +19,7 @@ const GUIDE_JS: &str = include_str!("../ui/guide.js");
 const WORKBENCH_JS: &str = include_str!("../ui/workbench.js");
 const ACCESS_JS: &str = include_str!("../ui/access.js");
 const DESCRIBE_MAP_JS: &str = include_str!("../ui/describe-map.js");
+const DESCRIBE_JS: &str = include_str!("../ui/describe.js");
 const MAP_JS: &str = include_str!("../ui/map.js");
 const SEARCH_JS: &str = include_str!("../ui/search.js");
 const SHAPES_JS: &str = include_str!("../ui/shapes.js");
@@ -292,6 +293,7 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
         )),
         ["builder.js"] => Ok(page("text/javascript; charset=utf-8", BUILDER_JS)),
         ["describe-map.js"] => Ok(page("text/javascript; charset=utf-8", DESCRIBE_MAP_JS)),
+        ["describe.js"] => Ok(page("text/javascript; charset=utf-8", DESCRIBE_JS)),
         ["whats-new.json"] => Ok(page("application/json", WHATS_NEW)),
         ["icon.svg"] => Ok(page("image/svg+xml", ICON)),
         ["vendor", folder, name] => {
@@ -351,6 +353,7 @@ mod tests {
             ("workbench.js", super::WORKBENCH_JS),
             ("access.js", super::ACCESS_JS),
             ("describe-map.js", super::DESCRIBE_MAP_JS),
+            ("describe.js", super::DESCRIBE_JS),
             ("map.js", super::MAP_JS),
             ("search.js", super::SEARCH_JS),
             ("shapes.js", super::SHAPES_JS),
