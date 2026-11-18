@@ -998,9 +998,14 @@ mod tests {
         assert!(explainer.holds(t));
         assert_eq!(explainer.derive(t, 100_000, &|| true), Err(Cancelled));
         assert_eq!(explainer.derive(t, 3, &|| false), Ok(None));
-        let started = std::time::Instant::now();
         assert!(explainer.derive(t, 100_000, &|| false).unwrap().is_some());
-        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        // Bounded in steps, not wall time, which depends on the machine (a debug build on a
+        // shared CI runner took over 5 s): the search takes about 707,000 steps today.
+        assert!(
+            explainer.steps.get() < 1_000_000,
+            "{}",
+            explainer.steps.get()
+        );
     }
 
     #[test]

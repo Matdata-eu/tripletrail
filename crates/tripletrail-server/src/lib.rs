@@ -933,6 +933,28 @@ impl From<std::io::Error> for HttpError {
 
 type Body = Box<dyn Read>;
 
+/// A body that lets its caller permit go once it is read to its end: at its declared length,
+/// or at the end of the reader, so before its last bytes are handed on to be written.
+struct ReleaseAtEnd {
+    body: Body,
+    /// The bytes still to come, when the length is known.
+    left: Option<usize>,
+    permit: Option<limits::CallerPermit>,
+}
+
+impl Read for ReleaseAtEnd {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.body.read(buf)?;
+        if let Some(left) = &mut self.left {
+            *left = left.saturating_sub(n);
+        }
+        if (n == 0 && !buf.is_empty()) || self.left == Some(0) {
+            self.permit = None;
+        }
+        Ok(n)
+    }
+}
+
 pub(crate) struct Reply {
     pub(crate) status: u16,
     pub(crate) content_type: Option<String>,
@@ -1389,17 +1411,27 @@ fn send_reply(
     let bytes_in = request_header(&request, "Content-Length").and_then(|n| n.parse::<u64>().ok());
     let method = request.method().to_string();
     let url = request.url().to_owned();
-    let response = Response::new(
-        StatusCode(status),
-        headers,
-        if head {
-            Box::new(std::io::empty())
-        } else {
-            reply.body
-        },
-        if head { Some(0) } else { reply.length },
-        None,
-    );
+    let body: Body = if head {
+        Box::new(std::io::empty())
+    } else {
+        reply.body
+    };
+    // The caller's turn ends once the body is read to its end, before its last bytes are
+    // written: a client that sends its next request as soon as this answer is in must not be
+    // refused for a turn this one still holds.
+    let length = if head { Some(0) } else { reply.length };
+    if length == Some(0) {
+        context.caller_permit = None;
+    }
+    let body: Body = match context.caller_permit.take() {
+        Some(permit) => Box::new(ReleaseAtEnd {
+            body,
+            left: length,
+            permit: Some(permit),
+        }),
+        None => body,
+    };
+    let response = Response::new(StatusCode(status), headers, body, length, None);
     // Returns once the body is sent: the dataset is held until then.
     #[cfg(feature = "otel")]
     let sending = SystemTime::now();
