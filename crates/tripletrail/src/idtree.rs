@@ -429,7 +429,7 @@ impl Eval<'_> {
                         if ids.len() > limit {
                             return None;
                         }
-                        if ids.len() % 65536 == 0 && (self.cancelled)() {
+                        if ids.len().is_multiple_of(65536) && (self.cancelled)() {
                             return None;
                         }
                     }
