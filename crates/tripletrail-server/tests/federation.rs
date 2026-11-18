@@ -44,7 +44,22 @@ fn query(base: &str, q: &str) -> (u16, String) {
     (r.status(), r.into_string().unwrap())
 }
 
+/// The queries the remote has answered, once the count holds still: a server counts a query
+/// after its answer has gone out, so the last one may not be counted yet when the caller
+/// already has its answer.
 fn remote_queries(base: &str) -> u64 {
+    let mut count = counted_queries(base);
+    loop {
+        std::thread::sleep(Duration::from_millis(100));
+        let now = counted_queries(base);
+        if now == count {
+            return count;
+        }
+        count = now;
+    }
+}
+
+fn counted_queries(base: &str) -> u64 {
     let stats: serde_json::Value = serde_json::from_str(
         &ureq::get(&format!("{base}/$/stats/kg"))
             .call()
