@@ -1079,6 +1079,16 @@ struct ServeArgs {
     /// default tiles.
     #[arg(long, env = "TRIPLETRAIL_MAP_ATTRIBUTION")]
     map_attribution: Option<String>,
+    /// Another base map the Map page lets viewers switch to, as `TITLE|URL|ATTRIBUTION`: a
+    /// title for its menu, an XYZ raster tile URL template, and its credit (HTML). Repeat it
+    /// for more; in the environment, one per line.
+    #[arg(
+        long = "map-basemap",
+        env = "TRIPLETRAIL_MAP_BASEMAPS",
+        value_delimiter = '\n',
+        value_name = "TITLE|URL|ATTRIBUTION"
+    )]
+    map_basemaps: Vec<String>,
     /// Write one JSON line per request to standard output (time, method, path, dataset,
     /// status, ms, query_hash).
     #[arg(long, env = "TRIPLETRAIL_LOG_REQUESTS")]
@@ -1965,6 +1975,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         matgui_url,
         map_tiles,
         map_attribution,
+        map_basemaps,
         log_requests,
         shutdown_grace,
         base_iris,
@@ -2282,6 +2293,7 @@ fn serve(args: ServeArgs) -> Result<()> {
                 .or_else(|| (map_tiles == OSM_TILES).then(|| OSM_ATTRIBUTION.to_owned())),
             map_tiles: Some(map_tiles)
                 .filter(|t| !t.trim().is_empty() && !t.trim().eq_ignore_ascii_case("none")),
+            map_basemaps: read_basemaps(&map_basemaps)?,
             log_requests,
             shutdown_grace: Duration::try_from_secs_f64(shutdown_grace)
                 .map_err(|_| "--shutdown-grace takes a positive number of seconds")?,
@@ -3496,6 +3508,27 @@ fn run() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// The `--map-basemap` values as (title, tile URL, attribution); empty lines are skipped.
+fn read_basemaps(values: &[String]) -> Result<Vec<(String, String, String)>> {
+    let mut basemaps = Vec::new();
+    for value in values.iter().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+        let mut parts = value.splitn(3, '|').map(str::trim);
+        let (title, url, attribution) = (
+            parts.next().unwrap_or_default(),
+            parts.next().unwrap_or_default(),
+            parts.next().unwrap_or_default(),
+        );
+        if title.is_empty() || !(url.starts_with("https://") || url.starts_with("http://")) {
+            return Err(format!(
+                "--map-basemap takes TITLE|URL|ATTRIBUTION with an http(s) tile URL, not {value:?}"
+            )
+            .into());
+        }
+        basemaps.push((title.to_owned(), url.to_owned(), attribution.to_owned()));
+    }
+    Ok(basemaps)
 }
 
 /// The `sh:SPARQLFunction`s of RDF `files`.

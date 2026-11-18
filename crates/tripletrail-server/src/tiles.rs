@@ -283,7 +283,12 @@ pub(crate) fn route(
                 state.options.map_attribution.as_deref().unwrap_or_default(),
             )
         });
-        let style = style(&entry.name, &collections, base, basemap);
+        let mut style = style(&entry.name, &collections, base, basemap);
+        style["metadata"]["tripletrail:basemaps"] = basemaps(
+            state.options.map_tiles.as_deref(),
+            state.options.map_attribution.as_deref(),
+            &state.options.map_basemaps,
+        );
         let mut reply = Reply::bytes(200, "application/json", style.to_string().into_bytes());
         reply.headers.push(("Cache-Control", "no-cache".to_owned()));
         return Ok(reply);
@@ -1200,6 +1205,41 @@ fn style(
         "sources": sources,
         "layers": layers,
     })
+}
+
+/// The base maps the Map page lets viewers switch between: the server's own (`--map-tiles`,
+/// key `map`) first, then each `--map-basemap` (keys `basemap-1`, `basemap-2`…), each with
+/// its `key`, `title`, `tiles` (an XYZ URL template) and `attribution`. The page adds a
+/// grey version of the first and a plain background.
+fn basemaps(
+    tiles: Option<&str>,
+    attribution: Option<&str>,
+    more: &[(String, String, String)],
+) -> serde_json::Value {
+    use serde_json::json;
+    let mut list = Vec::new();
+    if let Some(tiles) = tiles {
+        let title = if tiles.contains("tile.openstreetmap.org") {
+            "OpenStreetMap"
+        } else {
+            "Base map"
+        };
+        list.push(json!({
+            "key": "map",
+            "title": title,
+            "tiles": tiles,
+            "attribution": attribution.unwrap_or_default(),
+        }));
+    }
+    for (i, (title, tiles, attribution)) in more.iter().enumerate() {
+        list.push(json!({
+            "key": format!("basemap-{}", i + 1),
+            "title": title,
+            "tiles": tiles,
+            "attribution": attribution,
+        }));
+    }
+    list.into()
 }
 
 /// The map views of the collections (`tts:MapView`), by `sh:order` then title: for each, its

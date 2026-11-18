@@ -233,12 +233,28 @@ progress { width: 100%; height: 6px; accent-color: var(--brand-fill); margin-top
 .map-views { margin-bottom: 8px; }
 .map-views select { max-width: 100%; }
 .map-layers { display: flex; flex-direction: column; gap: 2px; }
-.map-layer { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 13px; }
-.map-check { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; cursor: pointer; }
+.map-layer { display: flex; align-items: center; gap: 4px; padding: 1px 0; font-size: 13px; }
 .map-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.map-filter { border: 0; background: none; padding: 0 2px; font-size: 11px; color: var(--muted); cursor: pointer; }
-.map-filter:hover, .map-filter[aria-expanded=true] { color: var(--text); }
-.map-filter.on { color: var(--brand); font-weight: 600; }
+.map-icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.map-eye, .map-zoomto, .map-filter { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.map-eye:hover, .map-zoomto:hover, .map-filter:hover, .map-filter[aria-expanded=true] { color: var(--text); background: var(--surface-2); }
+.map-eye[aria-pressed=true] { color: var(--text); }
+.map-filter.on { color: var(--brand); }
+.map-badge { position: absolute; top: -1px; right: -2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--brand-fill); color: #fff; font-size: 10px; line-height: 14px; font-weight: 600; text-align: center; }
+.map-zoomto { display: none; }
+.map-layer.map-off:not(.map-hidden) .map-zoomto { display: inline-flex; }
+.map-layer.map-hidden .map-name, .map-layer.map-hidden .map-swatch, .map-layer.map-off .map-name, .map-layer.map-off .map-swatch { opacity: 0.55; }
+.map-layer.map-off .map-eye { opacity: 0.6; }
+.map-all { display: flex; gap: 4px; margin-bottom: 4px; }
+.map-ctrl-btn { display: flex !important; align-items: center; justify-content: center; color: #333; }
+.map-ctrl-btn .map-icon { width: 18px; height: 18px; }
+.map-basemap-wrap { position: relative; }
+.map-basemaps { position: absolute; top: 0; right: calc(100% + 6px); z-index: 5; min-width: 200px; padding: 4px; display: flex; flex-direction: column; color: var(--text); box-shadow: var(--shadow); }
+.map-basemaps-head { padding: 4px 8px; }
+.map-basemaps .map-basemap { display: block; width: 100%; height: auto; padding: 6px 8px 6px 26px; border: 0; border-radius: 6px; background: none; font: 13px var(--font); color: inherit; text-align: left; cursor: pointer; position: relative; }
+.map-basemaps .map-basemap:hover, .map-basemaps .map-basemap:focus-visible { background: var(--surface-2); outline: none; }
+.map-basemaps .map-basemap[aria-checked=true]::before { content: ""; position: absolute; left: 10px; top: 50%; width: 7px; height: 7px; margin-top: -4px; border-radius: 50%; background: var(--brand-fill); }
+.map-wrap:fullscreen { height: 100dvh; padding: 8px; background: var(--bg); }
 .map-facets { margin: 2px 0 8px 22px; padding-left: 8px; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
 .map-facet-tools { display: flex; flex-wrap: wrap; gap: 4px; }
 .map-facet summary { cursor: pointer; font-size: 12px; font-weight: 600; }
@@ -246,9 +262,7 @@ progress { width: 100%; height: 6px; accent-color: var(--brand-fill); margin-top
 .map-same { margin: 2px 0; overflow-wrap: anywhere; }
 .map-range { display: flex; align-items: center; gap: 4px; padding: 2px 0; }
 .map-range .map-bound { width: 96px; height: 26px; font-size: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); padding: 0 6px; }
-.map-layer .map-from { display: none; }
 .map-layer.map-off { color: var(--muted); }
-.map-layer.map-off .map-from { display: inline; }
 .map-swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; display: inline-block; border: 1px solid rgb(0 0 0 / 15%); }
 .map-colour select { max-width: 100%; }
 .map-key { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
