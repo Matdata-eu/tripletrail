@@ -60,7 +60,7 @@ pub(crate) fn rewrite(
             base_iri,
         } => Query::Select {
             dataset: None,
-            pattern: pass.walk(pattern, false),
+            pattern: pass.walk(pattern, false, true),
             base_iri,
         },
         Query::Construct {
@@ -71,7 +71,7 @@ pub(crate) fn rewrite(
         } => Query::Construct {
             template,
             dataset: None,
-            pattern: pass.walk(pattern, false),
+            pattern: pass.walk(pattern, false, true),
             base_iri,
         },
         other => other,
@@ -86,10 +86,13 @@ struct Pass<'a> {
 
 impl Pass<'_> {
     /// `p` with its largest covered parts replaced; `limited`: a `LIMIT` without an order is
-    /// above, so the evaluator may stop before reading all rows.
-    fn walk(&mut self, p: GraphPattern, limited: bool) -> GraphPattern {
+    /// above, so the evaluator may stop before reading all rows; `alone`: no other part is
+    /// joined with `p`'s rows. A part with a path is taken only alone: joined with others,
+    /// the evaluator searches the path from the values they give it, which may be few.
+    fn walk(&mut self, p: GraphPattern, limited: bool, alone: bool) -> GraphPattern {
         use GraphPattern as G;
         if !limited
+            && (alone || !crate::idtree::has_path(&p))
             && covered(&p)
             && worth(&p)
             && let Some(t) = self.eval.eval(&p)
@@ -105,60 +108,60 @@ impl Pass<'_> {
             self.done += 1;
             return replaced;
         }
-        let mut w = |p: Box<G>, limited: bool| Box::new(self.walk(*p, limited));
+        let mut w = |p: Box<G>, limited: bool, alone: bool| Box::new(self.walk(*p, limited, alone));
         match p {
             G::Join { left, right } => G::Join {
-                left: w(left, limited),
-                right: w(right, limited),
+                left: w(left, limited, false),
+                right: w(right, limited, false),
             },
             G::LeftJoin {
                 left,
                 right,
                 expression,
             } => G::LeftJoin {
-                left: w(left, limited),
-                right: w(right, limited),
+                left: w(left, limited, alone),
+                right: w(right, limited, false),
                 expression,
             },
             G::Minus { left, right } => G::Minus {
-                left: w(left, limited),
-                right: w(right, limited),
+                left: w(left, limited, alone),
+                right: w(right, limited, false),
             },
             G::Union { left, right } => G::Union {
-                left: w(left, limited),
-                right: w(right, limited),
+                left: w(left, limited, alone),
+                right: w(right, limited, alone),
             },
             // The right side is evaluated once per left row, with its variables bound.
             G::Lateral { left, right } => G::Lateral {
-                left: w(left, limited),
+                left: w(left, limited, alone),
                 right,
             },
             G::Filter { expr, inner } => G::Filter {
                 expr,
-                inner: w(inner, limited),
+                inner: w(inner, limited, alone),
             },
             G::Extend {
                 inner,
                 variable,
                 expression,
             } => G::Extend {
-                inner: w(inner, limited),
+                inner: w(inner, limited, alone),
                 variable,
                 expression,
             },
             G::Project { inner, variables } => G::Project {
-                inner: w(inner, limited),
+                inner: w(inner, limited, alone),
                 variables,
             },
             G::Distinct { inner } => G::Distinct {
-                inner: w(inner, limited),
+                inner: w(inner, limited, alone),
             },
             G::Reduced { inner } => G::Reduced {
-                inner: w(inner, limited),
+                inner: w(inner, limited, alone),
             },
             // These read all the rows of their input.
             G::OrderBy { inner, expression } => G::OrderBy {
-                inner: w(inner, false),
+                inner: w(inner, false, alone),
                 expression,
             },
             G::Group {
@@ -166,7 +169,7 @@ impl Pass<'_> {
                 variables,
                 aggregates,
             } => G::Group {
-                inner: w(inner, false),
+                inner: w(inner, false, alone),
                 variables,
                 aggregates,
             },
@@ -175,7 +178,7 @@ impl Pass<'_> {
                 start,
                 length,
             } => G::Slice {
-                inner: w(inner, limited || length.is_some()),
+                inner: w(inner, limited || length.is_some(), alone),
                 start,
                 length,
             },

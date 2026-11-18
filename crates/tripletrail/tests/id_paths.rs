@@ -15,6 +15,7 @@ fn data() -> String {
     ttl.push_str("ex:loop2 ex:up ex:loop2 .\n");
     ttl.push_str("ex:n5 ex:up \"a literal\" .\n");
     ttl.push_str("GRAPH ex:g { ex:n7 ex:up ex:elsewhere . }\n");
+    ttl.push_str("ex:n2999 ex:id \"rare\" . ex:n1 ex:id \"top\" . ex:n3 ex:id \"top\" .\n");
     ttl
 }
 
@@ -54,6 +55,18 @@ fn closures_on_ids_give_the_evaluators_rows() {
         "?s ex:up+ \"a literal\" FILTER(isIRI(?s))",
         "?s ex:up+ ?s FILTER(isIRI(?s))",
         "?s ex:nothing+ ?o FILTER(isIRI(?s))",
+        // Joined with other parts: searched from the values they give, either way.
+        "?s ex:id \"rare\" . ?s ex:up+ ?o",
+        "?s ex:id \"rare\" . ?s ex:up* ?o",
+        "VALUES ?s { ex:n2999 ex:n77 } ?s ex:up+ ?o",
+        "?s ex:id \"rare\" OPTIONAL { ?s ex:up+ ?o }",
+        "?s ex:id \"rare\" . ?s ex:up+ ?m . ?m ex:up+ ?o",
+        "{ ?s ex:id \"rare\" } UNION { ?s ex:id \"top\" } ?s ex:up+ ?o",
+        "?o ex:id \"top\" . ?s ex:up+ ?o",
+        "?o ex:id \"top\" . ?s ^ex:up* ?o",
+        "?s a ex:C1 . ?s ex:up+ ?o",
+        "?o a ex:C1 . ?s ^ex:up+ ?o",
+        "?s ex:id ?x . ?s ex:up+ ?o MINUS { ?o ex:id \"top\" }",
     ] {
         let q = format!("PREFIX ex: <http://example.org/> SELECT * WHERE {{ {body} }}");
         let off = format!("#pragma tt.id-rewrites off\n{q}");
@@ -71,5 +84,43 @@ fn closures_on_ids_give_the_evaluators_rows() {
             let off = format!("#pragma tt.id-rewrites off\n{counted}");
             assert_eq!(rows(&e, &counted), rows(&e, &off), "{body}");
         }
+    }
+}
+
+/// A path joined with a part that gives few values searches from those values, not over the
+/// whole closure: much faster than the closure on a larger tree.
+#[test]
+fn a_joined_path_searches_from_the_few_values_given() {
+    let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 1..60_000 {
+        ttl.push_str(&format!("ex:n{i} ex:up ex:n{} .\n", (i - 1) / 4));
+    }
+    ttl.push_str("ex:n59999 ex:id \"rare\" . ex:n5000 ex:id \"inner\" .\n");
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let time = |body: &str| {
+        let q =
+            format!("PREFIX ex: <http://example.org/> SELECT (COUNT(*) AS ?n) WHERE {{ {body} }}");
+        let start = std::time::Instant::now();
+        let n = rows(&e, &q);
+        (start.elapsed(), n)
+    };
+    let (all, _) = time("?s ex:up+ ?o");
+    for body in [
+        "?s ex:id \"rare\" . ?s ex:up+ ?o",
+        "?s ex:id \"rare\" OPTIONAL { ?s ex:up+ ?o }",
+        "VALUES ?s { ex:n59999 } ?s ex:up+ ?o",
+        "?o ex:id \"inner\" . ?s ex:up+ ?o",
+        "?o ex:id \"inner\" . ?o ^ex:up+ ?s",
+    ] {
+        let (few, n) = time(body);
+        assert!(
+            few * 10 < all,
+            "{body}: {few:?} against {all:?} for the whole closure"
+        );
+        let off = format!(
+            "#pragma tt.id-rewrites off\nPREFIX ex: <http://example.org/> SELECT (COUNT(*) AS ?n) WHERE {{ {body} }}"
+        );
+        assert_eq!(n, rows(&e, &off), "{body}");
     }
 }

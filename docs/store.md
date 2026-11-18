@@ -104,11 +104,16 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `exists-join-3-star-2` 84 → 17 ms).
   Transitive paths are in the tables too (#11): `?s <p>+ ?o`, `?s ^<p>+ ?o`, and `<p>*`
   with one end constant, are the pairs of a search over the predicate's edges on ids, each
-  end once per start, as SPARQL's paths give them. A part with such a path is always taken,
-  since the evaluator finds a closure one start at a time. On a tree of 200,000 nodes
-  (1.48 million pairs): `GROUP BY ?o` with `COUNT` over `?s <p>+ ?o` 1.27 → 0.49 s, and the
-  path joined with a class and counted 1.89 → 0.47 s. A path with the same variable at both
-  ends, `*` between two variables, or other path expressions are left to the evaluator.
+  end once per start, as SPARQL's paths give them. The search starts from a constant end;
+  else, joined with other patterns, from the values they give (the path comes after them in
+  the join), backwards when they bind the object; else from every node with an edge. A few
+  starts are searched by looking up their edges level by level, many by reading all the
+  predicate's edges once. A part with a path joined with patterns outside it (a `VALUES`
+  block, say) is left to the evaluator, which also starts from those values. On a tree of
+  200,000 nodes (1.48 million pairs): `GROUP BY ?o` with `COUNT` over `?s <p>+ ?o`
+  1.05 → 0.19 s, the path joined with a class and counted 1.61 → 0.05 s, and
+  `?s ex:id "rare" . ?s <p>+ ?o` stays at about 1 ms. A path with the same variable at both
+  ends, `*` between two free variables, or other path expressions are left to the evaluator.
   `ORDER BY ?a DESC(?b) ... LIMIT n` (with `OFFSET`, `DISTINCT` or `REDUCED`) over a pattern
   the tables cover is ordered on ids too: IRIs and simple strings by their string ranks
   (#171), integers and booleans by value, unbound values first, and only the first
