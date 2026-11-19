@@ -198,3 +198,68 @@ fn relation_triples_inside_exists_are_inferred() {
         assert_eq!(bound, joined, "BIND {path}");
     }
 }
+
+/// A relation inside EXISTS is looked up for each outer row with its values bound: over a few
+/// thousand rows, about as fast as the same test written as a join, not once per row over
+/// every geometry of the store.
+#[test]
+fn relation_triples_inside_exists_use_the_rows_values() {
+    let mut ttl = String::from(
+        "@prefix geo: <http://www.opengis.net/ont/geosparql#> .\n@prefix ex: <https://example.org/> .\n",
+    );
+    for r in 0..5 {
+        let x = r * 20;
+        ttl.push_str(&format!(
+            "ex:r{r} a ex:R ; geo:hasGeometry ex:rg{r} . ex:rg{r} geo:asWKT \"POLYGON(({x} 0, {} 0, {} 10, {x} 10, {x} 0))\"^^geo:wktLiteral .\n",
+            x + 10,
+            x + 10
+        ));
+    }
+    for i in 0..2000 {
+        let (x, y) = ((i * 37) % 100, (i * 11) % 20);
+        let via = if i % 2 == 0 {
+            "geo:hasGeometry"
+        } else {
+            "ex:ref ex:m{i} . ex:m{i} geo:hasGeometry"
+        };
+        let via = via.replace("{i}", &i.to_string());
+        ttl.push_str(&format!(
+            "ex:f{i} a ex:P ; {via} ex:g{i} . ex:g{i} geo:asWKT \"POINT({x} {y})\"^^geo:wktLiteral .\n"
+        ));
+    }
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let prefixes = "PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+        PREFIX ex: <https://example.org/>";
+    let time = |q: &str| {
+        let start = std::time::Instant::now();
+        let n = rows(&e, q);
+        (start.elapsed(), n)
+    };
+    let inner = "?x ex:ref?/geo:hasGeometry ?g . ?g geo:sfWithin ?rg";
+    let (join, joined) = time(&format!(
+        "{prefixes} SELECT DISTINCT ?x ?r WHERE {{ ?r a ex:R ; geo:hasGeometry ?rg . ?x a ex:P . {inner} }}"
+    ));
+    assert!(!joined.is_empty());
+    let floor = join.max(std::time::Duration::from_millis(100));
+    for (form, want_joined) in [
+        ("FILTER EXISTS { INNER }", true),
+        ("BIND(EXISTS { INNER } AS ?in) FILTER(?in)", true),
+        ("FILTER NOT EXISTS { INNER }", false),
+    ] {
+        let q = format!(
+            "{prefixes} SELECT ?x ?r WHERE {{ ?r a ex:R ; geo:hasGeometry ?rg . ?x a ex:P {} }}",
+            form.replace("INNER", inner)
+        );
+        let (took, n) = time(&q);
+        if want_joined {
+            assert_eq!(n, joined, "{form}");
+        } else {
+            assert_eq!(n.len(), 5 * 2000 - joined.len(), "{form}");
+        }
+        assert!(
+            took < floor * 20,
+            "{form}: {took:?} against {join:?} for the join"
+        );
+    }
+}

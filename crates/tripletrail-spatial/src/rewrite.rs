@@ -1278,6 +1278,10 @@ struct Rewriter<'a> {
     /// How often each variable is written in the query (see [`mentions`]); empty when not
     /// known, and then every variable counts as used.
     mentions: HashMap<String, usize>,
+    /// Inside an `EXISTS`: its pattern is evaluated once per outer row with that row's values
+    /// bound, so relation triples become plain geometry lookups and a test there, without the
+    /// index (whose candidates would be found once per row, for the whole store).
+    exists: usize,
 }
 
 /// How often each variable name is written in `query`.
@@ -1345,6 +1349,7 @@ impl<'a> Rewriter<'a> {
             estimator: Estimator::new(ctx),
             side_rows: HashMap::new(),
             mentions: HashMap::new(),
+            exists: 0,
         }
     }
 
@@ -2229,7 +2234,8 @@ impl<'a> Rewriter<'a> {
             &format!("{GEO}hasDefaultGeometry"),
             d,
         )]);
-        let any = if matches!(node, TermPattern::Variable(_)) {
+        // Inside EXISTS, `node` is usually bound by the outer row: a lookup is the cheaper.
+        let any = if matches!(node, TermPattern::Variable(_)) && self.exists == 0 {
             // MINUS rather than FILTER NOT EXISTS: one anti-join instead of a lookup per
             // row (100x faster on large joins). They agree because `node` is on both sides.
             GraphPattern::Minus {
@@ -2388,6 +2394,10 @@ impl<'a> Rewriter<'a> {
         } else {
             inferred
         };
+        // Inside EXISTS, the row's values are bound: the lookups and the test as they are.
+        if self.exists > 0 {
+            return body;
+        }
         // The generated FILTER is itself a spatial test; plan it like any other.
         let body = self.walk_generated(body);
         GraphPattern::Distinct {
@@ -2488,7 +2498,12 @@ impl<'a> Rewriter<'a> {
         use Expression as E;
         let mut w = |e: Box<E>| Box::new(self.walk_exists(*e));
         match e {
-            E::Exists(p) => E::Exists(Box::new(self.walk(*p))),
+            E::Exists(p) => {
+                self.exists += 1;
+                let p = self.walk(*p);
+                self.exists -= 1;
+                E::Exists(Box::new(p))
+            }
             E::Or(a, b) => E::Or(w(a), w(b)),
             E::And(a, b) => E::And(w(a), w(b)),
             E::Equal(a, b) => E::Equal(w(a), w(b)),
@@ -2524,6 +2539,10 @@ impl<'a> Rewriter<'a> {
         let b = |p: GraphPattern| Box::new(p);
         match p {
             G::Bgp { patterns } => self.bgp(patterns),
+            G::Filter { expr, inner } if self.exists > 0 => G::Filter {
+                expr: self.walk_exists(expr),
+                inner: b(self.walk(*inner)),
+            },
             G::Filter { expr, inner } => {
                 let expr = self.walk_exists(expr);
                 let inner = self.walk(*inner);
@@ -2562,6 +2581,22 @@ impl<'a> Rewriter<'a> {
                 out
             }
             G::Join { left, right } => match linked_through_paths(G::Join { left, right }) {
+                // Inside EXISTS, the relation's lookups are evaluated for each row of the rest
+                // of the group (LATERAL), with its values bound, rather than for every
+                // geometry of the store and then joined.
+                G::Join { left, right }
+                    if self.exists > 0 && (has_relation(&left) != has_relation(&right)) =>
+                {
+                    let (rest, relation) = if has_relation(&right) {
+                        (left, right)
+                    } else {
+                        (right, left)
+                    };
+                    G::Lateral {
+                        left: b(self.walk(*rest)),
+                        right: b(self.walk(*relation)),
+                    }
+                }
                 G::Join { left, right } => G::Join {
                     left: b(self.walk(*left)),
                     right: b(self.walk(*right)),
@@ -2671,6 +2706,21 @@ impl<'a> Rewriter<'a> {
             | G::OrderBy { .. } => self.walk(p),
             other => other,
         }
+    }
+}
+
+/// Whether `p`'s join operands hold a GeoSPARQL relation triple.
+fn has_relation(p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::Join { left, right } => has_relation(left) || has_relation(right),
+        GraphPattern::Bgp { patterns } => patterns.iter().any(|t| match &t.predicate {
+            NamedNodePattern::NamedNode(p) => p
+                .as_str()
+                .strip_prefix(GEO)
+                .is_some_and(|n| RELATIONS.contains(&n) || NOT_INDEXABLE.contains(&n)),
+            NamedNodePattern::Variable(_) => false,
+        }),
+        _ => false,
     }
 }
 
