@@ -24,6 +24,8 @@ const MAX_MODEL_MEMBERS: usize = 200;
 const MAX_SHOWN_ATTRIBUTES: usize = 24;
 /// Associations from other classes to the model's classes at most.
 const MAX_MODEL_INCOMING: usize = 24;
+/// Associations from other classes read at most, before they are sorted and cut.
+const MAX_MODEL_INCOMING_READ: usize = 1_000;
 /// Nodes on either side of the graph at most.
 const MAX_GRAPH_SIDE: usize = 24;
 /// Values of one property in the graph at most; the others are one "+ n more" node.
@@ -248,15 +250,27 @@ pub(super) fn model(
     for (i, class) in classes.iter().enumerate() {
         let (mut attributes, mut associations) = (Vec::new(), Vec::new());
         for n in node_shapes(ctx, std::slice::from_ref(class)) {
-            for p in ctx
+            // In `sh:order`, then by path: the graph's own order differs from store to store.
+            let mut props: Vec<NamedOrBlankNodeRef<'_>> = ctx
                 .shapes
                 .objects_for_subject_predicate(n.as_ref(), &sh("property"))
-            {
-                let p: NamedOrBlankNodeRef<'_> = match p {
-                    TermRef::NamedNode(n) => n.into(),
-                    TermRef::BlankNode(b) => b.into(),
-                    _ => continue,
-                };
+                .filter_map(|p| match p {
+                    TermRef::NamedNode(n) => Some(n.into()),
+                    TermRef::BlankNode(b) => Some(b.into()),
+                    _ => None,
+                })
+                .collect();
+            props.sort_by_cached_key(|p| {
+                (
+                    ctx.shape_number(*p, &sh("order"))
+                        .filter(|o| o.is_finite())
+                        .map_or(i64::MAX, |o| (o * 1000.0) as i64),
+                    named(*p, "path")
+                        .map(|n| n.into_string())
+                        .unwrap_or_default(),
+                )
+            });
+            for p in props {
                 if ctx.shape_true(p, &sh("deactivated")) {
                     continue;
                 }
@@ -347,7 +361,7 @@ pub(super) fn model(
                     sources.push(n.into_owned());
                 }
                 for s in sources {
-                    if incoming.len() >= MAX_MODEL_INCOMING {
+                    if incoming.len() >= MAX_MODEL_INCOMING_READ {
                         break 'classes;
                     }
                     if at.contains_key(&s) || !pairs.insert((s.clone(), path.clone())) {
@@ -367,6 +381,11 @@ pub(super) fn model(
             }
         }
     }
+    // The same order on every store, whatever order the shapes were read in.
+    incoming.sort_by(|(a, i, x), (b, j, y)| {
+        (a.iri.as_str(), i, x.property.as_str()).cmp(&(b.iri.as_str(), j, y.property.as_str()))
+    });
+    incoming.truncate(MAX_MODEL_INCOMING);
     Model { boxes, incoming }
 }
 
