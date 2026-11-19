@@ -71,10 +71,17 @@ pub(crate) fn triple_names(t: &TriplePattern) -> HashSet<Name> {
 }
 
 /// The names a join operand shares with its siblings: the variables and blank nodes of a
-/// basic graph pattern, the in-scope variables of anything else.
+/// basic graph pattern or a property path (the parser joins `?x (a|b)/c ?y` as a path and a
+/// triple through a blank node, #48), the in-scope variables of anything else.
 pub(crate) fn names(p: &GraphPattern) -> HashSet<Name> {
     match p {
         GraphPattern::Bgp { patterns } => patterns.iter().flat_map(triple_names).collect(),
+        GraphPattern::Path {
+            subject, object, ..
+        } => [term_name(subject), term_name(object)]
+            .into_iter()
+            .flatten()
+            .collect(),
         other => {
             let mut out = HashSet::new();
             other.on_in_scope_variable(|v| {
