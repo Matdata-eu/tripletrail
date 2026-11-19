@@ -86,3 +86,54 @@ fn spatial_filters_keep_paths_joined_through_blank_nodes() {
         ["?x=<https://example.org/a>", "?x=<https://example.org/b>"]
     );
 }
+
+/// The relation as a property (`?g geo:sfWithin ?rg`) after a path ending in a blank node:
+/// the same rows as with the path's end written as a variable. (The evaluator alone infers
+/// no relation triples, so the written-out form is the reference.)
+#[test]
+fn relation_triples_keep_paths_joined_through_blank_nodes() {
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, DATA.as_bytes()).unwrap();
+    let prefixes = "PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+        PREFIX ex: <https://example.org/>";
+    for (path, written) in [
+        (
+            "(ex:ref|ex:part)/geo:hasGeometry",
+            "(ex:ref|ex:part) ?m . ?m geo:hasGeometry",
+        ),
+        ("ex:ref?/geo:hasGeometry", "ex:ref? ?m . ?m geo:hasGeometry"),
+        (
+            "ex:part*/geo:hasGeometry",
+            "ex:part* ?m . ?m geo:hasGeometry",
+        ),
+        (
+            "ex:part+/geo:hasGeometry",
+            "ex:part+ ?m . ?m geo:hasGeometry",
+        ),
+        (
+            "(ex:part/ex:part?)?/geo:hasGeometry",
+            "(ex:part/ex:part?)? ?m . ?m geo:hasGeometry",
+        ),
+    ] {
+        for relation in ["geo:sfWithin", "geo:sfIntersects", "geo:ehInside"] {
+            let q = |p: &str| {
+                format!(
+                    "{prefixes} SELECT ?x ?g WHERE {{ ex:region geo:hasGeometry ?rg . \
+                     ?x a ex:P ; {p} ?g . ?g {relation} ?rg }}"
+                )
+            };
+            let want = rows(&e, &q(written));
+            assert!(!want.is_empty(), "{written} {relation}");
+            assert_eq!(rows(&e, &q(path)), want, "{path} {relation}");
+        }
+        // The blank node written as a variable for the rewrite is not returned.
+        let star = format!(
+            "{prefixes} SELECT * WHERE {{ ex:region geo:hasGeometry ?rg . \
+             ?x a ex:P ; {path} ?g . ?g geo:sfWithin ?rg }}"
+        );
+        assert!(
+            rows(&e, &star).iter().all(|r| !r.contains("__tt")),
+            "{path}"
+        );
+    }
+}
