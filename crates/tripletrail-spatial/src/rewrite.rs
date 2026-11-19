@@ -2482,12 +2482,50 @@ impl<'a> Rewriter<'a> {
         }
     }
 
+    /// `e` with the patterns of its `EXISTS` rewritten as any other: relation triples in
+    /// `FILTER (NOT) EXISTS { ?g geo:sfWithin ?r }` are inferred too.
+    fn walk_exists(&mut self, e: Expression) -> Expression {
+        use Expression as E;
+        let mut w = |e: Box<E>| Box::new(self.walk_exists(*e));
+        match e {
+            E::Exists(p) => E::Exists(Box::new(self.walk(*p))),
+            E::Or(a, b) => E::Or(w(a), w(b)),
+            E::And(a, b) => E::And(w(a), w(b)),
+            E::Equal(a, b) => E::Equal(w(a), w(b)),
+            E::SameTerm(a, b) => E::SameTerm(w(a), w(b)),
+            E::Greater(a, b) => E::Greater(w(a), w(b)),
+            E::GreaterOrEqual(a, b) => E::GreaterOrEqual(w(a), w(b)),
+            E::Less(a, b) => E::Less(w(a), w(b)),
+            E::LessOrEqual(a, b) => E::LessOrEqual(w(a), w(b)),
+            E::Add(a, b) => E::Add(w(a), w(b)),
+            E::Subtract(a, b) => E::Subtract(w(a), w(b)),
+            E::Multiply(a, b) => E::Multiply(w(a), w(b)),
+            E::Divide(a, b) => E::Divide(w(a), w(b)),
+            E::UnaryPlus(a) => E::UnaryPlus(w(a)),
+            E::UnaryMinus(a) => E::UnaryMinus(w(a)),
+            E::Not(a) => E::Not(w(a)),
+            E::If(a, b, c) => E::If(w(a), w(b), w(c)),
+            E::In(a, list) => {
+                let a = w(a);
+                E::In(a, list.into_iter().map(|e| self.walk_exists(e)).collect())
+            }
+            E::Coalesce(list) => {
+                E::Coalesce(list.into_iter().map(|e| self.walk_exists(e)).collect())
+            }
+            E::FunctionCall(f, args) => {
+                E::FunctionCall(f, args.into_iter().map(|e| self.walk_exists(e)).collect())
+            }
+            other => other,
+        }
+    }
+
     fn walk(&mut self, p: GraphPattern) -> GraphPattern {
         use GraphPattern as G;
         let b = |p: GraphPattern| Box::new(p);
         match p {
             G::Bgp { patterns } => self.bgp(patterns),
             G::Filter { expr, inner } => {
+                let expr = self.walk_exists(expr);
                 let inner = self.walk(*inner);
                 // A FILTER applies to its whole group, BINDs included: the BINDs it does not
                 // read are applied after it, so the tests see the group's join itself (and its
@@ -2537,7 +2575,7 @@ impl<'a> Rewriter<'a> {
             } => G::LeftJoin {
                 left: b(self.walk(*left)),
                 right: b(self.walk(*right)),
-                expression,
+                expression: expression.map(|e| self.walk_exists(e)),
             },
             G::Lateral { left, right } => G::Lateral {
                 left: b(self.walk(*left)),
@@ -2567,7 +2605,7 @@ impl<'a> Rewriter<'a> {
             } => G::Extend {
                 inner: b(self.walk(*inner)),
                 variable,
-                expression,
+                expression: self.walk_exists(expression),
             },
             G::OrderBy { inner, expression } => G::OrderBy {
                 inner: b(self.walk(*inner)),

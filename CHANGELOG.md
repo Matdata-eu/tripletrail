@@ -31,6 +31,7 @@ versions may change the store format and the API; the release notes say how to u
 
 - A spatial `FILTER` (`geof:sfWithin`, `geof:distance` and the other relations) over a geometry reached by a property path with an alternative, `?`, `*` or `+` (`?x (a|b/c)/geo:asWKT ?p`) gave every candidate geometry for every row, including those outside, repeated (#48). The parser joins such a path to the rest through a blank node, which the spatial rewrite didn't count as a link. Answers now match the evaluator's.
 - The same for a GeoSPARQL relation written as a triple (`?g geo:sfWithin ?rg`) on a geometry reached by such a path (`?x (a|b)/geo:hasGeometry ?g`): every geometry for every row (#54).
+- GeoSPARQL relation triples (`?g geo:sfWithin ?rg`) inside `FILTER EXISTS`, `FILTER NOT EXISTS` or `BIND(EXISTS …)` were not inferred: `EXISTS` matched only asserted relation triples, so it kept no row and `NOT EXISTS` every row (#56). The spatial rewrite now reaches the patterns inside expressions.
 
 ## 0.1.0-rc.1 - 2026-11-17
 

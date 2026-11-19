@@ -137,3 +137,64 @@ fn relation_triples_keep_paths_joined_through_blank_nodes() {
         );
     }
 }
+
+/// Relation triples inside `FILTER EXISTS`, `FILTER NOT EXISTS` and `BIND(EXISTS ...)` are
+/// inferred as outside them: the same features as the join written out.
+#[test]
+fn relation_triples_inside_exists_are_inferred() {
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, DATA.as_bytes()).unwrap();
+    let prefixes = "PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+        PREFIX ex: <https://example.org/>";
+    let all = rows(&e, &format!("{prefixes} SELECT ?x WHERE {{ ?x a ex:P }}"));
+    for (inner, path) in [
+        ("?x geo:hasGeometry ?g . ?g geo:sfWithin ?rg", "plain"),
+        (
+            "?x ex:ref/geo:hasGeometry ?g . ?g geo:sfWithin ?rg",
+            "sequence",
+        ),
+        (
+            "?x (ex:ref|ex:part+)?/geo:hasGeometry ?g . ?g geo:sfWithin ?rg",
+            "path",
+        ),
+        ("?x geo:sfWithin ex:region", "features"),
+    ] {
+        let joined = rows(
+            &e,
+            &format!(
+                "{prefixes} SELECT DISTINCT ?x WHERE {{ ex:region geo:hasGeometry ?rg . \
+                 ?x a ex:P . {inner} }}"
+            ),
+        );
+        assert!(!joined.is_empty(), "{path}");
+        let exists = rows(
+            &e,
+            &format!(
+                "{prefixes} SELECT ?x WHERE {{ ex:region geo:hasGeometry ?rg . \
+                 ?x a ex:P FILTER EXISTS {{ {inner} }} }}"
+            ),
+        );
+        assert_eq!(exists, joined, "EXISTS {path}");
+        let not_exists = rows(
+            &e,
+            &format!(
+                "{prefixes} SELECT ?x WHERE {{ ex:region geo:hasGeometry ?rg . \
+                 ?x a ex:P FILTER NOT EXISTS {{ {inner} }} }}"
+            ),
+        );
+        let rest: Vec<String> = all
+            .iter()
+            .filter(|x| !joined.contains(x))
+            .cloned()
+            .collect();
+        assert_eq!(not_exists, rest, "NOT EXISTS {path}");
+        let bound = rows(
+            &e,
+            &format!(
+                "{prefixes} SELECT ?x WHERE {{ ex:region geo:hasGeometry ?rg . \
+                 ?x a ex:P BIND(EXISTS {{ {inner} }} AS ?in) FILTER(?in) }}"
+            ),
+        );
+        assert_eq!(bound, joined, "BIND {path}");
+    }
+}
