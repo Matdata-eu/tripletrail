@@ -2523,9 +2523,12 @@ impl<'a> Rewriter<'a> {
                 }
                 out
             }
-            G::Join { left, right } => G::Join {
-                left: b(self.walk(*left)),
-                right: b(self.walk(*right)),
+            G::Join { left, right } => match linked_through_paths(G::Join { left, right }) {
+                G::Join { left, right } => G::Join {
+                    left: b(self.walk(*left)),
+                    right: b(self.walk(*right)),
+                },
+                other => self.walk(other),
             },
             G::LeftJoin {
                 left,
@@ -2630,6 +2633,75 @@ impl<'a> Rewriter<'a> {
             | G::OrderBy { .. } => self.walk(p),
             other => other,
         }
+    }
+}
+
+/// The join `p` with the blank nodes that link a property path to its siblings written as
+/// variables (#48 follow-up). The parser joins `?x (a|b)/geo:hasGeometry ?g` as a path to a
+/// blank node and a triple from it; a rewritten BGP projects its variables only, so a blank
+/// node would no longer link the two. The variables' names start with `__tt_path_`; a
+/// `SELECT` projects its own variables, so they are not returned.
+fn linked_through_paths(p: GraphPattern) -> GraphPattern {
+    fn ends(p: &GraphPattern, out: &mut HashSet<String>) {
+        match p {
+            GraphPattern::Join { left, right } => {
+                ends(left, out);
+                ends(right, out);
+            }
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                for t in [subject, object] {
+                    if let TermPattern::BlankNode(b) = t {
+                        out.insert(b.as_str().to_owned());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    fn term(t: TermPattern, linked: &HashSet<String>) -> TermPattern {
+        match t {
+            TermPattern::BlankNode(b) if linked.contains(b.as_str()) => {
+                Variable::new_unchecked(format!("__tt_path_{}", b.as_str())).into()
+            }
+            other => other,
+        }
+    }
+    fn rename(p: GraphPattern, linked: &HashSet<String>) -> GraphPattern {
+        match p {
+            GraphPattern::Join { left, right } => GraphPattern::Join {
+                left: Box::new(rename(*left, linked)),
+                right: Box::new(rename(*right, linked)),
+            },
+            GraphPattern::Path {
+                subject,
+                path,
+                object,
+            } => GraphPattern::Path {
+                subject: term(subject, linked),
+                path,
+                object: term(object, linked),
+            },
+            GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
+                patterns: patterns
+                    .into_iter()
+                    .map(|t| TriplePattern {
+                        subject: term(t.subject, linked),
+                        predicate: t.predicate,
+                        object: term(t.object, linked),
+                    })
+                    .collect(),
+            },
+            other => other,
+        }
+    }
+    let mut linked = HashSet::new();
+    ends(&p, &mut linked);
+    if linked.is_empty() {
+        p
+    } else {
+        rename(p, &linked)
     }
 }
 
