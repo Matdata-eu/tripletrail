@@ -45,7 +45,10 @@ The GeoSPARQL relation properties work as triple patterns too (the Query Rewrite
 `?a geo:sfIntersects ?b` holds between features, through their default geometry or any
 geometry if they have none, and between geometries. Asserted relation triples count as well.
 They work the same in the sub-selects of TripleTrail's own services (`st:`, window, `pgr`,
-`path`), which the spatial rewrite and its index reach as they reach the main query (#857).
+`path`), which the spatial rewrite and its index reach as they reach the main query (#857),
+and inside `FILTER EXISTS`, `FILTER NOT EXISTS`, `BIND(EXISTS { … } AS ?v)` and `HAVING(EXISTS …)` (#56),
+where they are looked up for each row with its values bound. An `EXISTS` in an `ORDER BY` or
+aggregate expression sees asserted relation triples only.
 
 Geometry properties are virtual too: `geo:hasMetricLength`, `hasLength`, `hasMetricArea`,
 `hasArea`, `hasMetricPerimeterLength`, `hasPerimeterLength`, `hasMetricSize`, `hasSize`,
