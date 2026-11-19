@@ -1,0 +1,171 @@
+# Adds every issue and pull request of this repository to the organisation's
+# TripleTrail project (https://github.com/orgs/Matdata-eu/projects/2), and
+# mirrors two kinds of labels into the project's fields.
+#
+# - New and reopened issues and pull requests are added as they come in. The
+#   project's own "Item added" workflow then sets their Status.
+# - Labels set board fields, so anyone who can label an issue can claim it
+#   without access to the project:
+#     worker:<option>  sets Worker, e.g. worker:builder-1, worker:reviewer-even
+#     status:<option>  sets Status, e.g. status:in-progress, status:blocked
+#   <option> is the field option's name in lower case with spaces as dashes.
+#   Only the label that changed is synced, so a field set later on the board
+#   (or Done set by the project's own workflow) stays as it is. Removing a
+#   worker: label sets Worker to another worker: label still on the item, or
+#   clears it; removing a status: label changes nothing.
+# - Run it by hand (Actions -> Project -> Run workflow) to add every existing
+#   issue and pull request, open and closed. Adding one that is already on the
+#   project changes nothing, so a second run is harmless.
+#
+# GITHUB_TOKEN cannot write to an organisation project, so this needs the
+# repository secret PROJECT_TOKEN, set in each repository (an organisation
+# secret does not reach private repositories on the organisation's plan): a
+# fine-grained personal access token with
+# resource owner Matdata-eu, organisation permission "Projects: Read and write",
+# and repository permissions "Issues: Read" and "Pull requests: Read" on the
+# TripleTrail repositories.
+name: Project
+
+on:
+  issues:
+    types: [opened, reopened, labeled, unlabeled]
+  # pull_request_target so that pull requests from forks get the secret too.
+  # The job checks out no code, so nothing from the pull request runs.
+  pull_request_target:
+    types: [opened, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions: {}
+
+# One group per item and label, so two labels added at once both get synced
+# (GitHub drops a queued run when a newer one joins the same group).
+concurrency:
+  group: project-${{ github.event.issue.number || github.event.pull_request.number || 'backfill' }}-${{ github.event.label.name || github.event.action }}
+
+env:
+  PROJECT_OWNER: Matdata-eu
+  PROJECT_NUMBER: 2
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+    steps:
+      # Without the secret (not set yet, or a pull request from a fork) the job
+      # passes without doing anything rather than failing every pull request.
+      - if: env.PROJECT_TOKEN == ''
+        run: echo "::notice::PROJECT_TOKEN is not set; nothing added"
+      - if: env.PROJECT_TOKEN != ''
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ env.PROJECT_TOKEN }}
+          script: |
+            const project = (await github.graphql(
+              `query($login: String!, $number: Int!) {
+                 organization(login: $login) {
+                   projectV2(number: $number) {
+                     id
+                     fields(first: 50) {
+                       nodes { ... on ProjectV2SingleSelectField { id name options { id name } } }
+                     }
+                   }
+                 }
+               }`,
+              { login: process.env.PROJECT_OWNER, number: Number(process.env.PROJECT_NUMBER) }
+            )).organization.projectV2;
+
+            const add = async (contentId, label) => {
+              const result = await github.graphql(
+                `mutation($project: ID!, $content: ID!) {
+                   addProjectV2ItemById(input: { projectId: $project, contentId: $content }) { item { id } }
+                 }`,
+                { project: project.id, content: contentId }
+              );
+              core.info(`added ${label}`);
+              return result.addProjectV2ItemById.item.id;
+            };
+
+            const slug = (name) => name.trim().toLowerCase().replace(/\s+/g, '-');
+            const field = (name) => project.fields.nodes.find((f) => f.name === name && f.options);
+
+            // Sets a single-select field to the option a label names, or clears
+            // it when pick is undefined and clearing is allowed.
+            const mirror = async (itemId, pick, prefix, fieldName, clearWhenNone) => {
+              const f = field(fieldName);
+              if (!f) {
+                core.warning(`the project has no single-select field ${fieldName}`);
+                return;
+              }
+              if (!pick) {
+                if (!clearWhenNone) return;
+                await github.graphql(
+                  `mutation($project: ID!, $item: ID!, $field: ID!) {
+                     clearProjectV2ItemFieldValue(input: { projectId: $project, itemId: $item, fieldId: $field }) { clientMutationId }
+                   }`,
+                  { project: project.id, item: itemId, field: f.id }
+                );
+                core.info(`${fieldName} cleared`);
+                return;
+              }
+              const option = f.options.find((o) => slug(o.name) === pick.slice(prefix.length));
+              if (!option) {
+                core.warning(`${pick}: ${fieldName} has no such option (${f.options.map((o) => slug(o.name)).join(', ')})`);
+                return;
+              }
+              await github.graphql(
+                `mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+                   updateProjectV2ItemFieldValue(input: {
+                     projectId: $project, itemId: $item, fieldId: $field,
+                     value: { singleSelectOptionId: $option }
+                   }) { clientMutationId }
+                 }`,
+                { project: project.id, item: itemId, field: f.id, option: option.id }
+              );
+              core.info(`${fieldName} set to ${option.name}`);
+            };
+
+            if (context.eventName !== 'workflow_dispatch') {
+              const item = context.payload.issue || context.payload.pull_request;
+              const itemId = await add(item.node_id, `#${item.number}`);
+              const labels = (item.labels || []).map((l) => l.name);
+              const kinds = [['worker:', 'Worker', true], ['status:', 'Status', false]];
+              const changed = context.payload.label && context.payload.label.name;
+              for (const [prefix, fieldName, clearWhenNone] of kinds) {
+                if (context.payload.action === 'opened') {
+                  // Created with labels: apply the last one of each kind.
+                  const pick = labels.filter((l) => l.startsWith(prefix)).pop();
+                  if (pick) await mirror(itemId, pick, prefix, fieldName, false);
+                } else if (changed && changed.startsWith(prefix)) {
+                  if (context.payload.action === 'labeled') {
+                    await mirror(itemId, changed, prefix, fieldName, false);
+                  } else {
+                    const rest = labels.filter((l) => l.startsWith(prefix)).pop();
+                    await mirror(itemId, rest, prefix, fieldName, clearWhenNone);
+                  }
+                }
+              }
+              return;
+            }
+
+            // Backfill. The issues endpoint lists pull requests too, but under
+            // their issue id, so pull requests come from their own endpoint.
+            const options = { ...context.repo, state: 'all', per_page: 100 };
+            const issues = (await github.paginate(github.rest.issues.listForRepo, options))
+              .filter((issue) => !issue.pull_request);
+            const pulls = await github.paginate(github.rest.pulls.list, options);
+            const items = [...issues, ...pulls].sort((a, b) => a.number - b.number);
+            let failed = 0;
+            for (const item of items) {
+              try {
+                await add(item.node_id, `#${item.number}`);
+                // Stay under GitHub's limit on mutations per minute.
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+              } catch (error) {
+                failed += 1;
+                core.warning(`#${item.number}: ${error.message}`);
+              }
+            }
+            core.notice(`${items.length - failed} of ${items.length} issues and pull requests are on the project`);
+            if (failed) core.setFailed(`${failed} could not be added`);
