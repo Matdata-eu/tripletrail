@@ -579,7 +579,8 @@ impl Gate {
     }
 }
 
-/// A turn on a dataset: released when dropped, after the answer is sent.
+/// A turn on a dataset: released when dropped, once the answer is read to its end (before its
+/// last bytes are written).
 pub(crate) struct Permit(Arc<Entry>);
 
 impl Drop for Permit {
