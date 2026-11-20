@@ -2045,6 +2045,15 @@ fn the_query_page_explain_view_reads_the_plan_of_this_server() {
         )
         .unwrap();
     assert!(r.content_type().contains("json"));
+    // The Server header names TripleTrail, which the Explain plugin recognises (on every
+    // answer, so on the query the view reads it from too).
+    let server = |r: &ureq::Response| r.header("Server").unwrap_or_default().to_owned();
+    assert!(server(&r).starts_with("TripleTrail/"), "{}", server(&r));
+    let q = ureq::get(&format!("{}/plan/sparql", s.base))
+        .query("query", "ASK {}")
+        .call()
+        .unwrap();
+    assert!(server(&q).starts_with("TripleTrail/"), "{}", server(&q));
     let v: Value = serde_json::from_str(&r.into_string().unwrap()).unwrap();
     assert_eq!(v["rows"], 1);
     assert!(v["plan"]["planning duration in seconds"].is_number());

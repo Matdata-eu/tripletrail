@@ -1354,6 +1354,9 @@ fn handle(state: &Arc<State>, mut request: Request) {
 #[cfg(feature = "replication")]
 const MAX_SYNC_WAITERS: usize = 1024;
 
+/// The `Server` header of every answer.
+const SERVER: &str = concat!("TripleTrail/", env!("CARGO_PKG_VERSION"));
+
 /// Sends `reply` (with `headers`), then records and logs the request.
 fn send_reply(
     state: &Arc<State>,
@@ -1376,6 +1379,9 @@ fn send_reply(
     for (name, value) in &reply.headers {
         headers.push(header(name, value));
     }
+    // Names the engine, where tiny_http would say "tiny-http (Rust)": MatGUI's Explain view
+    // recognises TripleTrail by it, and asks /{ds}/explain for the plan.
+    headers.push(header("Server", SERVER));
     let origin = if state.options.cors {
         Some("*")
     } else {
@@ -1395,7 +1401,7 @@ fn send_reply(
         // Headers a page on that origin may read (#223: the JavaScript client's `incomplete`).
         headers.push(header(
             "Access-Control-Expose-Headers",
-            "X-Result-Incomplete, X-Cache, X-Truncated",
+            "X-Result-Incomplete, X-Cache, X-Truncated, Server",
         ));
         if *request.method() == Method::Options {
             headers.push(header(

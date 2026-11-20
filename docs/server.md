@@ -153,7 +153,9 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   long-running geo functions.
 - `--cors <origin>` (repeatable) allows cross-origin requests from those origins, `--cors`
   alone from every origin. Pages may send `Authorization`, `Content-Type`, `Accept` and `X-API-Key`, and
-  read `X-Result-Incomplete`, `X-Cache` and `X-Truncated` from answers.
+  read `X-Result-Incomplete`, `X-Cache`, `X-Truncated` and `Server` from answers. Every answer
+  carries `Server: TripleTrail/<version>`, by which query tools such as MatGUI's Explain view
+  recognise the engine and ask `/{ds}/explain` for a plan.
 - `--union-default-graph kg,build` (or `*`, `TRIPLETRAIL_UNION_DEFAULT_GRAPH`;
   `unionDefaultGraph=true` when creating a dataset over the admin API) makes the default graph
   of queries and updates the union of all graphs, as Fuseki's `tdb2:unionDefaultGraph`: rules
