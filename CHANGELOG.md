@@ -9,8 +9,13 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- Query page: MatGUI's **Explain** tab of the results showed no plan and said "No engine recognised for this endpoint", as it knows only QLever, GraphDB, Stardog, Blazegraph and Neptune. For this server's own endpoints it now asks `/{ds}/explain` (the Engine list reads "Detect (TripleTrail)") and draws the plan as a tree with the rows and time of each step. See [the guide](docs/guide/02-first-steps.md#see-how-a-query-ran).
 - A dataset's turn (`maxConcurrent`) ends once its answer is read to its end, before the last bytes are written, as the caller's turn already did: a client that sends its next request as soon as an answer is in no longer waits for, or is refused for, the turn the answer still held, and `/$/stats` no longer shows it running.
 - A vector graph saved to its file (`<ds>.networks/vectors/`) counts as being made until the file is written: once its status says done, nothing writes to the folder any more.
+
+### Changed
+
+- Every answer carries `Server: TripleTrail/<version>` instead of `tiny-http (Rust)`, and `--cors` lets pages read it, so query tools can recognise the engine by it. The Explain plugin of MatGUI and YASGUI does not yet: its TripleTrail engine waits for a plugin release.
 
 ## 0.1.0-rc.2 - 2026-11-20
 

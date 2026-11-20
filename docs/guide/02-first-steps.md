@@ -140,6 +140,32 @@ line,sections,km
 0,2,4
 ```
 
+## See how a query ran
+
+After a query has run, the **Explain** tab of the results shows the plan TripleTrail ran. Its
+**Engine** list reads **Detect (TripleTrail)**, and the **Execution plan** gives every step
+(joins, sorts, triple patterns) with the rows it gave and the time it took, the slowest step
+in orange. **Algebra** below it is the query as SPARQL algebra. The **Explain** button above
+MatGUI gives the same plan in a dialog, with the decisions of the spatial index.
+
+The plan comes from `/ds/explain`, which takes a query like `/ds/query` does:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/ds/explain \
+  --data-urlencode 'query=PREFIX ex: <https://example.org/rail#>
+SELECT ?code WHERE { ?station a ex:Station ; ex:code ?code } ORDER BY ?code'
+```
+
+<!-- test: output contains -->
+```text
+{"rows":10,
+"name":"Sort(ASC(?code))","number of results":10
+```
+
+Each step has its `name`, `number of results`, `duration in seconds` and the steps under it
+in `children`.
+
 ## The same from the command line
 
 Every dataset answers at the same URLs as Apache Jena Fuseki, so any SPARQL client works with

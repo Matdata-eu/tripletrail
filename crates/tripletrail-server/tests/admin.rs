@@ -1998,6 +1998,80 @@ fn the_web_ui_and_its_embedded_matgui() {
     assert_eq!(status(get(&off, "/$/ui/")), 404);
 }
 
+/// MatGUI's Explain view knows no TripleTrail engine of its own, so the Query page teaches it
+/// one: for this server's `…/sparql` endpoints it POSTs the query to `…/explain` and draws the
+/// plan from `plan.plan`, whose steps carry `name`, `number of results`, `duration in seconds`
+/// and `children`. Before, the view said "No engine recognised" and showed no plan.
+#[test]
+fn the_query_page_explain_view_reads_the_plan_of_this_server() {
+    let dir = temp_dir("explain-view");
+    let s = start(&dir, Vec::new());
+    s.admin("POST", "/$/datasets")
+        .query("name", "plan")
+        .query("type", "mem")
+        .call()
+        .unwrap();
+    assert_eq!(
+        s.update(
+            "plan",
+            "INSERT DATA { <http://example.com/a> <http://example.com/p> <http://example.com/b> .
+               <http://example.com/b> <http://example.com/p> <http://example.com/c> }"
+        ),
+        200
+    );
+    let script = ureq::get(&format!("{}/$/ui/app.js", s.base))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    for wired in [
+        "registerPlugin(\"Explain\", TripleTrailExplain)",
+        "\"/explain\"",
+        "\"Content-Type\": \"application/sparql-query\"",
+        "r.plan.plan",
+        "n[\"number of results\"]",
+        "n[\"duration in seconds\"]",
+        "r.plan[\"planning duration in seconds\"]",
+    ] {
+        assert!(script.contains(wired), "app.js no longer has {wired}");
+    }
+    // The request the view sends, and the fields it reads from the answer.
+    let r = ureq::post(&format!("{}/plan/explain", s.base))
+        .set("Accept", "application/json")
+        .set("Content-Type", "application/sparql-query")
+        .set("X-TripleTrail-Client", "ui")
+        .send_string(
+            "SELECT * WHERE { ?a <http://example.com/p> ?b . ?b <http://example.com/p> ?c }",
+        )
+        .unwrap();
+    assert!(r.content_type().contains("json"));
+    // The Server header names TripleTrail, which the Explain plugin recognises (on every
+    // answer, so on the query the view reads it from too).
+    let server = |r: &ureq::Response| r.header("Server").unwrap_or_default().to_owned();
+    assert!(server(&r).starts_with("TripleTrail/"), "{}", server(&r));
+    let q = ureq::get(&format!("{}/plan/sparql", s.base))
+        .query("query", "ASK {}")
+        .call()
+        .unwrap();
+    assert!(server(&q).starts_with("TripleTrail/"), "{}", server(&q));
+    let v: Value = serde_json::from_str(&r.into_string().unwrap()).unwrap();
+    assert_eq!(v["rows"], 1);
+    assert!(v["plan"]["planning duration in seconds"].is_number());
+    let root = &v["plan"]["plan"];
+    fn walk(n: &Value, steps: &mut usize) {
+        assert!(n["name"].is_string(), "{n}");
+        assert!(n["number of results"].is_number(), "{n}");
+        assert!(n["duration in seconds"].is_number(), "{n}");
+        *steps += 1;
+        for c in n["children"].as_array().unwrap() {
+            walk(c, steps);
+        }
+    }
+    let mut steps = 0;
+    walk(root, &mut steps);
+    assert!(steps >= 3, "{root}");
+}
+
 #[test]
 fn a_dataset_created_with_a_union_default_graph_reads_every_graph() {
     let dir = temp_dir("union");

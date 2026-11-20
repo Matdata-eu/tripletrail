@@ -153,7 +153,10 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   long-running geo functions.
 - `--cors <origin>` (repeatable) allows cross-origin requests from those origins, `--cors`
   alone from every origin. Pages may send `Authorization`, `Content-Type`, `Accept` and `X-API-Key`, and
-  read `X-Result-Incomplete`, `X-Cache` and `X-Truncated` from answers.
+  read `X-Result-Incomplete`, `X-Cache`, `X-Truncated` and `Server` from answers. Every answer
+  carries `Server: TripleTrail/<version>`, which names the engine so that query tools can
+  recognise it. (The web UI's Query page shows TripleTrail's plan in MatGUI's Explain view
+  without it.)
 - `--union-default-graph kg,build` (or `*`, `TRIPLETRAIL_UNION_DEFAULT_GRAPH`;
   `unionDefaultGraph=true` when creating a dataset over the admin API) makes the default graph
   of queries and updates the union of all graphs, as Fuseki's `tdb2:unionDefaultGraph`: rules
@@ -2244,7 +2247,9 @@ then takes it out of the address bar.
   backup in one dialog.
 - **Query**: [MatGUI](https://github.com/Matdata-eu/Matgui) on the chosen dataset, with its
   table, map, chart and graph views, and **Explain**, which shows TripleTrail's plan with row counts,
-  timings and the spatial and range decisions.
+  timings and the spatial and range decisions. MatGUI's own **Explain** tab of the results asks
+  `/{ds}/explain` too for this server's endpoints (its Engine list reads "Detect (TripleTrail)"),
+  and draws the plan as a tree of steps with their rows and times.
 - **Map** (`/$/ui/map/{ds}`): the dataset's features on a map, a layer per collection (see
   [Vector tiles](#vector-tiles)), with a layer list, facets to filter each collection with
   their counts, and the features under a click. A feature's describe page opens in a panel

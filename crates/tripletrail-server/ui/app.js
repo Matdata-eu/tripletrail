@@ -506,12 +506,78 @@
     if (!matguiLoading) {
       matguiLoading = new Promise((resolve, reject) => {
         const s = el("script", { src: MATGUI + "yasgui.min.js" });
-        s.onload = resolve;
+        s.onload = () => { teachExplainTripleTrail(); resolve(); };
         s.onerror = () => reject(new Error("MatGUI could not be loaded from " + MATGUI));
         document.head.append(s);
       });
     }
     return matguiLoading;
+  }
+
+  // MatGUI's Explain view asks QLever, GraphDB, Stardog, Blazegraph or Neptune for a plan, and
+  // knows none of them here: it said "No engine recognised" and showed no plan. For this
+  // server's own endpoints it now asks TripleTrail's /explain, and shows the plan as a tree.
+  const explainUrlOf = (endpoint) => {
+    let u;
+    try { u = new URL(endpoint, location.href); } catch (e) { return null; }
+    if (u.origin !== location.origin || !/\/(sparql|query)\/?$/.test(u.pathname)) return null;
+    return u.origin + u.pathname.replace(/\/(sparql|query)\/?$/, "/explain");
+  };
+  const tripletrailEngine = {
+    id: "tripletrail",
+    label: "TripleTrail",
+    description: "The plan TripleTrail ran, with the rows and time of each step.",
+    needsRequestOptions: true,
+    buildRequest(query, endpoint) {
+      const url = explainUrlOf(endpoint);
+      if (!url) throw new Error("This endpoint is not on this TripleTrail server.");
+      return { query, accept: "application/json", endpoint: url };
+    },
+    parse(body) { return explainPlanOf(body); },
+  };
+  /** TripleTrail's explain JSON as the tree (or text) MatGUI's Explain view draws. */
+  function explainPlanOf(body) {
+    let r;
+    try { r = JSON.parse(body); } catch (e) { throw new Error("TripleTrail did not return JSON."); }
+    const ms = (s) => (typeof s === "number" ? s * 1000 : undefined);
+    const summary = [];
+    if (typeof r.rows === "number") summary.push(`Result size: ${r.rows.toLocaleString("en-US")} rows`);
+    const planning = r.plan && ms(r.plan["planning duration in seconds"]);
+    if (planning !== undefined) summary.push(`Query planning: ${planning.toFixed(2)} ms`);
+    const sp = r.spatial || {};
+    if (sp.filters || sp.joins) summary.push(`Spatial: ${sp.filters || 0} filters, ${sp.joins || 0} joins, ${sp.candidates || 0} candidates, index lookup ${(sp.lookup_ms || 0).toFixed(1)} ms`);
+    for (const d of sp.decisions || []) summary.push(`Spatial rewrite: ${d}`);
+    const node = (n) => ({
+      label: String(n.name || "step").replace(/\s+/g, " ").trim(),
+      details: [],
+      rows: typeof n["number of results"] === "number" ? n["number of results"] : undefined,
+      timeMs: ms(n["duration in seconds"]),
+      children: (n.children || []).map(node),
+    });
+    const root = r.plan && (r.plan.plan || (r.plan.name ? r.plan : null));
+    if (root) return { kind: "tree", root: node(root), summary };
+    if (r.restricted) summary.push("The plan is left out: you may read only some of the graphs, and the plan is chosen from all of them.");
+    return { kind: "text", text: summary.join("\n") || "No plan." };
+  }
+  function teachExplainTripleTrail() {
+    const Yasr = window.Yasgui && window.Yasgui.Yasr;
+    const Explain = Yasr && Yasr.plugins && Yasr.plugins.Explain;
+    if (!Explain || Explain.tripletrail) return;
+    class TripleTrailExplain extends Explain {
+      resolveEngine(options) {
+        const found = super.resolveEngine(options);
+        return !found.engine && found.source === "none" && explainUrlOf(this.endpoint || "")
+          ? { engine: tripletrailEngine, source: "detected" } : found;
+      }
+      async runRequest(engine, req, signal) {
+        if (engine !== tripletrailEngine) return super.runRequest(engine, req, signal);
+        const headers = { ...viewAs.headers(), Accept: req.accept, "Content-Type": "application/sparql-query", "X-TripleTrail-Client": "ui" };
+        const r = await fetch(req.endpoint, { method: "POST", headers, body: req.query, signal });
+        return { status: r.status, headers: r.headers, content: await r.text() };
+      }
+    }
+    TripleTrailExplain.tripletrail = true;
+    Yasr.registerPlugin("Explain", TripleTrailExplain);
   }
   // A Workbench workspace is queried as "workspace:<id>" (from the Workbench's Open in MatGUI).
   const WS = "workspace:";
