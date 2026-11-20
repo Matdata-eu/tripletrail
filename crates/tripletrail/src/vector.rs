@@ -688,7 +688,7 @@ impl VectorIndex {
     }
 
     /// How many vectors of `len` numbers the graph of that length holds (0 for none yet),
-    /// and whether one is being made.
+    /// and whether one is being made (or written to its file).
     pub fn graph_status(&self, len: usize) -> (usize, bool) {
         let graphs = lock(&self.shared.graphs);
         graphs.get(&(len as u32)).map_or((0, false), |s| {
@@ -917,14 +917,19 @@ impl VectorIndex {
                 if let Some(shared) = shared.upgrade() {
                     let mut graphs = lock(&shared.graphs);
                     let state = graphs.entry(dim).or_default();
-                    state.building = false;
+                    // Still being made while it is written: a graph whose status says done
+                    // has its file in place, and nothing writes to the folder after that.
+                    state.building = file.is_some();
                     state.graph = Some(Arc::clone(&graph));
                 }
                 // Saved after it is in use; still under the turn, so saves do not overlap.
-                if let Some(path) = &file
-                    && let Err(e) = graph.save(path, &property, &rows)
-                {
-                    eprintln!("saving the vector graph {}: {e}", path.display());
+                if let Some(path) = &file {
+                    if let Err(e) = graph.save(path, &property, &rows) {
+                        eprintln!("saving the vector graph {}: {e}", path.display());
+                    }
+                    if let Some(shared) = shared.upgrade() {
+                        lock(&shared.graphs).entry(dim).or_default().building = false;
+                    }
                 }
             });
         if spawned.is_err()

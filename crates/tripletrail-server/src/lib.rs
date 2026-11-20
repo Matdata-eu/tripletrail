@@ -937,13 +937,15 @@ impl From<std::io::Error> for HttpError {
 
 type Body = Box<dyn Read>;
 
-/// A body that lets its caller permit go once it is read to its end: at its declared length,
-/// or at the end of the reader, so before its last bytes are handed on to be written.
+/// A body that lets its permits (the caller's turn, the turn on the dataset) go once it is
+/// read to its end: at its declared length, or at the end of the reader, so before its last
+/// bytes are handed on to be written.
 struct ReleaseAtEnd {
     body: Body,
     /// The bytes still to come, when the length is known.
     left: Option<usize>,
     permit: Option<limits::CallerPermit>,
+    turn: Option<limits::Permit>,
 }
 
 impl Read for ReleaseAtEnd {
@@ -954,6 +956,7 @@ impl Read for ReleaseAtEnd {
         }
         if (n == 0 && !buf.is_empty()) || self.left == Some(0) {
             self.permit = None;
+            self.turn = None;
         }
         Ok(n)
     }
@@ -1060,9 +1063,9 @@ struct Context {
     row_rules: Option<tripletrail::RowRules>,
     /// The chosen dataset's limits.
     limits: limits::Limits,
-    /// The request's turn on its dataset, held until the answer is sent.
+    /// The request's turn on its dataset, held until the answer is read to its end.
     permit: Option<limits::Permit>,
-    /// The caller's turn, held until the answer is sent.
+    /// The caller's turn, held until the answer is read to its end.
     caller_permit: Option<limits::CallerPermit>,
     /// For a 429: when to retry, in seconds.
     retry_after: Option<u64>,
@@ -1420,20 +1423,23 @@ fn send_reply(
     } else {
         reply.body
     };
-    // The caller's turn ends once the body is read to its end, before its last bytes are
-    // written: a client that sends its next request as soon as this answer is in must not be
-    // refused for a turn this one still holds.
+    // The caller's turn and the turn on the dataset end once the body is read to its end,
+    // before its last bytes are written: a client that sends its next request as soon as this
+    // answer is in must not wait for, or be refused for, a turn this one still holds, nor see
+    // it still running in the statistics.
     let length = if head { Some(0) } else { reply.length };
     if length == Some(0) {
         context.caller_permit = None;
+        context.permit = None;
     }
-    let body: Body = match context.caller_permit.take() {
-        Some(permit) => Box::new(ReleaseAtEnd {
+    let body: Body = match (context.caller_permit.take(), context.permit.take()) {
+        (None, None) => body,
+        (permit, turn) => Box::new(ReleaseAtEnd {
             body,
             left: length,
-            permit: Some(permit),
+            permit,
+            turn,
         }),
-        None => body,
     };
     let response = Response::new(StatusCode(status), headers, body, length, None);
     // Returns once the body is sent: the dataset is held until then.

@@ -7,6 +7,11 @@ versions may change the store format and the API; the release notes say how to u
 
 ## [Unreleased]
 
+### Fixed
+
+- A dataset's turn (`maxConcurrent`) ends once its answer is read to its end, before the last bytes are written, as the caller's turn already did: a client that sends its next request as soon as an answer is in no longer waits for, or is refused for, the turn the answer still held, and `/$/stats` no longer shows it running.
+- A vector graph saved to its file (`<ds>.networks/vectors/`) counts as being made until the file is written: once its status says done, nothing writes to the folder any more.
+
 ## 0.1.0-rc.2 - 2026-11-20
 
 The second release candidate: vector search for GraphRAG, more full-text syntaxes, a richer Map page and describe pages, and fixes to spatial filters over property paths.
