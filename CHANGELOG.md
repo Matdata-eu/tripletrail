@@ -7,6 +7,10 @@ versions may change the store format and the API; the release notes say how to u
 
 ## [Unreleased]
 
+## 0.1.0-rc.2 - 2026-11-20
+
+The second release candidate: vector search for GraphRAG, more full-text syntaxes, a richer Map page and describe pages, and fixes to spatial filters over property paths.
+
 ### Added
 
 - `POST /{ds}/search/similar` takes the same parameters as a form (`application/x-www-form-urlencoded`), for a query vector too long for a URL: 768 numbers make about 17 KB, which nginx and Cloudflare refuse with 414. The Search page's **Find similar** sends its vector this way.

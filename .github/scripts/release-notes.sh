@@ -33,6 +33,7 @@ if $check; then
   cargo_version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
   if [ "$cargo_version" != "$version" ]; then
     echo "Cargo.toml has version $cargo_version, not $version" >&2
+    echo "(the tag must be v$cargo_version, or set that version in Cargo.toml first)" >&2
     status=1
   fi
   if [ -z "$(section | tr -d '[:space:]')" ]; then
