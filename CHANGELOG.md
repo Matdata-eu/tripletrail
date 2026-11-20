@@ -13,7 +13,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Changed
 
-- Every answer carries `Server: TripleTrail/<version>` instead of `tiny-http (Rust)`, and `--cors` lets pages read it: the Explain plugin of MatGUI and YASGUI recognises TripleTrail by it, on other hosts too.
+- Every answer carries `Server: TripleTrail/<version>` instead of `tiny-http (Rust)`, and `--cors` lets pages read it, so query tools can recognise the engine by it. The Explain plugin of MatGUI and YASGUI does not yet: its TripleTrail engine waits for a plugin release.
 
 ## 0.1.0-rc.2 - 2026-11-20
 
