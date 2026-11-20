@@ -333,9 +333,8 @@ fn nearest_follows_a_graph_past_the_threshold_and_still_sees_writes() {
 #[test]
 fn a_saved_graph_is_read_again_by_a_new_engine() {
     use tripletrail::oxigraph::model::NamedNode;
-    // Removed when the test ends, after the last engine: its background save of the graph
-    // built again may still be writing into the folder (removing it then raced that save).
-    let dir = tripletrail_testdir::tempdir("vector-graph");
+    let dir = std::env::temp_dir().join(format!("tripletrail-vector-graph-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     let store = tripletrail::store::Store::new();
     let property = NamedNode::new("http://example.com/embedding").unwrap();
     let dim = 16;
@@ -402,7 +401,7 @@ fn a_saved_graph_is_read_again_by_a_new_engine() {
     e.set_vector_graph_min(500);
     assert_eq!(rows(&e, &nearest)[0], ["<http://example.com/new>"]);
     wait(&e, 3001);
-    drop(e);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// `ORDER BY DESC(tt:cosine(…)) LIMIT k` gives on the tripletrail store, which answers it
