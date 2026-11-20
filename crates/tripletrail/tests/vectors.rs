@@ -333,8 +333,7 @@ fn nearest_follows_a_graph_past_the_threshold_and_still_sees_writes() {
 #[test]
 fn a_saved_graph_is_read_again_by_a_new_engine() {
     use tripletrail::oxigraph::model::NamedNode;
-    let dir = std::env::temp_dir().join(format!("tripletrail-vector-graph-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = tripletrail_testdir::tempdir("vector-graph");
     let store = tripletrail::store::Store::new();
     let property = NamedNode::new("http://example.com/embedding").unwrap();
     let dim = 16;
@@ -364,7 +363,7 @@ fn a_saved_graph_is_read_again_by_a_new_engine() {
             .unwrap_or_default()
     };
     {
-        let e = Engine::with_network_dir(store.clone(), &dir).unwrap();
+        let e = Engine::with_network_dir(store.clone(), &*dir).unwrap();
         e.set_vector_graph_min(500);
         e.load(RdfFormat::NTriples, clustered(0, 3000, dim).as_bytes())
             .unwrap();
@@ -379,7 +378,7 @@ fn a_saved_graph_is_read_again_by_a_new_engine() {
     let file = saved().remove(0);
     let written = std::fs::metadata(&file).unwrap().modified().unwrap();
     // A new engine on the same store (a restart), with one more vector written since.
-    let e = Engine::with_network_dir(store, &dir).unwrap();
+    let e = Engine::with_network_dir(store, &*dir).unwrap();
     e.set_vector_graph_min(500);
     e.update(&format!(
         r#"PREFIX ex: <http://example.com/> PREFIX tt: <http://w3id.org/tripletrail/fn#>
@@ -397,11 +396,14 @@ fn a_saved_graph_is_read_again_by_a_new_engine() {
     );
     // A file that is not a graph is ignored, and the graph built again.
     std::fs::write(&file, b"not a graph").unwrap();
-    let e = Engine::with_network_dir(e.store().clone(), &dir).unwrap();
+    let e = Engine::with_network_dir(e.store().clone(), &*dir).unwrap();
     e.set_vector_graph_min(500);
     assert_eq!(rows(&e, &nearest)[0], ["<http://example.com/new>"]);
+    // Done means saved too: nothing writes to the folder once the status says so.
     wait(&e, 3001);
-    std::fs::remove_dir_all(&dir).unwrap();
+    let file = saved().remove(0);
+    assert!(std::fs::read(&file).unwrap().starts_with(b"TTVECG01"));
+    assert!(!file.with_extension("part").exists());
 }
 
 /// `ORDER BY DESC(tt:cosine(…)) LIMIT k` gives on the tripletrail store, which answers it
