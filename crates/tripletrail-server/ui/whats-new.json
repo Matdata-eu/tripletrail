@@ -1,5 +1,23 @@
 [
   {
+    "version": "0.1.0-rc.2",
+    "date": "2026-11-20",
+    "new": [
+      "Find similar on the Search page, and GET /{ds}/search/similar for GraphRAG: the nearest resources to a text, a vector or a resource, with their descriptions.",
+      "Full-text queries written for Stardog, Virtuoso, QLever, GraphDB's connectors and Jena's LARQ run unchanged.",
+      "Map page: show or hide each layer, choose the base map, zoom to all the data and go fullscreen.",
+      "Describe pages with tabs: overview, all properties, incoming links, graph, data model and RDF.",
+      "A Share button that copies a link to the view you are on, and a copy button next to every IRI."
+    ],
+    "improved": [
+      "Transitive property paths and nearest-vector ORDER BY queries are many times faster.",
+      "Every page uses the full width of the window."
+    ],
+    "fixed": [
+      "Spatial filters over a geometry reached by a property path with an alternative or a repeat, and GeoSPARQL relations inside EXISTS, give the right answers."
+    ]
+  },
+  {
     "version": "0.1.0-rc.1",
     "date": "2026-11-17",
     "new": [

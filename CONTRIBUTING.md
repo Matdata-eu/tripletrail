@@ -59,7 +59,8 @@ Matdata. Please open an issue instead, and we'll pick it up.
 3. Add the release's entry at the top of `crates/tripletrail-server/ui/whats-new.json` (the web
    UI's "What's new"; a test checks that its newest entry is the crate version).
 4. Check with `.github/scripts/release-notes.sh --check 1.2.3`, merge, then tag `v1.2.3`
-   on main and push the tag.
+   on main and push the tag. The tag is `v` and the version exactly as `Cargo.toml` has it: a
+   release candidate is `v0.1.0-rc.2`, with the dot, not `v0.1.0-rc2`.
 
 The "Release" workflow then builds `tripletrail` for Linux (x86_64, aarch64), macOS (x86_64,
 arm64) and Windows (x86_64). Each archive holds `LICENSE`, `NOTICE` and
