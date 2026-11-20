@@ -7,6 +7,10 @@ versions may change the store format and the API; the release notes say how to u
 
 ## [Unreleased]
 
+### Fixed
+
+- Query page: MatGUI's **Explain** tab of the results showed no plan and said "No engine recognised for this endpoint", as it knows only QLever, GraphDB, Stardog, Blazegraph and Neptune. For this server's own endpoints it now asks `/{ds}/explain` (the Engine list reads "Detect (TripleTrail)") and draws the plan as a tree with the rows and time of each step. See [the guide](docs/guide/02-first-steps.md#see-how-a-query-ran).
+
 ## 0.1.0-rc.2 - 2026-11-20
 
 The second release candidate: vector search for GraphRAG, more full-text syntaxes, a richer Map page and describe pages, and fixes to spatial filters over property paths.

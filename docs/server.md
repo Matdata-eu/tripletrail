@@ -2244,7 +2244,9 @@ then takes it out of the address bar.
   backup in one dialog.
 - **Query**: [MatGUI](https://github.com/Matdata-eu/Matgui) on the chosen dataset, with its
   table, map, chart and graph views, and **Explain**, which shows TripleTrail's plan with row counts,
-  timings and the spatial and range decisions.
+  timings and the spatial and range decisions. MatGUI's own **Explain** tab of the results asks
+  `/{ds}/explain` too for this server's endpoints (its Engine list reads "Detect (TripleTrail)"),
+  and draws the plan as a tree of steps with their rows and times.
 - **Map** (`/$/ui/map/{ds}`): the dataset's features on a map, a layer per collection (see
   [Vector tiles](#vector-tiles)), with a layer list, facets to filter each collection with
   their counts, and the features under a click. A feature's describe page opens in a panel
