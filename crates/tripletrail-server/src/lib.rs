@@ -25,6 +25,7 @@ mod access_history;
 mod access_review;
 mod admin;
 mod archive;
+mod area;
 #[cfg(feature = "enterprise")]
 mod audit;
 pub mod auth;

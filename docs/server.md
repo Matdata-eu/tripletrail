@@ -3010,7 +3010,8 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
 - **Items** take `limit` (10 by default, at most 10,000), `offset` and `bbox` (four numbers,
   or six with heights, in CRS84; `minx > maxx` crosses the antimeridian), and give a `next`
   link while there are more. A page holds `limit` distinct features; with `bbox`, a feature
-  is in it when any of its geometries intersects the box, and comes once. Other parameters
+  is in it when any of its geometries intersects the box, and comes once. They also take the
+  map's spatial filter, `area`, `rel` and `dist` ([vector tiles](#vector-tiles)). Other parameters
   are refused with `400`. Features come in the order
   the store finds them (no sort, so the first page of a large class is fast), which stays the
   same while the dataset does not change: a write between two pages can shift them.
@@ -3020,7 +3021,7 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   IRI by its full form). Several filters must all hold. The OpenAPI definition lists them per
   collection; a property without a facet is refused as an unknown parameter. A key that is
   also a parameter of the items (`limit`, `offset`, `bbox`, `bbox-crs`, `crs`, `datetime`,
-  `geometries`, `filter`, `filter-lang`, `filter-crs`, `f`, `timeout`) is never a filter:
+  `geometries`, `filter`, `filter-lang`, `filter-crs`, `area`, `rel`, `dist`, `f`, `timeout`) is never a filter:
   give the property another `tts:key`.
 - **CQL2** (Part 3). `filter` takes a CQL2 expression over the collection's queryables,
   `…/collections/{id}/queryables` (a JSON Schema): every property of the collection, typed
@@ -3267,6 +3268,22 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   last as a prefix; case and Latin accents aside), as `/{ds}/tiles/search` matches them. A
   bad box or graph IRI is `400`. A facet named `bbox`, `graph` or `q` is no longer filtered by
   that bare name: use `{collection}.{key}`.
+- A spatial filter (#33) applies the same way, and to the [OGC API's items](#ogc-api--features):
+  - `area` is a geometry. It is WKT, in CRS84 unless it names its CRS first as a
+    `geo:wktLiteral` does, of at most 200,000 bytes. It can also be the IRI of a resource whose
+    geometry (`geo:asWKT`, or through `geo:hasGeometry`; several are taken together) is the
+    area, read as the caller sees the data.
+  - `rel` is one of `intersects` (the default), `within`, `contains`, `touches`, `crosses`,
+    `overlaps`, `disjoint` or `dwithin`. Each is judged as `geof:sf…` judges it, between one
+    of the feature's geometries and the area. `disjoint` keeps the features with a geometry,
+    none of which meets the area.
+  - `dist` is in metres, from 0 to 1,000,000, with `rel=dwithin` only. It keeps the features
+    with a geometry at most that far from the area, as `geof:distance` measures it.
+
+  The candidates come from the spatial index: the area's box, widened by `dist`. The exact
+  test runs on those only. A bad `area` (not WKT, or an IRI without a geometry), `rel` or
+  `dist`, or a `rel` or `dist` without an `area`, is `400`. The tile and facet caches key on
+  the filter. A facet named `area`, `rel` or `dist` is filtered only as `{collection}.{key}`.
 
 ## REST API (JSON-LD)
 

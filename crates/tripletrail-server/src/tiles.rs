@@ -462,7 +462,7 @@ pub(crate) fn route(
     let single = *layer != "all";
     let mut filters: HashMap<&str, Filter> = HashMap::new();
     for c in &shown {
-        let scope = scope_filter(entry, view, c, params)?;
+        let scope = scope_filter(entry, view, c, params, false)?;
         let filter = facet_filter(c, params, single, None, &scope)?;
         if !filter.sparql.is_empty() || filter.color.is_some() {
             filters.insert(&c.id, filter);
@@ -762,7 +762,7 @@ struct Scope {
 
 /// The parameters of [`scope_filter`], which a facet of the same key takes only as
 /// `{collection}.{key}`.
-const SCOPE_KEYS: [&str; 3] = ["bbox", "graph", "q"];
+const SCOPE_KEYS: [&str; 6] = ["bbox", "graph", "q", "area", "rel", "dist"];
 /// Words of `q` a text filter takes at most.
 const SCOPE_WORDS: usize = 8;
 /// Graphs a `graph` filter takes at most.
@@ -773,12 +773,17 @@ const SCOPE_GRAPHS: usize = 100;
 ///   box, read through the spatial index, as `bbox` of the OGC API's items;
 /// - `graph=IRI`, repeated for several: the features with triples in one of those graphs;
 /// - `q=words`: the features with an indexed literal holding every word (full-text, as the
-///   map's search box: case and Latin accents aside, the last word as a prefix).
+///   map's search box: case and Latin accents aside, the last word as a prefix);
+/// - `area`, `rel` and `dist`: the features with a geometry in a relation to an area (#33,
+///   [`crate::area`]).
+///
+/// `many`: for counts over the whole collection rather than a tile's features.
 fn scope_filter(
     entry: &Entry,
     view: &View,
     collection: &Collection,
     params: &Params,
+    many: bool,
 ) -> Result<Scope, HttpError> {
     let mut out = Scope::default();
     let mut sign = |part: String| {
@@ -796,6 +801,10 @@ fn scope_filter(
             ways.pattern("?f", "?scopeW"),
         ));
         sign(format!("bbox={window}"));
+    }
+    if let Some(area) = crate::area::area_filter(entry, view, collection, params, many)? {
+        sparql.push_str(&area.sparql);
+        sign(area.signature);
     }
     let mut graphs: Vec<&str> = params
         .0
@@ -1058,7 +1067,7 @@ fn facet_counts(
         " FILTER EXISTS {{ {} }}",
         collection.geometry.pattern("?f", "?w")
     );
-    let scope = scope_filter(entry, view, collection, params)?;
+    let scope = scope_filter(entry, view, collection, params, true)?;
     let all = facet_filter(collection, params, true, None, &scope)?;
     let number = |t: &Option<Term>| match t {
         Some(Term::Literal(l)) => l.value().parse::<u64>().unwrap_or(0),

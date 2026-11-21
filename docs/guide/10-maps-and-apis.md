@@ -491,6 +491,53 @@ curl -s 'http://localhost:7878/ds/tiles/facets/Station?q=brussels%20no' | grep -
 They combine with each other and with facet filters, and a tile asked with them
 (`/ds/tiles/all/8/131/86.mvt?q=brussels`) draws only those features.
 
+### Filter by a spatial relation to an area
+
+`area` goes further than a box: it keeps the features with a geometry in a relation to any
+area, drawn or taken from a feature. The OGC API's items take the same parameters.
+
+- `area`: WKT in longitude and latitude (or in the CRS it names first, as a `geo:wktLiteral`
+  does), or the IRI of a resource with a geometry, such as a station or a region;
+- `rel`: how a feature's geometry relates to the area. It is `intersects` by default, or
+  `within`, `contains`, `touches`, `crosses`, `overlaps`, `disjoint` (none of its geometries
+  meets the area) or `dwithin`;
+- `dist`: metres, with `rel=dwithin`: the features at most that far from the area.
+
+The stations in an area drawn around Mechelen and Antwerp, then those within 1.7 km and
+within 2 km of Brussels-Central, named by its IRI:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?area=POLYGON((4.3%2050.95,%204.6%2050.95,%204.6%2051.3,%204.3%2051.3,%204.3%2050.95))' | grep -o '"features":[0-9]*'
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?area=https%3A%2F%2Fexample.org%2Frail%23BXC&rel=dwithin&dist=1700' | grep -o '"features":[0-9]*'
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?area=https%3A%2F%2Fexample.org%2Frail%23BXC&rel=dwithin&dist=2000' | grep -o '"features":[0-9]*'
+```
+
+<!-- test: output -->
+```text
+"features":2
+"features":2
+"features":3
+```
+
+The sections that touch Brussels-North (they end there), and the stations outside the area
+around Mechelen and Antwerp, as GeoJSON items:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/tiles/facets/Section?area=https%3A%2F%2Fexample.org%2Frail%23BXN&rel=touches' | grep -o '"features":[0-9]*'
+curl -s 'http://localhost:7878/ds/ogc/collections/Station/items?area=POLYGON((4.3%2050.95,%204.6%2050.95,%204.6%2051.3,%204.3%2051.3,%204.3%2050.95))&rel=disjoint' | grep -o '"numberReturned":[0-9]*'
+```
+
+<!-- test: output -->
+```text
+"features":3
+"numberReturned":8
+```
+
+A bad `area`, `rel` or `dist` is a `400` that says which. The candidates come from the
+spatial index, so a small area on a large dataset stays fast.
+
 A panel that shows several layers at once asks for their facets in one request, naming each
 collection: every collection's own answer comes back, with `features` their sum and `shared`
 the facets they have in common (the same key), summed over them. A bare filter such as
