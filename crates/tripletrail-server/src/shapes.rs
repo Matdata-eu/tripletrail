@@ -296,6 +296,23 @@ pub(crate) fn current_version(folder: &Path) -> Option<u64> {
     current(folder)
 }
 
+/// What the readers' shapes are made from besides the data, for caches: the own set's version
+/// and when the installed pack was written (a pack installed or removed changes it; #92).
+pub(crate) fn shapes_stamp(folder: &Path) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let own = current(folder);
+    let pack = pack_dir(folder).and_then(|dir| {
+        let meta = fs::metadata(dir.join(PACK_INFO)).ok()?;
+        Some((meta.modified().ok()?, meta.len()))
+    });
+    if own.is_none() && pack.is_none() {
+        return None;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (own, pack).hash(&mut hasher);
+    Some(hasher.finish())
+}
+
 /// Where a version came from, when it was pulled from a repository.
 pub(crate) fn version_source(folder: &Path, version: u64) -> Option<Value> {
     let text = fs::read_to_string(folder.join(format!("v{version}")).join(SOURCE)).ok()?;
@@ -868,6 +885,9 @@ fn active(
     if let Some(own) = &own {
         all = shapes::overlay(&all, own);
     }
+    // A higher set may keep the generated shapes it does not take over from some readers.
+    let uppers: Vec<&Graph> = pack.iter().map(|(_, g)| g).chain(own.as_ref()).collect();
+    let all = shapes::hide_generated(&all, &generated, &uppers);
     let source = match (&pack, own.is_some()) {
         (Some((label, _)), true) => format!("pack {label}; {source}"),
         (Some((label, _)), false) => format!("pack {label}"),

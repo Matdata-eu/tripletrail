@@ -38,6 +38,65 @@ fn copy_all(
     }
 }
 
+/// `all` (the layers overlaid) with the generated node shapes hidden from the readers that a
+/// higher set names with `tts:hidesGenerated` (#92): a pack or the dataset's own set that
+/// shows only its own classes on the map. A generated shape that a higher set overrides or
+/// refines (by its IRI, or a refining shape for its class) is the higher set's and stays.
+pub fn hide_generated(all: &Graph, generated: &Graph, uppers: &[&Graph]) -> Graph {
+    let hides = tts("hidesGenerated");
+    let mut readers: Vec<NamedNode> = uppers
+        .iter()
+        .flat_map(|g| g.triples_for_predicate(&hides))
+        .filter_map(|t| match t.object {
+            TermRef::NamedNode(n) => Some(n.into_owned()),
+            _ => None,
+        })
+        .collect();
+    readers.sort_unstable();
+    readers.dedup();
+    if readers.is_empty() {
+        return all.clone();
+    }
+    let (target, refines) = (sh("targetClass"), tts("refines"));
+    let refined: HashSet<NamedNode> = uppers
+        .iter()
+        .flat_map(|g| {
+            node_shapes(g)
+                .into_iter()
+                .filter(|n| {
+                    g.object_for_subject_predicate(n, &refines)
+                        .is_some_and(|v| matches!(v, TermRef::Literal(l) if l.value() == "true"))
+                })
+                .flat_map(|n| {
+                    g.objects_for_subject_predicate(&n, &target)
+                        .filter_map(|c| match c {
+                            TermRef::NamedNode(c) => Some(c.into_owned()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                })
+        })
+        .collect();
+    let mut out = all.clone();
+    let hidden = tts("hiddenFrom");
+    for node in node_shapes(generated) {
+        let touched = uppers
+            .iter()
+            .any(|g| g.triples_for_subject(&node).next().is_some())
+            || generated
+                .objects_for_subject_predicate(&node, &target)
+                .any(|c| matches!(c, TermRef::NamedNode(c) if refined.contains(&c.into_owned())));
+        // Gone when a higher set replaced it by class.
+        if touched || all.triples_for_subject(&node).next().is_none() {
+            continue;
+        }
+        for reader in &readers {
+            out.insert(TripleRef::new(&node, &hidden, reader));
+        }
+    }
+    out
+}
+
 /// How a node shape of a lower set is met by an upper set (see [`overlay`]).
 struct Meeting {
     /// The lower node shape.
@@ -473,6 +532,7 @@ pub fn check(graph: &Graph) -> Vec<String> {
     let defined = defined();
     let readers: HashSet<String> = Reader::ALL.iter().map(|r| r.iri().into_string()).collect();
     let select = tts("select");
+    let hides = tts("hidesGenerated");
     let (hidden, only, colour, zoom, target, path) = (
         tts("hiddenFrom"),
         tts("onlyFor"),
@@ -500,7 +560,9 @@ pub fn check(graph: &Graph) -> Vec<String> {
                 &o.as_str()[TTS.len()..]
             ));
         }
-        if (t.predicate == hidden.as_ref() || t.predicate == only.as_ref())
+        if (t.predicate == hidden.as_ref()
+            || t.predicate == only.as_ref()
+            || t.predicate == hides.as_ref())
             && !matches!(t.object, TermRef::NamedNode(o) if readers.contains(o.as_str()))
         {
             errors.push(format!(

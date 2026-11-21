@@ -403,7 +403,11 @@ percent-encoded, so a customised set can override it by IRI) with:
 
 `reader=` (`validation`, `map`, `describe`, `search`, `ogc-features`, `rest-api`, `graphql`,
 `ai`) answers that reader's projection: shapes it is `tts:hiddenFrom`, or not `tts:onlyFor`,
-left out, deactivated shapes (`sh:deactivated true`) left out, and, for all readers but
+left out, deactivated shapes (`sh:deactivated true`) left out, the generated node shapes left
+out when a pack or the dataset's own set names the reader with `tts:hidesGenerated` (on a
+`tts:ShapeSet` node of its own, such as `<urn:my:set> a tts:ShapeSet ; tts:hidesGenerated
+tts:Reader-Map`: the map shows only the set's classes; a generated shape the set overrides or
+refines stays) (#92), and, for all readers but
 validation, the property shapes of the superclasses' node shapes added to each node shape that
 has none for that path (or key). A superclass's node shape hidden from the reader still lends its
 property shapes: an abstract `ex:AssetShape` `tts:hiddenFrom tts:Reader-Map` gives no asset
