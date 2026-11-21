@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tripletrail_geo::sync::LockUnpoisoned;
 use tripletrail_routing::{Cch, Graph, GraphBuilder, InternedGraph};
-use tripletrail_store::Dataset;
+use tripletrail_store::{Dataset, RowView};
 
 /// The state of a built network, as `pgr:networkInfo` reports it.
 #[derive(Debug, Clone)]
@@ -204,16 +204,18 @@ impl Network {
         pattern: &GraphPattern,
         directed: bool,
     ) -> Result<Self, PgrError> {
-        Self::build_prefixed(store, None, evaluator, pattern, directed, "")
+        Self::build_prefixed(store, None, None, evaluator, pattern, directed, "")
     }
 
     /// Like [`Network::build`], reading the columns whose names start with `prefix`
     /// (`?fine_id ?fine_source ...` for the fine network of hierarchical routing).
     /// `dataset`: the graphs the edge sub-select reads (a caller limited to some graphs,
-    /// #203); `None` reads the store's own.
+    /// #203); `None` reads the store's own. `rows`: what a caller under row rules sees
+    /// (#202); `None` reads every row.
     pub fn build_prefixed(
         store: &Dataset,
         dataset: Option<&QueryDataset>,
+        rows: Option<&RowView>,
         evaluator: &(dyn Fn() -> SparqlEvaluator + Sync),
         pattern: &GraphPattern,
         directed: bool,
@@ -222,13 +224,22 @@ impl Network {
         let start = Instant::now();
         let parts = union_branches(pattern);
         let rows: Vec<(Vec<EdgeRow>, Columns)> = if parts.len() == 1 {
-            vec![edge_rows(store, dataset, evaluator(), &parts[0], prefix)?]
+            vec![edge_rows(
+                store,
+                dataset,
+                rows,
+                evaluator(),
+                &parts[0],
+                prefix,
+            )?]
         } else {
             std::thread::scope(|scope| {
                 let workers: Vec<_> = parts
                     .iter()
                     .map(|part| {
-                        scope.spawn(move || edge_rows(store, dataset, evaluator(), part, prefix))
+                        scope.spawn(move || {
+                            edge_rows(store, dataset, rows, evaluator(), part, prefix)
+                        })
                     })
                     .collect();
                 workers
@@ -338,6 +349,7 @@ fn union_branches(pattern: &GraphPattern) -> Vec<GraphPattern> {
 fn edge_rows(
     store: &Dataset,
     dataset: Option<&QueryDataset>,
+    rows: Option<&RowView>,
     evaluator: SparqlEvaluator,
     pattern: &GraphPattern,
     prefix: &str,
@@ -352,7 +364,7 @@ fn edge_rows(
         *prepared.dataset_mut() = d.clone();
     }
     let QueryResults::Solutions(solutions) = store
-        .execute(prepared)
+        .execute_in(prepared, rows)
         .map_err(|e| PgrError::EdgeQuery(Box::new(e)))?
     else {
         return Err(PgrError::Request("the edge query must be a SELECT".into()));

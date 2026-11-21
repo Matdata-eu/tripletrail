@@ -80,6 +80,8 @@ pub struct PathService {
     /// The graphs the search reads, for a caller who reads only some graphs (#203): the
     /// calling query's dataset. `None` reads the store as configured.
     dataset: Option<oxigraph::sparql::QueryDataset>,
+    /// What a caller under row rules sees (#202): the search reads only those rows.
+    rows: Option<tripletrail_store::RowView>,
 }
 
 impl PathService {
@@ -95,6 +97,7 @@ impl PathService {
             union_default_graph,
             cancellation,
             dataset: None,
+            rows: None,
         }
     }
 
@@ -107,6 +110,27 @@ impl PathService {
             dataset: Some(dataset),
             ..self
         }
+    }
+
+    /// The same service, reading only what `rows` shows (#202).
+    #[must_use]
+    pub fn with_rows(self, rows: tripletrail_store::RowView) -> Self {
+        Self {
+            rows: Some(rows),
+            ..self
+        }
+    }
+
+    /// Quads matching a pattern, of what this service may read.
+    fn quads(
+        &self,
+        subject: Option<NamedOrBlankNodeRef<'_>>,
+        predicate: Option<oxigraph::model::NamedNodeRef<'_>>,
+        object: Option<oxigraph::model::TermRef<'_>>,
+        graph: Option<GraphNameRef<'_>>,
+    ) -> tripletrail_store::QuadIter {
+        self.store
+            .quads_in(subject, predicate, object, graph, self.rows.as_ref())
     }
 
     /// An evaluator for the edge sub-select, with the calling query's token.
@@ -252,23 +276,17 @@ impl Edges<'_> {
                     _ => None,
                 };
                 if let Some(s) = subject {
-                    for q in
-                        self.service
-                            .store
-                            .quads_for_pattern(Some(s), Some(p.as_ref()), None, graph)
-                    {
+                    for q in self.service.quads(Some(s), Some(p.as_ref()), None, graph) {
                         let q = q.map_err(|e| PathError::Input(Box::new(e)))?;
                         out.push((p.clone().into(), q.object));
                     }
                 }
             }
             if self.direction != Direction::Out {
-                for q in self.service.store.quads_for_pattern(
-                    None,
-                    Some(p.as_ref()),
-                    Some(node.as_ref()),
-                    graph,
-                ) {
+                for q in self
+                    .service
+                    .quads(None, Some(p.as_ref()), Some(node.as_ref()), graph)
+                {
                     let q = q.map_err(|e| PathError::Input(Box::new(e)))?;
                     out.push((p.clone().into(), q.subject.into()));
                 }
@@ -289,9 +307,9 @@ impl Edges<'_> {
         let Term::NamedNode(n) = node else {
             return Ok(());
         };
-        let store = &self.service.store;
+        let store = &self.service;
         if self.direction != Direction::In {
-            for q in store.quads_for_pattern(Some(n.as_ref().into()), None, None, graph) {
+            for q in store.quads(Some(n.as_ref().into()), None, None, graph) {
                 let q = q.map_err(|e| PathError::Input(Box::new(e)))?;
                 if q.object.is_named_node() && !self.except.contains(&q.predicate) {
                     out.push((q.predicate.into(), q.object));
@@ -299,7 +317,7 @@ impl Edges<'_> {
             }
         }
         if self.direction != Direction::Out {
-            for q in store.quads_for_pattern(None, None, Some(node.as_ref()), graph) {
+            for q in store.quads(None, None, Some(node.as_ref()), graph) {
                 let q = q.map_err(|e| PathError::Input(Box::new(e)))?;
                 if q.subject.is_named_node() && !self.except.contains(&q.predicate) {
                     out.push((q.predicate.into(), q.subject.into()));
@@ -587,13 +605,16 @@ impl PathService {
         };
         let QueryResults::Solutions(solutions) = self
             .store
-            .execute({
-                let mut prepared = self.sub_select_evaluator().for_query(query);
-                if let Some(d) = &self.dataset {
-                    *prepared.dataset_mut() = d.clone();
-                }
-                prepared
-            })
+            .execute_in(
+                {
+                    let mut prepared = self.sub_select_evaluator().for_query(query);
+                    if let Some(d) = &self.dataset {
+                        *prepared.dataset_mut() = d.clone();
+                    }
+                    prepared
+                },
+                self.rows.as_ref(),
+            )
             .map_err(|e| PathError::Input(Box::new(e)))?
         else {
             return Err(bad("the sub-select must be a SELECT"));

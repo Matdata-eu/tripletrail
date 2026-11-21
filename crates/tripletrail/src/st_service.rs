@@ -65,6 +65,8 @@ pub struct StService {
     /// The dataset its sub-selects read: the calling query's, for a caller who reads only
     /// some graphs (#203). `None` reads the store's own default graph and named graphs.
     dataset: Option<oxigraph::sparql::QueryDataset>,
+    /// What a caller under row rules sees (#202): its sub-selects read only those rows.
+    rows: Option<tripletrail_store::RowView>,
 }
 
 impl StService {
@@ -77,6 +79,7 @@ impl StService {
             evaluator: Arc::new(evaluator),
             cancellation: None,
             dataset: None,
+            rows: None,
         }
     }
 
@@ -85,6 +88,15 @@ impl StService {
     pub fn with_dataset(&self, dataset: oxigraph::sparql::QueryDataset) -> Self {
         Self {
             dataset: Some(dataset),
+            ..self.clone()
+        }
+    }
+
+    /// The same service, its sub-selects reading only what `rows` shows (#202).
+    #[must_use]
+    pub fn with_rows(&self, rows: tripletrail_store::RowView) -> Self {
+        Self {
+            rows: Some(rows),
             ..self.clone()
         }
     }
@@ -125,7 +137,7 @@ impl StService {
         };
         let QueryResults::Solutions(solutions) = self
             .store
-            .execute(self.prepare(query))
+            .execute_in(self.prepare(query), self.rows.as_ref())
             .map_err(|e| StError::Input(Box::new(e)))?
         else {
             return Err(bad("the input query must be a SELECT"));
