@@ -4110,6 +4110,12 @@ impl Snapshot {
         Ok(Quad::new(subject, predicate, self.term(q[2])?, graph_name))
     }
 
+    /// The id of `term` in this view: its stored id, or one made up for this view (which
+    /// [`Snapshot::term`] gives back), as the evaluator's terms get.
+    pub fn id_of(&self, term: Term) -> TermId {
+        self.internal_id(term)
+    }
+
     /// The id of `term`: its stored id, or one made up for this view.
     fn internal_id(&self, term: Term) -> TermId {
         if !self.tables.is_empty()

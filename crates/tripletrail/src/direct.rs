@@ -51,7 +51,18 @@ pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<IdSolutions> {
     if length.is_some() && order.is_none() {
         return None;
     }
-    if !crate::rows::covered(body) {
+    if !covered(body) {
+        return None;
+    }
+    // An order on a computed `BIND` value: its ids (made up for values not inline) don't
+    // order, so the evaluator answers it, before any work here.
+    if let Some(expression) = order
+        && expression.iter().any(|e| match e {
+            OrderExpression::Asc(Expression::Variable(v))
+            | OrderExpression::Desc(Expression::Variable(v)) => computed(body, v),
+            _ => true,
+        })
+    {
         return None;
     }
     let t = eval.eval(body)?;
@@ -91,6 +102,50 @@ pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<IdSolutions> {
         None => picked.skip(start).collect(),
     };
     decode(variables.clone().into(), &t, &columns, &picked, eval)
+}
+
+/// Whether `v` is bound by a `BIND` of `p` to a computed value (not a copy or a constant).
+fn computed(p: &GraphPattern, v: &Variable) -> bool {
+    use GraphPattern as G;
+    match p {
+        G::Extend {
+            inner,
+            variable,
+            expression,
+        } => {
+            (variable == v
+                && !matches!(
+                    expression,
+                    Expression::Variable(_) | Expression::NamedNode(_) | Expression::Literal(_)
+                ))
+                || computed(inner, v)
+        }
+        G::Join { left, right }
+        | G::Minus { left, right }
+        | G::Union { left, right }
+        | G::LeftJoin { left, right, .. } => computed(left, v) || computed(right, v),
+        G::Filter { inner, .. } => computed(inner, v),
+        _ => false,
+    }
+}
+
+/// Whether the id tables may answer `p`: what [`crate::rows::covered`] covers, and `BIND`
+/// over it (`idtree::Eval::extend` decides the expression).
+fn covered(p: &GraphPattern) -> bool {
+    use GraphPattern as G;
+    match p {
+        G::Extend { inner, .. } => covered(inner),
+        G::Join { left, right }
+        | G::Minus { left, right }
+        | G::Union { left, right }
+        | G::LeftJoin {
+            left,
+            right,
+            expression: None,
+        } => covered(left) && covered(right),
+        G::Filter { expr, inner } => crate::idtree::filter_covered(expr) && covered(inner),
+        other => crate::rows::covered(other),
+    }
 }
 
 /// `answer` as the results of a query: the solutions as terms, with `answer` attached for

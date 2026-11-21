@@ -61,6 +61,12 @@ tts:packVersion a rdf:Property ;
     rdfs:domain tts:ShapeSet ;
     rdfs:range xsd:string .
 
+tts:hidesGenerated a rdf:Property ;
+    rdfs:label "hides generated"@en ;
+    rdfs:comment "A reader that a pack or a dataset's own set keeps the generated node shapes from, those it does not override or refine: with tts:Reader-Map, the map shows only the set's own classes."@en ;
+    rdfs:domain tts:ShapeSet ;
+    rdfs:range tts:Reader .
+
 tts:refines a rdf:Property ;
     rdfs:label "refines"@en ;
     rdfs:comment "true on a node shape of a higher layer: it changes the node shape of the same IRI below instead of replacing it. The settings it gives replace those below, its property shapes replace those below with the same path, and the rest of the shape below stays."@en ;

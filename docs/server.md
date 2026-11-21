@@ -191,7 +191,7 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
 - `--executor` (`TRIPLETRAIL_EXECUTOR`, `spareval` by default) picks what answers a `SELECT`
   whose pattern runs on term ids (#11). `ids` answers it straight from the id tables (triple
   patterns, joins, `OPTIONAL`, `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, the filters on ids,
-  `ORDER BY` of variables, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
+  `BIND` and `SELECT (expr AS ?v)` of copies, constants and arithmetic, `ORDER BY` of variables, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
   only the terms of the answer, each once, on the query threads; anything else still goes to
   the evaluator. SPARQL JSON, CSV and TSV answers are written from the ids: each distinct term
   is written once and copied into the rows where it occurs (the bytes are those of the usual
@@ -403,7 +403,11 @@ percent-encoded, so a customised set can override it by IRI) with:
 
 `reader=` (`validation`, `map`, `describe`, `search`, `ogc-features`, `rest-api`, `graphql`,
 `ai`) answers that reader's projection: shapes it is `tts:hiddenFrom`, or not `tts:onlyFor`,
-left out, deactivated shapes (`sh:deactivated true`) left out, and, for all readers but
+left out, deactivated shapes (`sh:deactivated true`) left out, the generated node shapes left
+out when a pack or the dataset's own set names the reader with `tts:hidesGenerated` (on a
+`tts:ShapeSet` node of its own, such as `<urn:my:set> a tts:ShapeSet ; tts:hidesGenerated
+tts:Reader-Map`: the map shows only the set's classes; a generated shape the set overrides or
+refines stays) (#92), and, for all readers but
 validation, the property shapes of the superclasses' node shapes added to each node shape that
 has none for that path (or key). A superclass's node shape hidden from the reader still lends its
 property shapes: an abstract `ex:AssetShape` `tts:hiddenFrom tts:Reader-Map` gives no asset
@@ -1717,10 +1721,14 @@ ex:NetworkWriters a sg:Policy ; sg:group "network-assets" ; sg:writeAllGraphs tr
   `sg:requestingAgent`), and shared. After a write it is brought up to date by judging again
   only the resources the write touched (2 to 4 ms instead of 440 ms for rules on 200,000
   resources), when every shape is local: its targets and checks read only the focus node's
-  own quads (no `sh:node` or `sh:class` on values, no paths beyond one predicate, no
-  `sh:qualifiedValueShape`, `sh:closed` or SPARQL constraints) and the write did not change
-  `rdfs:subClassOf`. Otherwise, and after bulk loads or writes of more than 65,536 quads, the
-  rules are compiled anew. Full-text search (`tt:search`, `text:query`, the map search) reads
+  own quads and the quads along its property paths (single predicates or sequences of up to
+  four, with `sh:class` on the values counting as one more step; no `sh:node` on values, no
+  other kind of path, no `sh:qualifiedValueShape`, `sh:closed` or SPARQL constraints) and the
+  write did not change `rdfs:subClassOf`. The nodes that reach a touched resource along those
+  paths are judged again with it (enterprise #7: a write under 20 shapes, one of them on
+  `ex:vendor/ex:country`, went from 6 to 7.5 s to 4 to 47 ms on 200,000 offers). Otherwise,
+  after bulk loads or writes of more than 65,536 quads, and when more than 65,536 resources
+  would be judged again, the rules are compiled anew. Full-text search (`tt:search`, `text:query`, the map search) reads
   an index of the visible labels alone, ranked as on a store holding only them (#203; see
   [full-text search](full-text-search.md#access-control)). The built-in services (`st:`, the window service, path search and `pgr`)
   read the same view: their sub-selects, the edges path search follows and the networks routing

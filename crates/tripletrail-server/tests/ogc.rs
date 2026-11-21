@@ -2537,6 +2537,103 @@ fn facets_of_several_collections_at_once() {
     );
 }
 
+/// A set that shows only its own classes on the map (#92): `tts:hidesGenerated` keeps the
+/// generated shapes it does not take over from the map, and from no other reader.
+#[test]
+fn a_set_can_hide_the_generated_shapes_from_the_map() {
+    let dir = tripletrail_testdir::tempdir("ogc-hides-generated");
+    let ttl = "@prefix ex: <http://example.com/> .\n\
+               @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+               ex:s1 a ex:Station ; ex:name \"A\" ; geo:hasGeometry [ geo:asWKT \"POINT(1 1)\"^^geo:wktLiteral ] .\n\
+               ex:l1 a ex:Line ; geo:hasGeometry [ geo:asWKT \"LINESTRING(1 1, 2 2)\"^^geo:wktLiteral ] .\n\
+               ex:d1 a ex:Depot ; geo:hasGeometry [ geo:asWKT \"POINT(3 3)\"^^geo:wktLiteral ] .\n\
+               ex:r1 a ex:Ref ; geo:hasGeometry [ geo:asWKT \"POINT(4 4)\"^^geo:wktLiteral ] .\n";
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 4,
+            admin_token: Some("t".to_owned()),
+            location: Some(dir.join("data")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let on_map = || -> Vec<String> {
+        let style = get(&format!("{base}/kg/tiles/style.json")).2;
+        let mut ids: Vec<String> = style["metadata"]["tripletrail:collections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap().to_owned())
+            .collect();
+        ids.sort();
+        ids
+    };
+    let in_ogc = || -> Vec<String> {
+        let page = get(&format!("{base}/kg/ogc/collections")).2;
+        let mut ids: Vec<String> = page["collections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap().to_owned())
+            .collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(on_map(), ["Depot", "Line", "Ref", "Station"]);
+    // Its own shape for the stations, one refining the generated depots' shape, and the
+    // generated lines and references only from the OGC API.
+    let own = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+               @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+               @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+               <urn:my:set> a tts:ShapeSet ; tts:hidesGenerated tts:Reader-Map .\n\
+               <urn:my:stations> a sh:NodeShape ; sh:targetClass <http://example.com/Station> ;\n\
+                 tts:key \"stations\" ; tts:geometry [ sh:path ( geo:hasGeometry geo:asWKT ) ] .\n\
+               <urn:my:depots> a sh:NodeShape ; sh:targetClass <http://example.com/Depot> ;\n\
+                 tts:refines true ; tts:color \"#112233\" .\n";
+    let put = |text: &str| -> (u16, String) {
+        match ureq::put(&format!("{base}/$/datasets/kg/shapes/files/mine.ttl"))
+            .set("Authorization", "Bearer t")
+            .send_string(text)
+        {
+            Ok(r) => (r.status(), r.into_string().unwrap()),
+            Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap()),
+            Err(e) => panic!("{e}"),
+        }
+    };
+    assert_eq!(put(own).0, 200);
+    assert_eq!(on_map(), ["Depot", "stations"]);
+    assert_eq!(in_ogc(), ["Depot", "Line", "Ref", "stations"]);
+    // A pack may say it too; the own set is emptied first.
+    ureq::delete(&format!("{base}/$/datasets/kg/shapes/files/mine.ttl"))
+        .set("Authorization", "Bearer t")
+        .call()
+        .unwrap();
+    assert_eq!(on_map(), ["Depot", "Line", "Ref", "Station"]);
+    let pack = json!({ "name": "p", "version": "1", "files": {
+        "_set.ttl": "@prefix tts: <http://w3id.org/tripletrail/shapes#> . <urn:p> a tts:ShapeSet ; tts:hidesGenerated tts:Reader-Map .",
+        "Station.ttl": "@prefix sh: <http://www.w3.org/ns/shacl#> . @prefix tts: <http://w3id.org/tripletrail/shapes#> . <urn:p:Station> a sh:NodeShape ; sh:targetClass <http://example.com/Station> ; tts:refines true ; tts:color \"#d62728\" ."
+    } });
+    let r = ureq::put(&format!("{base}/$/datasets/kg/shapes/pack"))
+        .set("Authorization", "Bearer t")
+        .send_string(&pack.to_string())
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    // The map follows the pack at once, the refined stations alone.
+    assert_eq!(on_map(), ["Station"]);
+    assert_eq!(in_ogc(), ["Depot", "Line", "Ref", "Station"]);
+    // Only readers are named.
+    let wrong = own.replace("tts:Reader-Map", "tts:Map");
+    let (code, body) = put(&wrong);
+    assert_eq!(code, 422, "{body}");
+    assert!(body.contains("is not a reader"), "{body}");
+}
+
 /// The legend of a map coloured by a range (#92): each colour class with the features drawn
 /// in it under the filters, by each feature's highest number, as the tiles colour them.
 #[test]
