@@ -28,7 +28,10 @@ RUN case "$TARGETARCH" in \
     fi \
     && rustup target add "$(cat /target)"
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+# A crate cache per architecture: the two builds of a multi-platform image run at the same
+# time, and cargo's lock is not in this folder, so on a shared one they unpack the same crate
+# at once and one fails ("failed to unpack package ... File exists").
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=tripletrail-registry-$TARGETARCH \
     --mount=type=cache,target=/src/target,id=tripletrail-target-$TARGETARCH \
     target="$(cat /target)" \
     && cross="$(cut -d- -f1 /target | sed s/_/-/)-linux-gnu" \
