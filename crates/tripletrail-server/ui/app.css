@@ -713,3 +713,23 @@ body[data-page=workbench] main { max-width: none; padding: 8px 12px; }
 .imp-card h2 { font-size: 15px; margin: 0; }
 .imp-tree { max-height: 40vh; overflow: auto; font-family: var(--mono); font-size: 12px; white-space: pre; padding: 8px 12px; background: var(--surface-2); border-radius: 6px; margin: 8px 0 0; }
 .imp-query { width: 100%; box-sizing: border-box; margin-top: 8px; font-family: var(--mono); font-size: 12px; padding: 8px; background: var(--surface-2); color: inherit; border: 1px solid var(--border); border-radius: 6px; resize: vertical; }
+/* The map's tools (#33): an area to filter by, measuring, coordinates. */
+.map-tools-wrap { position: relative; }
+.map-ctrl-btn.on { background: var(--brand-soft) !important; }
+.map-tools { position: absolute; top: 0; right: calc(100% + 6px); z-index: 5; width: 290px; max-height: 70vh; overflow: auto; padding: 8px 12px 10px; color: var(--text); box-shadow: var(--shadow); font: 13px var(--font); text-align: left; }
+.map-tools-head { display: flex; align-items: center; justify-content: space-between; }
+.map-tools-head .icon-btn { border: 0; background: none; cursor: pointer; color: var(--muted); }
+.map-tools section { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 6px; }
+.map-tools h4 { margin: 0 0 4px; font-size: 13px; }
+.map-tools p { margin: 4px 0; }
+.map-tools-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+/* Not the map control group's square buttons. */
+.map-tools .btn { width: auto; height: 26px; display: inline-flex; align-items: center; border: 1px solid var(--border); background: var(--surface); }
+.map-tools .btn:hover { background: var(--surface-2); }
+.map-tools .btn.primary { background: var(--brand-fill); border-color: var(--brand-fill); color: var(--yasgui-endpoint-button-text, #fff); }
+.map-tools .icon-btn { width: auto; height: auto; }
+.map-tools-rel { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 6px 0; }
+.map-tools-rel select { max-width: 100%; }
+.map-tools-dist { width: 90px; }
+.map-tools-legs { margin: 4px 0; padding-left: 20px; }
+.map-tools-hint { padding: 6px 8px; border-radius: 6px; background: var(--brand-soft); color: var(--text); }
