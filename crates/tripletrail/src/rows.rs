@@ -415,12 +415,18 @@ fn sort_class(pick: &crate::idtree::Pick, id: TermId) -> Option<u8> {
 /// The order key of an inline number or date without what tells equal values apart (the
 /// number of fraction digits, the time zone): equal values are equal to the evaluator.
 fn value_key(id: TermId) -> u64 {
-    let low = if id.kind() == tripletrail_store::Kind::DateTime {
-        11
-    } else {
-        4
-    };
-    id.order_key() >> low
+    use tripletrail_store::{Kind, Numeric};
+    if id.kind() == Kind::DateTime {
+        return id.order_key() >> 11;
+    }
+    // `-0` and `0` are one value; the sign bit would put every `-0` first.
+    if matches!(
+        id.numeric(),
+        Some(Numeric::Decimal { digits: 0, .. } | Numeric::Double(0.0))
+    ) {
+        return 1 << 59;
+    }
+    id.order_key() >> 4
 }
 
 /// `a` and `b` in the evaluator's order of terms, when they are of the same

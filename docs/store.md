@@ -83,8 +83,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `MONTH`, `DAY`, `HOURS` and `MINUTES` in filters, and `SUM` of such expressions per group
   (an integer, or a decimal written as the evaluator writes it). `SUM` and `AVG` also take
   inline `xsd:double` values (#62), mixed with integers and decimals: the sum is then a
-  double, computed exactly and rounded once at the end, so it doesn't depend on the order of
-  the rows. The evaluator, and Fuseki, round after each addition in row order, so the last
+  double. The doubles are summed exactly and rounded once at the end, so the sum doesn't
+  depend on the order of the rows; the integers and decimals of the group are summed exactly
+  apart, and their total is rounded to a double before it is added, which can cost a last
+  digit against the exact sum of all of them. A group with a double that is not inline (more
+  than 16 digits, or an exponent form such as `1.5E2`) is summed by the evaluator in row
+  order, so the same query can round differently on other data. The evaluator, and Fuseki, round after each addition in row order, so the last
   digit can differ: ten times `0.1` sums to `1` here and to `0.9999999999999999` there. An
   `AVG` of integers and decimals only (a decimal division) stays with the evaluator.
   Arithmetic and comparisons on doubles, dictionary literals (`1.5E2`), overflow, inexact

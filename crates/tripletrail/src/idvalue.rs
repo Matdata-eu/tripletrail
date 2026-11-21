@@ -392,8 +392,9 @@ pub(crate) fn compare(x: Value, y: Value) -> Option<Option<Ordering>> {
 }
 
 /// The running `SUM` (and `AVG`) of a group: `None` once it gives up. Integers and decimals
-/// add up exactly, as the evaluator does; once a double comes in, the sum is a double, the
-/// exact sum of the doubles plus the integers and decimals, rounded once at the end.
+/// add up exactly, as the evaluator does; once a double comes in, the sum is a double: the
+/// exact sum of the doubles plus the total of the integers and decimals (itself rounded to a
+/// double first), rounded once at the end.
 #[derive(Clone, Default)]
 pub(crate) struct Sum {
     exact: Exact,

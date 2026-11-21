@@ -73,6 +73,12 @@ fn data() -> String {
         if i % 5 == 0 {
             ttl.push_str(&format!("{s} ex:maybe {} .\n", i % 17));
         }
+        // Signed zeros, equal to the evaluator (#64).
+        if i % 50 == 7 {
+            let zero = ["0.0", "-0.0", "0", "-0", "1.5", "-1.5"][i as usize / 50 % 6];
+            ttl.push_str(&format!("{s} ex:zdec \"{zero}\"^^xsd:decimal .\n"));
+            ttl.push_str(&format!("{s} ex:zdbl \"{zero}\"^^xsd:double .\n"));
+        }
         // Doubles whose sums are exact in any order, so the evaluator's sum is the exact one
         // (#62); in ex:num, mixed with integers and decimals.
         let dbl = format!(
@@ -236,7 +242,8 @@ fn ordered(engine: &Engine, query: &str) -> Vec<String> {
                         if l.datatype() == oxigraph::model::vocab::xsd::DECIMAL
                             || l.datatype() == oxigraph::model::vocab::xsd::DOUBLE =>
                     {
-                        let value = l.value().parse::<f64>().unwrap();
+                        // Oxigraph's store writes a decimal `-0` as `0`.
+                        let value = l.value().parse::<f64>().unwrap() + 0.0;
                         format!("{v}={value}^^{}", l.datatype())
                     }
                     t => format!("{v}={t}"),
@@ -254,7 +261,8 @@ fn ordered(engine: &Engine, query: &str) -> Vec<String> {
 fn top_rows_of_numbers_and_dates_match_the_evaluator() {
     let (ours, reference) = engines();
     for p in [
-        "ex:int", "ex:dec", "ex:dbl", "ex:num", "ex:date", "ex:when", "ex:mixed",
+        "ex:int", "ex:dec", "ex:dbl", "ex:num", "ex:date", "ex:when", "ex:mixed", "ex:zdec",
+        "ex:zdbl",
     ] {
         for (order, slice) in [
             ("DESC(?v) ?s", "LIMIT 7"),
@@ -268,7 +276,7 @@ fn top_rows_of_numbers_and_dates_match_the_evaluator() {
                     "{P}SELECT ?s ?v WHERE {{ ?s a ?c OPTIONAL {{ ?s {p} ?v FILTER(?v != 0) }} }} ORDER BY {order} {slice}"
                 ),
                 // Equal values of different kinds (`7` and `"7"^^xsd:int`) tie in any order.
-                if ["ex:mixed", "ex:num"].contains(&p) {
+                if ["ex:mixed", "ex:num", "ex:zdec", "ex:zdbl"].contains(&p) {
                     String::new()
                 } else {
                     format!(
