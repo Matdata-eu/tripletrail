@@ -10,6 +10,7 @@ versions may change the store format and the API; the release notes say how to u
 ### Added
 
 - The Map page's **Tools** (#33): draw an area to filter every layer by (rectangle, polygon, circle, corridor along a line, or a feature's geometry with **Filter by it**) with a spatial relation, measure lengths with bearings and areas with perimeter on the sphere, and read or copy the coordinates under the pointer. The area goes into the page's link as `area`, `rel` and `dist`. See [the guide](docs/guide/10-maps-and-apis.md#draw-an-area-measure-and-read-coordinates).
+- Select by location (#33): `area=layer:{id}` takes the features of another collection, as its own filters (`{id}.{key}=…`) keep them, as the area of the tiles, facets and OGC API items; the Map page's Tools offer it as **Or the features of**.
 
 ### Fixed
 

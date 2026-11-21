@@ -3017,7 +3017,8 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   or six with heights, in CRS84; `minx > maxx` crosses the antimeridian), and give a `next`
   link while there are more. A page holds `limit` distinct features; with `bbox`, a feature
   is in it when any of its geometries intersects the box, and comes once. They also take the
-  map's spatial filter, `area`, `rel` and `dist` ([vector tiles](#vector-tiles)). Other parameters
+  map's spatial filter, `area`, `rel` and `dist` ([vector tiles](#vector-tiles)), and with
+  `area=layer:{id}` that collection's own filters (`{id}.{key}`). Other parameters
   are refused with `400`. Features come in the order
   the store finds them (no sort, so the first page of a large class is fast), which stays the
   same while the dataset does not change: a write between two pages can shift them.
@@ -3185,7 +3186,8 @@ none), **Tools** and **Fullscreen**, which takes the layer list and the detail p
 **Tools** (`/$/ui/map-tools.js`, #33) draws an area every layer is filtered by (a rectangle
 or polygon as a `POLYGON`, a circle as its centre with `rel=dwithin` and its radius as
 `dist`, a corridor as a `LINESTRING` with `rel=dwithin`, or the geometry of the feature open
-in the detail panel by its IRI, with **Filter by it**), with a relation picked from those of
+in the detail panel by its IRI, with **Filter by it**, or the features of another layer as its
+filters keep them, `layer:{id}`), with a relation picked from those of
 `rel`; the area goes into the page's link and into the tiles', facets' and OGC API links'
 requests as `area`, `rel` and `dist` ([vector tiles](#vector-tiles)). It also
 measures lengths (each leg's length and bearing) and areas with perimeter, on the sphere, and
@@ -3286,7 +3288,12 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   - `area` is a geometry. It is WKT, in CRS84 unless it names its CRS first as a
     `geo:wktLiteral` does, of at most 200,000 bytes. It can also be the IRI of a resource whose
     geometry (`geo:asWKT`, or through `geo:hasGeometry`; several are taken together) is the
-    area, read as the caller sees the data.
+    area, read as the caller sees the data. Or it is `layer:{id}`, "select by location": the
+    features of collection `{id}` with a geometry, as that collection's own filters keep them
+    (`{id}.{key}=…`, `.min`, `.max`, `.text`; never the bare ones), each feature taken
+    against every one of them but itself. The two geometries meet in a spatial join. The
+    OGC API's items take that collection's `{id}.{key}` filters too; an unknown collection is
+    `400`.
   - `rel` is one of `intersects` (the default), `within`, `contains`, `touches`, `crosses`,
     `overlaps`, `disjoint` or `dwithin`. Each is judged as `geof:sf…` judges it, between one
     of the feature's geometries and the area. `disjoint` keeps the features with a geometry,

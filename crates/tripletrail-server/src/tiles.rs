@@ -290,7 +290,15 @@ pub(crate) fn warm(state: &State, entry: &Entry, within: Duration) -> Result<War
             continue;
         }
         let timeout = Some(limit.map_or(left, |t| t.min(left)));
-        match facet_counts(entry, c, &none, timeout, &View::default(), version) {
+        match facet_counts(
+            entry,
+            c,
+            &collections,
+            &none,
+            timeout,
+            &View::default(),
+            version,
+        ) {
             Ok(_) => out.counted += 1,
             Err(e) => out.failed.push(format!("{}: {}", c.id, e.1)),
         }
@@ -403,7 +411,15 @@ pub(crate) fn route(
                 },
                 None => None,
             };
-            each.push(facet_counts(entry, c, params, left, view, version)?);
+            each.push(facet_counts(
+                entry,
+                c,
+                &collections,
+                params,
+                left,
+                view,
+                version,
+            )?);
         }
         let counts = combine_facets(each);
         let mut reply = Reply::bytes(200, "application/json", counts.to_string().into_bytes());
@@ -418,7 +434,15 @@ pub(crate) fn route(
             .ok_or_else(|| HttpError(404, format!("No collection {id}")))?;
         let (_, made_for) = shown()?;
         let version = made_for.filter(|v| Some(*v) == data_version(state, entry));
-        let counts = facet_counts(entry, collection, params, timeout, view, version)?;
+        let counts = facet_counts(
+            entry,
+            collection,
+            &collections,
+            params,
+            timeout,
+            view,
+            version,
+        )?;
         let mut reply = Reply::bytes(200, "application/json", counts.to_string().into_bytes());
         reply.headers.push(("Cache-Control", "no-cache".to_owned()));
         return Ok(reply);
@@ -462,7 +486,7 @@ pub(crate) fn route(
     let single = *layer != "all";
     let mut filters: HashMap<&str, Filter> = HashMap::new();
     for c in &shown {
-        let scope = scope_filter(entry, view, c, params, false)?;
+        let scope = scope_filter(entry, view, c, &collections, params, false)?;
         let filter = facet_filter(c, params, single, None, &scope)?;
         if !filter.sparql.is_empty() || filter.color.is_some() {
             filters.insert(&c.id, filter);
@@ -782,6 +806,7 @@ fn scope_filter(
     entry: &Entry,
     view: &View,
     collection: &Collection,
+    layers: &[Collection],
     params: &Params,
     many: bool,
 ) -> Result<Scope, HttpError> {
@@ -802,7 +827,7 @@ fn scope_filter(
         ));
         sign(format!("bbox={window}"));
     }
-    if let Some(area) = crate::area::area_filter(entry, view, collection, params, many)? {
+    if let Some(area) = crate::area::area_filter(entry, view, collection, layers, params, many)? {
         sparql.push_str(&area.sparql);
         sign(area.signature);
     }
@@ -860,6 +885,23 @@ fn scope_filter(
 }
 
 const SEARCH: &str = "http://w3id.org/tripletrail/fn#search";
+
+/// The features of `collection` an `area=layer:{id}` takes (#33): its own filters
+/// (`{id}.{key}=…`, never the bare ones), as SPARQL over `?f`, and their signature.
+pub(crate) fn layer_selection(
+    collection: &Collection,
+    params: &Params,
+) -> Result<(String, String), HttpError> {
+    let filter = facet_filter(collection, params, false, None, &Scope::default())?;
+    Ok((
+        format!(
+            "{} FILTER EXISTS {{ {} }}",
+            filter.sparql,
+            collection.geometry.pattern("?f", "?layerW")
+        ),
+        filter.signature,
+    ))
+}
 
 /// A range facet's bound as a SPARQL literal of its datatype: a number for numeric types,
 /// a date or time for the others; `None` when `text` is not one.
@@ -1055,6 +1097,7 @@ fn search(
 fn facet_counts(
     entry: &Entry,
     collection: &Collection,
+    layers: &[Collection],
     params: &Params,
     timeout: Option<Duration>,
     view: &View,
@@ -1067,7 +1110,7 @@ fn facet_counts(
         " FILTER EXISTS {{ {} }}",
         collection.geometry.pattern("?f", "?w")
     );
-    let scope = scope_filter(entry, view, collection, params, true)?;
+    let scope = scope_filter(entry, view, collection, layers, params, true)?;
     let all = facet_filter(collection, params, true, None, &scope)?;
     let number = |t: &Option<Term>| match t {
         Some(Term::Literal(l)) => l.value().parse::<u64>().unwrap_or(0),
