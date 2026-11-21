@@ -148,5 +148,6 @@ fn other_services_stay_refused_under_row_rules() {
     let nested = "SELECT ?s ?r { SERVICE <http://w3id.org/tripletrail/window> { \
      [] <http://w3id.org/tripletrail/window#orderBy> ?s ; <http://w3id.org/tripletrail/window#rowNumber> ?r . \
      { SELECT ?s { SERVICE <urn:x:elsewhere> { ?s ?p ?o } } } } }";
-    assert!(rows(&e, nested, options()).is_err());
+    let err = rows(&e, nested, options()).unwrap_err();
+    assert!(err.contains("under row-level access rules"), "{err}");
 }
