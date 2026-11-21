@@ -332,3 +332,59 @@ fn only_needed_triples_are_built_but_answers_are_complete() {
 fn scratch(name: &str) -> tripletrail_testdir::TestDir {
     tripletrail_testdir::tempdir(&format!("fx-{name}"))
 }
+
+/// Files held in memory (the Import page): read as `location=upload:NAME`, their format from
+/// the name, also inside an archive; a service without the upload, or an unsafe name, fails,
+/// and an upload never opens a file of that name.
+#[test]
+fn uploads_are_read_from_memory() {
+    let none = service(FxConfig {
+        allowed: Some(Vec::new()),
+        ..FxConfig::default()
+    });
+    let fx = none
+        .with_upload("trains.csv", b"id,name\n1,IC 510\n2,L 7280\n"[..].into())
+        .unwrap();
+    let q = "SELECT ?id ?name WHERE { SERVICE <x-sparql-anything:location=upload:trains.csv,csv.headers=true> {
+        ?row xyz:id ?id ; xyz:name ?name } } ORDER BY ?id";
+    assert_eq!(
+        rows(&fx, q),
+        [r#"?id="1" ?name="IC 510""#, r#"?id="2" ?name="L 7280""#]
+    );
+    // Without blank nodes, the root is the upload's IRI.
+    let root = "SELECT ?r WHERE { SERVICE <x-sparql-anything:location=upload:trains.csv,blank-nodes=false> { ?r a fx:root } }";
+    assert_eq!(rows(&fx, root), ["?r=<upload:trains.csv>"]);
+    // Another name, or the service without uploads: an error, not a file.
+    let empty = Box::leak(Box::new(Dataset::new()));
+    for (service, name) in [(&fx, "other.csv"), (&none, "trains.csv")] {
+        let q = format!(
+            "{PREFIXES}SELECT * WHERE {{ SERVICE <x-sparql-anything:location=upload:{name}> {{ ?s ?p ?o }} }}"
+        );
+        let result = service
+            .register(SparqlEvaluator::new())
+            .parse_query(&q)
+            .unwrap()
+            .on_queryable_dataset(&*empty)
+            .execute()
+            .and_then(|r| match r {
+                QueryResults::Solutions(s) => s.collect::<Result<Vec<_>, _>>().map(|_| ()),
+                _ => Ok(()),
+            });
+        let error = result.expect_err(name).to_string();
+        assert!(error.contains("no such upload"), "{error}");
+    }
+    assert!(none.with_upload("../etc/passwd", b"x"[..].into()).is_err());
+    assert!(none.with_upload("a b.csv", b"x"[..].into()).is_err());
+    // A zip held in memory, read with from-archive.
+    let mut zip = Vec::new();
+    {
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut zip));
+        w.start_file("inner.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut w, br#"{"k": "v"}"#).unwrap();
+        w.finish().unwrap();
+    }
+    let fx = none.with_upload("bundle.zip", zip.into()).unwrap();
+    let q = "SELECT ?v WHERE { SERVICE <x-sparql-anything:from-archive=upload:bundle.zip,location=inner.json> { ?x xyz:k ?v } }";
+    assert_eq!(rows(&fx, q), [r#"?v="v""#]);
+}

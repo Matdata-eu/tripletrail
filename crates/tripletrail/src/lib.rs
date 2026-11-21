@@ -1215,6 +1215,31 @@ impl Engine {
         }
     }
 
+    /// The same engine, also reading `bytes` as `SERVICE <x-sparql-anything:location=upload:NAME>`
+    /// (the Import page): a file held in memory, for this engine only. Without Facade-X files
+    /// ([`Engine::with_fx`]), the service reads the upload and nothing else: no files, no URLs,
+    /// limits that may only be lowered.
+    pub fn with_upload(&self, name: &str, bytes: Arc<[u8]>) -> Result<Self, Error> {
+        let fx = match &self.fx {
+            Some(fx) => fx.clone(),
+            None => FxService::with_backend(
+                FxConfig {
+                    allowed: Some(Vec::new()),
+                    fixed_limits: true,
+                    ..FxConfig::default()
+                },
+                FxBackend,
+            ),
+        };
+        let fx = fx
+            .with_upload(name, bytes)
+            .map_err(|e| Error::Request(e.to_string()))?;
+        Ok(Self {
+            fx: Some(fx),
+            ..self.clone()
+        })
+    }
+
     /// The same engine, reading `GRAPH <iri>` as `SERVICE <service>` for each `(iri, service)`
     /// of `graphs` (named virtual graphs, #216): a query names a Facade-X source as a graph,
     /// without writing the SERVICE. Not for callers with access to only some graphs, who may

@@ -2302,6 +2302,10 @@ then takes it out of the address bar.
   language, order, groups, keys, hidden, hidden from, deactivated); the Turtle of an own file
   with live checks; the kept versions with rollback. See
   [The shapes editor](#the-shapes-editor).
+- **Import** (`/$/ui/import/{ds}`): drop a file (CSV, JSON, XML, YAML, a spreadsheet, HTML,
+  Markdown, an archive...), see it as Facade-X triples, edit the drafted `CONSTRUCT`, preview
+  the triples it makes and add them to a named graph. *Download query* saves the query as a
+  lift query that reads the file by its name. See [Importing files](#importing-files).
 - **Workbench** (`/$/ui/workbench/{workspace}/{file}`): develop shapes, rules and queries in a
   [workspace](#workbench-workspaces), described below.
 - **Access** (`/$/ui/access`): API keys, groups, anonymous access and who may read and write
@@ -2447,6 +2451,33 @@ The admin token is asked for when a change needs it and kept in the browser's lo
 MatGUI 6.13.0 (MIT) is built into the binary, so the UI works without internet access;
 `--matgui-url https://cdn.jsdelivr.net/npm/@matdata/yasgui@6.13.0/build/` loads it from a CDN
 instead. `--no-ui` turns the UI off.
+
+### Importing files
+
+The Import page's API. The file is kept in the server's memory, never written to its disk, and
+read as [Facade-X](facade-x.md) only by the queries sent for it. Every request needs the right
+to write to the dataset (the update or admin token, or a policy that grants writing); a
+read-only dataset answers 405.
+
+- `POST /{ds}/import?name=NAME[&options=…]`: the file as the body. `NAME` (letters, digits,
+  `.`, `-`, `_`) chooses the format as a file name does; `options` are Facade-X options
+  (`csv.headers=true` by default for `.csv` and `.tsv`). Answers 201 with `id`, `name`,
+  `bytes`, `options`, `location` (`upload:NAME`), `tree` (the first 300 triples, as N-Triples),
+  `triples` and `truncated`, and `query`: a `CONSTRUCT` that maps every key of the records (the
+  rows of a table, the objects of a JSON array), with IRIs under `https://example.org/import/`.
+  A file that cannot be read is answered 422.
+- `POST /{ds}/import/{id}/preview`: a `CONSTRUCT` as the body; answers its triples (Turtle by
+  default, any format `/{ds}/query` gives by `Accept`) and writes nothing.
+- `POST /{ds}/import/{id}/run?graph=IRI`: adds the triples of the `CONSTRUCT` (without `FROM`)
+  to the graph, in one update, and answers `{"after", "before", "graph"}`: the graph's size
+  before and after.
+- `DELETE /{ds}/import/{id}`: forgets the file (204).
+
+The queries may read only the upload: `location=upload:NAME`, or `location=NAME` of its own
+name (so a lift query that names the file runs as it is), and `from-archive` of it. Other
+locations are refused. A file is forgotten an hour after it was last used, and the server keeps
+at most 16 files and 256 MiB, forgetting the least recently used first; then a request for it
+answers 404.
 
 ## Linked Data
 

@@ -292,6 +292,46 @@ tripletrail load --location db --dataset rail network.ttl lifted.nt
 or upload them to a running server with
 `curl -X POST http://localhost:7878/rail/data -H 'Content-Type: application/n-triples' --data-binary @lifted.nt`.
 
+## Import a file in the web UI
+
+The server's **Import** page (`/$/ui/import`) does the same without a command line. Drop a
+file on it: the page shows the file as Facade-X triples and drafts a `CONSTRUCT` that maps
+every column or key. Edit the query, **Preview** the triples it makes, and **Add to the graph**
+puts them in the named graph you give. **Download query** saves the query as a lift query that
+reads the file by its name, to run later with `tripletrail lift`.
+
+The file is kept in the server's memory for an hour, never on its disk, and the query can read
+only that file. Only someone who may write to the dataset can import (with `--update-token`,
+that token). The page uses the server's import API, which you can call yourself. Start a
+server:
+
+<!-- test: serve -->
+```sh
+tripletrail serve --dataset rail
+```
+
+Send the file. The answer has the upload's `id`, the file as triples (`tree`) and the drafted
+`query`:
+
+<!-- test: run -->
+```sh
+curl -s -X POST 'http://localhost:7878/rail/import?name=stations.csv' --data-binary @stations.csv > upload.json
+id=$(sed -n 's/.*"id":"\([0-9a-f]*\)".*/\1/p' upload.json)
+curl -s -X POST "http://localhost:7878/rail/import/$id/run?graph=urn:import:stations" \
+  -H 'Content-Type: application/sparql-query' --data-binary @lift/stations.rq
+```
+
+<!-- test: output -->
+```text
+{"after":18,"before":0,"graph":"urn:import:stations"}
+```
+
+The query reads `location=stations.csv`, and the import runs it on the uploaded file of that
+name: `upload:stations.csv` is the same file, and any other location is refused. `POST
+/rail/import/$id/preview` answers the triples without writing them, and `DELETE
+/rail/import/$id` forgets the file before the hour is up. See
+[the import API](../server.md#importing-files).
+
 ## Useful options
 
 - `--output-dir out/` writes one file per query or mapping instead of one file.
@@ -336,6 +376,8 @@ For a lift that is one step of a larger job (lift, load, update, validate, expor
 - `--as-sparql` turns a mapping into the query that gives its triples.
 - `from-archive` reads a file inside an archive, and `html.metadata=true` the RDFa and
   Microdata of a web page.
+- The web UI's Import page turns a dropped file into RDF with a drafted query, previews it and
+  adds it to a graph.
 
 [Facade-X](../facade-x.md) and [R2RML and RML](../rml.md) have every format, option and
 function.
