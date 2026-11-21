@@ -353,7 +353,8 @@ pub(crate) fn route(
     let single = *layer != "all";
     let mut filters: HashMap<&str, Filter> = HashMap::new();
     for c in &shown {
-        let filter = facet_filter(c, params, single, None)?;
+        let scope = scope_filter(entry, view, c, params)?;
+        let filter = facet_filter(c, params, single, None, &scope)?;
         if !filter.sparql.is_empty() || filter.color.is_some() {
             filters.insert(&c.id, filter);
         }
@@ -434,15 +435,19 @@ fn facet_filter(
     params: &Params,
     bare: bool,
     except: Option<&str>,
+    scope: &Scope,
 ) -> Result<Filter, HttpError> {
-    let mut out = Filter::default();
+    let mut out = Filter {
+        signature: scope.signature.clone(),
+        ..Filter::default()
+    };
     let mut sign = |part: String| {
         if !out.signature.is_empty() {
             out.signature.push('&');
         }
         out.signature.push_str(&part);
     };
-    let mut sparql = String::new();
+    let mut sparql = scope.sparql.clone();
     let mut computed = false;
     for (i, facet) in collection.facets.iter().enumerate() {
         if except == Some(facet.key.as_str()) {
@@ -514,7 +519,9 @@ fn facet_filter(
         let mut values: Vec<&str> = params
             .0
             .iter()
-            .filter(|(k, _)| *k == dotted || (bare && *k == facet.key))
+            .filter(|(k, _)| {
+                *k == dotted || (bare && *k == facet.key && !SCOPE_KEYS.contains(&k.as_str()))
+            })
             .map(|(_, v)| v.as_str())
             .collect();
         if values.is_empty() {
@@ -564,6 +571,106 @@ fn facet_filter(
     }
     Ok(out)
 }
+
+/// The filters of every collection besides its facets (#92), as SPARQL over `?f` and their
+/// part of the cache key's signature.
+#[derive(Default)]
+struct Scope {
+    sparql: String,
+    signature: String,
+}
+
+/// The parameters of [`scope_filter`], which a facet of the same key takes only as
+/// `{collection}.{key}`.
+const SCOPE_KEYS: [&str; 3] = ["bbox", "graph", "q"];
+/// Words of `q` a text filter takes at most.
+const SCOPE_WORDS: usize = 8;
+/// Graphs a `graph` filter takes at most.
+const SCOPE_GRAPHS: usize = 100;
+
+/// The filters of `params` that every collection takes, for its tiles and facets alike (#92):
+/// - `bbox=minLon,minLat,maxLon,maxLat` (CRS84): the features with a geometry that meets the
+///   box, read through the spatial index, as `bbox` of the OGC API's items;
+/// - `graph=IRI`, repeated for several: the features with triples in one of those graphs;
+/// - `q=words`: the features with an indexed literal holding every word (full-text, as the
+///   map's search box: case and Latin accents aside, the last word as a prefix).
+fn scope_filter(
+    entry: &Entry,
+    view: &View,
+    collection: &Collection,
+    params: &Params,
+) -> Result<Scope, HttpError> {
+    let mut out = Scope::default();
+    let mut sign = |part: String| {
+        if !out.signature.is_empty() {
+            out.signature.push('&');
+        }
+        out.signature.push_str(&part);
+    };
+    let mut sparql = String::new();
+    if let Some(value) = params.get("bbox") {
+        let window = crate::ogc::crs84_bbox(value)?;
+        let ways = collection.geometry.near(entry, view, "?f", &window);
+        sparql.push_str(&format!(
+            " {{ SELECT DISTINCT ?f WHERE {{ {} FILTER(<{GEOF}sfIntersects>(?scopeW, \"{window}\"^^<{WKT}>)) }} }}",
+            ways.pattern("?f", "?scopeW"),
+        ));
+        sign(format!("bbox={window}"));
+    }
+    let mut graphs: Vec<&str> = params
+        .0
+        .iter()
+        .filter(|(k, v)| k == "graph" && !v.is_empty())
+        .map(|(_, v)| v.as_str())
+        .collect();
+    if !graphs.is_empty() {
+        graphs.sort_unstable();
+        graphs.dedup();
+        if graphs.len() > SCOPE_GRAPHS {
+            return Err(HttpError::bad_request(format!(
+                "More than {SCOPE_GRAPHS} graphs"
+            )));
+        }
+        let iris = graphs
+            .iter()
+            .map(|g| {
+                NamedNode::new(*g)
+                    .map(|n| n.to_string())
+                    .map_err(|e| HttpError::bad_request(format!("graph {g}: {e}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        sparql.push_str(&format!(
+            " FILTER EXISTS {{ VALUES ?scopeG {{ {} }} GRAPH ?scopeG {{ ?f ?scopeP ?scopeO }} }}",
+            iris.join(" ")
+        ));
+        sign(format!("graph={}", iris.join(",")));
+    }
+    if let Some(q) = params.get("q") {
+        // Words only, as the search box takes them: the index's own syntax stays out.
+        let words: Vec<String> = q
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .take(SCOPE_WORDS)
+            .map(str::to_owned)
+            .collect();
+        if let Some((last, rest)) = words.split_last() {
+            let searches: Vec<String> = rest
+                .iter()
+                .map(|w| format!("?f <{SEARCH}> \"{w}\" ."))
+                .chain([format!("?f <{SEARCH}> \"{last}*\" .")])
+                .collect();
+            sparql.push_str(&format!(
+                " {{ SELECT DISTINCT ?f WHERE {{ {} }} }}",
+                searches.join(" ")
+            ));
+            sign(format!("q={}", words.join(" ")));
+        }
+    }
+    out.sparql = sparql;
+    Ok(out)
+}
+
+const SEARCH: &str = "http://w3id.org/tripletrail/fn#search";
 
 /// A range facet's bound as a SPARQL literal of its datatype: a number for numeric types,
 /// a date or time for the others; `None` when `text` is not one.
@@ -771,7 +878,8 @@ fn facet_counts(
         " FILTER EXISTS {{ {} }}",
         collection.geometry.pattern("?f", "?w")
     );
-    let all = facet_filter(collection, params, true, None)?;
+    let scope = scope_filter(entry, view, collection, params)?;
+    let all = facet_filter(collection, params, true, None, &scope)?;
     let number = |t: &Option<Term>| match t {
         Some(Term::Literal(l)) => l.value().parse::<u64>().unwrap_or(0),
         _ => 0,
@@ -838,7 +946,7 @@ fn facet_counts(
             // Searched, not counted: its values are too many to list.
             return Ok(json!({ "key": facet.key, "title": facet.title, "text": true }));
         }
-        let other = facet_filter(collection, params, true, Some(&facet.key))?;
+        let other = facet_filter(collection, params, true, Some(&facet.key), &scope)?;
         let timeout = capped(timeout, facet.select.is_some() || other.computed);
         let failed_key = version.filter(|_| facet.select.is_some()).map(|v| {
             (

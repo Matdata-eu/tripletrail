@@ -2319,3 +2319,107 @@ ex:TrackShape a sh:NodeShape ; sh:targetClass ex:Track ; tts:key "track" ;
     assert!(properties.get("fast").is_none(), "{items}");
     assert_eq!(properties["speed"], 200, "{items}");
 }
+
+/// Facets and tiles narrowed to a map area (`bbox`), to named graphs (`graph`) and to a text
+/// (`q`), the same filters for both (#92).
+#[test]
+fn facets_and_tiles_by_area_graph_and_text() {
+    let mut trig = String::from(
+        "@prefix ex: <http://example.com/> .\n\
+         @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+    );
+    // Stations 0-3 in Belgium (lon 4.x) in graph be, 4-5 in Norway (lon 10.x) in graph no.
+    for i in 0..6 {
+        let (graph, lon, name) = if i < 4 {
+            (
+                "be",
+                4.0,
+                [
+                    "Bruxelles Midi",
+                    "Gent Sint-Pieters",
+                    "Brugge",
+                    "Bruxelles Nord",
+                ][i],
+            )
+        } else {
+            ("no", 10.0, ["Oslo S", "Bergen"][i - 4])
+        };
+        let status = if i % 2 == 0 { "open" } else { "closed" };
+        trig.push_str(&format!(
+            "ex:{graph} {{ ex:s{i} a ex:Station ; ex:status ex:{status} ; rdfs:label \"{name}\" ;\n\
+             \x20 geo:hasGeometry [ geo:asWKT \"POINT({} 50.8)\"^^geo:wktLiteral ] . }}\n",
+            lon + f64::from(i as u32) / 10.0
+        ));
+    }
+    let engine = Engine::new_tripletrail();
+    engine.set_union_default_graph(true);
+    engine.load(RdfFormat::TriG, trig.as_bytes()).unwrap();
+    let base = start(engine);
+    let facets = |query: &str| get(&format!("{base}/kg/tiles/facets/Station{query}")).2;
+    assert_eq!(facets("")["features"], 6);
+    // The map area: Belgium's box keeps 0-3.
+    let area = facets("?bbox=3,50,5,51");
+    assert_eq!(area["features"], 4, "{area}");
+    let status = |out: &Value| -> Vec<u64> {
+        out["facets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["key"] == "status")
+            .unwrap()["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["count"].as_u64().unwrap())
+            .collect()
+    };
+    assert_eq!(status(&area), [2, 2]);
+    // A named graph, or several.
+    assert_eq!(
+        facets("?graph=http%3A%2F%2Fexample.com%2Fno")["features"],
+        2
+    );
+    assert_eq!(
+        facets("?graph=http%3A%2F%2Fexample.com%2Fno&graph=http%3A%2F%2Fexample.com%2Fbe")["features"],
+        6
+    );
+    assert_eq!(
+        get(&format!(
+            "{base}/kg/tiles/facets/Station?graph=not%20an%20iri"
+        ))
+        .0,
+        400
+    );
+    assert_eq!(
+        get(&format!("{base}/kg/tiles/facets/Station?bbox=1,2")).0,
+        400
+    );
+    // A text: every word, the last as a prefix, accents and case aside.
+    assert_eq!(facets("?q=bruxelles")["features"], 2);
+    assert_eq!(facets("?q=BRUXELLES%20mi")["features"], 1);
+    assert_eq!(
+        facets("?q=bruxelles&status=http%3A%2F%2Fexample.com%2Fopen")["features"],
+        1
+    );
+    // All three together, with a facet.
+    assert_eq!(
+        facets("?q=bruxelles&bbox=3,50,5,51&graph=http%3A%2F%2Fexample.com%2Fbe")["features"],
+        2
+    );
+    assert_eq!(facets("?q=oslo&bbox=3,50,5,51")["features"], 0);
+    // Tiles keep the same features, on the collection's tile and on `all`, each filter kept
+    // apart in the cache.
+    let (_, every) = tile(&format!("{base}/kg/tiles/all/0/0/0.mvt"));
+    assert!(holds(&every, "http://example.com/s0") && holds(&every, "http://example.com/s5"));
+    let (_, norway) = tile(&format!(
+        "{base}/kg/tiles/Station/0/0/0.mvt?graph=http%3A%2F%2Fexample.com%2Fno"
+    ));
+    assert!(holds(&norway, "http://example.com/s4") && !holds(&norway, "http://example.com/s0"));
+    let (_, gent) = tile(&format!("{base}/kg/tiles/all/0/0/0.mvt?q=gent"));
+    assert!(holds(&gent, "http://example.com/s1") && !holds(&gent, "http://example.com/s0"));
+    let (_, area) = tile(&format!("{base}/kg/tiles/all/0/0/0.mvt?bbox=9,50,12,51"));
+    assert!(holds(&area, "http://example.com/s5") && !holds(&area, "http://example.com/s3"));
+    let (_, again) = tile(&format!("{base}/kg/tiles/all/0/0/0.mvt"));
+    assert_eq!(again, every);
+}
