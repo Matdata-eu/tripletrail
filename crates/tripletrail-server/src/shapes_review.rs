@@ -1461,10 +1461,10 @@ mod tests {
         assert_eq!(f.kind, Kind::GitHub);
         assert_eq!(f.api, "https://api.github.com");
         assert_eq!(f.project, "Matdata-eu/shapes");
-        let f = Forge::of(&binding("https://gitlab.example.org/rail/dim/shapes")).unwrap();
+        let f = Forge::of(&binding("https://gitlab.example.org/rail/assets/shapes")).unwrap();
         assert_eq!(f.kind, Kind::GitLab);
         assert_eq!(f.api, "https://gitlab.example.org/api/v4");
-        assert_eq!(f.gitlab_id(), "rail%2Fdim%2Fshapes");
+        assert_eq!(f.gitlab_id(), "rail%2Fassets%2Fshapes");
         assert_eq!(
             Forge::of(&binding("https://git.example.org/x/y"))
                 .err()
