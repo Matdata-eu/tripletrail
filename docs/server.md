@@ -1717,10 +1717,14 @@ ex:NetworkWriters a sg:Policy ; sg:group "network-assets" ; sg:writeAllGraphs tr
   `sg:requestingAgent`), and shared. After a write it is brought up to date by judging again
   only the resources the write touched (2 to 4 ms instead of 440 ms for rules on 200,000
   resources), when every shape is local: its targets and checks read only the focus node's
-  own quads (no `sh:node` or `sh:class` on values, no paths beyond one predicate, no
-  `sh:qualifiedValueShape`, `sh:closed` or SPARQL constraints) and the write did not change
-  `rdfs:subClassOf`. Otherwise, and after bulk loads or writes of more than 65,536 quads, the
-  rules are compiled anew. Full-text search (`tt:search`, `text:query`, the map search) reads
+  own quads and the quads along its property paths (single predicates or sequences of up to
+  four, with `sh:class` on the values counting as one more step; no `sh:node` on values, no
+  other kind of path, no `sh:qualifiedValueShape`, `sh:closed` or SPARQL constraints) and the
+  write did not change `rdfs:subClassOf`. The nodes that reach a touched resource along those
+  paths are judged again with it (enterprise #7: a write under 20 shapes, one of them on
+  `ex:vendor/ex:country`, went from 6 to 7.5 s to 4 to 47 ms on 200,000 offers). Otherwise,
+  after bulk loads or writes of more than 65,536 quads, and when more than 65,536 resources
+  would be judged again, the rules are compiled anew. Full-text search (`tt:search`, `text:query`, the map search) reads
   an index of the visible labels alone, ranked as on a store holding only them (#203; see
   [full-text search](full-text-search.md#access-control)). The built-in services (`st:`, the window service, path search and `pgr`)
   read the same view: their sub-selects, the edges path search follows and the networks routing
