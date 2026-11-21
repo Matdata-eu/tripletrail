@@ -17,7 +17,7 @@ use oxrdf::vocab::xsd;
 #[cfg(feature = "sparql-12")]
 use oxrdf::{BaseDirection, NamedOrBlankNode};
 use oxrdf::{BlankNode, GraphName, Literal, NamedNode, Term, Triple, Variable};
-use oxsdatatypes::{DateTime, DayTimeDuration, Decimal, Double, Float, Integer};
+use oxsdatatypes::{DateTime, DayTimeDuration, Double, Float, Integer};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet, FxHasher};
 use spargebra::algebra::{AggregateFunction, PropertyPathExpression};
 #[cfg(feature = "sparql-12")]
@@ -2898,11 +2898,12 @@ impl Accumulator for AvgAccumulator {
             ExpressionTerm::DoubleLiteral(sum) => {
                 Some(ExpressionTerm::DoubleLiteral(sum / Double::from(count)))
             }
-            ExpressionTerm::IntegerLiteral(sum) => Some(ExpressionTerm::DecimalLiteral(
-                Decimal::from(sum).checked_div(count)?,
-            )),
+            // tripletrail: exact, or 24 fraction digits, as Jena divides decimals.
+            ExpressionTerm::IntegerLiteral(sum) => {
+                crate::dataset::decimal_quotient(sum.into(), count.into())
+            }
             ExpressionTerm::DecimalLiteral(sum) => {
-                Some(ExpressionTerm::DecimalLiteral(sum.checked_div(count)?))
+                crate::dataset::decimal_quotient(sum, count.into())
             }
             _ => None,
         }

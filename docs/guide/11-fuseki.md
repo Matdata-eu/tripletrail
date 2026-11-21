@@ -625,6 +625,24 @@ min,max
 3,3.0e0
 ```
 
+Division of integers and decimals, and `AVG`, also give Jena's answer: the exact quotient when
+it ends, and otherwise 24 fraction digits, rounded half to even:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/kg/sparql -H 'Accept: text/csv' \
+  --data-urlencode 'query=SELECT (1.0 / 3.0 AS ?third) (2 / 3 AS ?two) (1 / 1024 AS ?exact) (AVG(?v) AS ?avg) WHERE { VALUES ?v { 1 2 2 } }'
+```
+
+<!-- test: output -->
+```text
+third,two,exact,avg
+0.333333333333333333333333,0.666666666666666666666667,0.0009765625,1.666666666666666666666667
+```
+
+Arithmetic on such a quotient goes by its value with 18 fraction digits, so `1 / 3 * 3` is
+`0.999999999999999999` where Jena gives `0.999999999999999999999999`.
+
 A few things differ on purpose:
 
 - Typed literals keep the form they were loaded in (`"100.0"` stays `"100.0"`), while

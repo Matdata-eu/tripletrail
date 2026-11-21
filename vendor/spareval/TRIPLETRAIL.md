@@ -92,5 +92,14 @@ version the rest of the workspace uses).
    term still match nothing. Inside `GRAPH ?g` it is unchanged: the graphs enumerated are those that
    hold the term.
 
+12. **Decimal division as in Jena** (#8, `src/dataset.rs`, `decimal_quotient`; used by `/` in
+   `src/expression.rs` and `AVG` in `src/eval.rs`): the exact quotient when it ends, otherwise
+   24 fraction digits rounded half to even (`XSDFuncOp.decimalDivide`). Upstream cut every
+   quotient at 18 digits (`1 / 3` was `0.333333333333333333`, `2 / 3` `0.666666666666666666`).
+   A quotient with more than 18 fraction digits is a `xsd:decimal` `OtherTypedLiteral` holding
+   its text; `ExpressionTerm::value` reads it, and any stored decimal with more than 18
+   fraction digits, rounded half to even at 18 (`rounded_decimal`), where upstream gave an
+   error.
+
 To move to a newer spareval: copy the new release over `src/`, apply the `tripletrail:` changes
 again, and run `cargo test -p tripletrail --test derived_datatypes`.

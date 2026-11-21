@@ -562,6 +562,7 @@ impl ExpressionTerm {
         match self {
             Self::OtherTypedLiteral { value, datatype } => {
                 parse_typed_literal(&value, datatype.as_str())
+                    .or_else(|| long_decimal(&value, &datatype))
                     .unwrap_or(Self::OtherTypedLiteral { value, datatype })
             }
             term => term,
@@ -573,6 +574,7 @@ impl ExpressionTerm {
         match self {
             Self::OtherTypedLiteral { value, datatype } => {
                 parse_typed_literal(value, datatype.as_str())
+                    .or_else(|| long_decimal(value, datatype))
                     .map_or(std::borrow::Cow::Borrowed(self), std::borrow::Cow::Owned)
             }
             term => std::borrow::Cow::Borrowed(term),
@@ -596,6 +598,15 @@ impl ExpressionTerm {
             _ => None,
         }
     }
+}
+
+/// tripletrail: the value of a `xsd:decimal` literal with more than 18 fraction digits, which
+/// `parse_typed_literal` refuses (see [`rounded_decimal`]).
+fn long_decimal(value: &str, datatype: &NamedNode) -> Option<ExpressionTerm> {
+    (datatype.as_ref() == oxrdf::vocab::xsd::DECIMAL)
+        .then(|| rounded_decimal(value))
+        .flatten()
+        .map(ExpressionTerm::DecimalLiteral)
 }
 
 fn parse_typed_literal(value: &str, datatype: &str) -> Option<ExpressionTerm> {
@@ -815,6 +826,139 @@ pub fn decimal_lexical(value: Decimal) -> String {
         s.push_str(".0");
     }
     s
+}
+
+/// Fraction digits Jena keeps when a decimal quotient does not end (`XSDFuncOp.DIVIDE_PRECISION`).
+const DIVIDE_PRECISION: usize = 24;
+
+/// tripletrail: decimal division as Jena does it (`XSDFuncOp.decimalDivide`), for `/` on
+/// integers and decimals and for `AVG`. The quotient is exact when it ends; otherwise it is
+/// rounded half to even at 24 fraction digits. A quotient that `Decimal` holds (at most 18
+/// fraction digits) is a [`ExpressionTerm::DecimalLiteral`]; a longer one keeps its digits as a
+/// `xsd:decimal` [`ExpressionTerm::OtherTypedLiteral`], whose value (see [`ExpressionTerm::value`])
+/// is rounded to 18 fraction digits. `None` when the divisor is zero.
+pub fn decimal_quotient(dividend: Decimal, divisor: Decimal) -> Option<ExpressionTerm> {
+    let (negative, integer, digits) = quotient_digits(dividend, divisor)?;
+    if digits.len() <= 18 {
+        // Most quotients: one `Decimal`, built without text.
+        let mut value = i128::try_from(integer).ok();
+        for i in 0..18 {
+            let digit = digits.get(i).copied().unwrap_or(0);
+            value = value
+                .and_then(|v| v.checked_mul(10))
+                .and_then(|v| v.checked_add(i128::from(digit)));
+        }
+        if let Some(value) = value {
+            let value = if negative { -value } else { value };
+            return Some(ExpressionTerm::DecimalLiteral(Decimal::from_be_bytes(
+                value.to_be_bytes(),
+            )));
+        }
+    }
+    let mut s = String::with_capacity(digits.len() + 42);
+    if negative {
+        s.push('-');
+    }
+    s.push_str(&integer.to_string());
+    s.push('.');
+    if digits.is_empty() {
+        s.push('0');
+    }
+    s.extend(digits.iter().map(|d| char::from(b'0' + d)));
+    Some(ExpressionTerm::OtherTypedLiteral {
+        value: s,
+        datatype: oxrdf::vocab::xsd::DECIMAL.into_owned(),
+    })
+}
+
+/// The sign, integer part and fraction digits (without trailing zeros) of Jena's decimal
+/// quotient (see [`decimal_quotient`]); the sign is never negative for zero.
+fn quotient_digits(dividend: Decimal, divisor: Decimal) -> Option<(bool, u128, Vec<u8>)> {
+    // Both are integers scaled by the same power of ten, so the quotient of the scaled
+    // integers is the quotient of the decimals.
+    let a = i128::from_be_bytes(dividend.to_be_bytes());
+    let b = i128::from_be_bytes(divisor.to_be_bytes());
+    if b == 0 {
+        return None;
+    }
+    let negative = (a < 0) != (b < 0);
+    let (a, b) = (a.unsigned_abs(), b.unsigned_abs());
+    let mut integer = a / b;
+    let mut rest = a % b;
+    // The next digit of rest / b: rest < b <= 2^127, so a sum of two values below b fits.
+    let next_digit = |rest: &mut u128| {
+        let (mut digit, mut acc) = (0_u8, 0_u128);
+        for _ in 0..10 {
+            acc += *rest;
+            if acc >= b {
+                acc -= b;
+                digit += 1;
+            }
+        }
+        *rest = acc;
+        digit
+    };
+    let mut digits = Vec::new();
+    while rest != 0 && digits.len() < DIVIDE_PRECISION {
+        digits.push(next_digit(&mut rest));
+    }
+    if rest != 0 {
+        // a / b ends exactly when the part of b without the factors 2 and 5 divides a.
+        let mut odd = b >> b.trailing_zeros();
+        while odd % 5 == 0 {
+            odd /= 5;
+        }
+        if a % odd == 0 {
+            while rest != 0 {
+                digits.push(next_digit(&mut rest));
+            }
+        } else if next_digit(&mut rest) >= 5 {
+            // A quotient that does not end is never exactly half way, so this is half to even.
+            let mut carry = true;
+            for digit in digits.iter_mut().rev() {
+                if *digit == 9 {
+                    *digit = 0;
+                } else {
+                    *digit += 1;
+                    carry = false;
+                    break;
+                }
+            }
+            if carry {
+                integer += 1;
+            }
+        }
+    }
+    while digits.last() == Some(&0) {
+        digits.pop();
+    }
+    Some((negative && (integer != 0 || !digits.is_empty()), integer, digits))
+}
+
+/// tripletrail: the value of a `xsd:decimal` with more fraction digits than `Decimal` holds
+/// (a quotient of [`decimal_quotient`], or a stored literal), rounded half to even at 18.
+fn rounded_decimal(value: &str) -> Option<Decimal> {
+    const KEPT: usize = 18;
+    let (int_part, fraction) = value.split_once('.')?;
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.len() <= KEPT || !fraction.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let (kept, dropped) = fraction.split_at(KEPT);
+    let truncated: Decimal = format!("{int_part}.{kept}").parse().ok()?;
+    let dropped = dropped.as_bytes();
+    let up = dropped[0] > b'5'
+        || (dropped[0] == b'5'
+            && (dropped[1..].iter().any(|&c| c != b'0') || kept.as_bytes()[KEPT - 1] % 2 == 1));
+    if !up {
+        return Some(truncated);
+    }
+    let ulp = Decimal::new(1, 18).ok()?;
+    if int_part.starts_with('-') {
+        truncated.checked_sub(ulp)
+    } else {
+        truncated.checked_add(ulp)
+    }
 }
 
 /// A computed `xsd:decimal` as a literal, in Jena's form (see [`decimal_lexical`]).

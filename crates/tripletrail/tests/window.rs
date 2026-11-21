@@ -257,3 +257,35 @@ fn moving_sums_of_doubles_add_only_the_frame() {
         ],
     );
 }
+
+#[test]
+fn avg_of_decimals_divides_as_sparql_avg() {
+    // Exact when the mean ends, otherwise 24 fraction digits rounded half to even (Jena's
+    // decimal division, as SPARQL's AVG).
+    let e = Engine::new_tripletrail();
+    e.load(
+        RdfFormat::Turtle,
+        r#"@prefix ex: <http://example.com/> .
+        ex:a ex:k 1 ; ex:v 1 .
+        ex:b ex:k 2 ; ex:v 0 .
+        ex:c ex:k 3 ; ex:v 1 ."#
+            .as_bytes(),
+    )
+    .unwrap();
+    let rows = table(
+        &e,
+        "SELECT ?s ?mean WHERE { SERVICE <http://w3id.org/tripletrail/window> {
+           { SELECT ?s ?k ?v WHERE { ?s ex:k ?k ; ex:v ?v } }
+           [] win:orderBy ?k ; win:rows (-2 0) ; win:avg (?v ?mean) .
+         } }",
+        &["mean"],
+    );
+    expect(
+        &rows,
+        &[
+            ("a", &["1.0"]),
+            ("b", &["0.5"]),
+            ("c", &["0.666666666666666666666667"]),
+        ],
+    );
+}

@@ -9,6 +9,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- Decimal division and `AVG` give Jena's answer (#8): the exact quotient when it ends, otherwise 24 fraction digits rounded half to even, where they cut every quotient at 18 (`1 / 3` is `0.333333333333333333333333`, `2 / 3` is `0.666666666666666666666667`, was `0.666666666666666666`; `1 / 1099511627776` is exact). A stored decimal with more than 18 fraction digits now takes part in arithmetic and comparisons, by its value rounded at 18, instead of giving an error. See [the guide](docs/guide/11-fuseki.md#small-differences).
 - Query page: MatGUI's **Explain** tab of the results showed no plan and said "No engine recognised for this endpoint", as it knows only QLever, GraphDB, Stardog, Blazegraph and Neptune. For this server's own endpoints it now asks `/{ds}/explain` (the Engine list reads "Detect (TripleTrail)") and draws the plan as a tree with the rows and time of each step. See [the guide](docs/guide/02-first-steps.md#see-how-a-query-ran).
 - A dataset's turn (`maxConcurrent`) ends once its answer is read to its end, before the last bytes are written, as the caller's turn already did: a client that sends its next request as soon as an answer is in no longer waits for, or is refused for, the turn the answer still held, and `/$/stats` no longer shows it running.
 - A vector graph saved to its file (`<ds>.networks/vectors/`) counts as being made until the file is written: once its status says done, nothing writes to the folder any more.

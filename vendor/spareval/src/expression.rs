@@ -423,11 +423,12 @@ pub fn build_expression_evaluator<'a, C: ExpressionEvaluatorContext<'a>>(
                 Some(match NumericBinaryOperands::new(a(tuple)?, b(tuple)?)? {
                     NumericBinaryOperands::Float(v1, v2) => ExpressionTerm::FloatLiteral(v1 / v2),
                     NumericBinaryOperands::Double(v1, v2) => ExpressionTerm::DoubleLiteral(v1 / v2),
+                    // tripletrail: exact, or 24 fraction digits, as in Jena.
                     NumericBinaryOperands::Integer(v1, v2) => {
-                        ExpressionTerm::DecimalLiteral(Decimal::from(v1).checked_div(v2)?)
+                        crate::dataset::decimal_quotient(v1.into(), v2.into())?
                     }
                     NumericBinaryOperands::Decimal(v1, v2) => {
-                        ExpressionTerm::DecimalLiteral(v1.checked_div(v2)?)
+                        crate::dataset::decimal_quotient(v1, v2)?
                     }
                     #[cfg(feature = "sep-0002")]
                     _ => return None,

@@ -250,3 +250,90 @@ fn min_and_max_of_mixed_kinds_follow_jena() {
         assert_eq!(column(&engine, q), [expected], "{q}");
     }
 }
+
+#[test]
+fn decimal_division_keeps_24_digits_as_jena() {
+    // Jena's XSDFuncOp.decimalDivide: exact when the quotient ends, otherwise 24 fraction
+    // digits rounded half to even. Integers divide as decimals.
+    let engine = Engine::new_tripletrail();
+    let quotients = column(
+        &engine,
+        "SELECT (STR(?a / ?b) AS ?r) {
+           VALUES (?a ?b) {
+             (1.0 3.0) (2 3) (-2 3) (2 -3) (10 4) (6 3) (1 1024) (1 1099511627776)
+             (0.000000000000000001 3) (1 0) (0 5)
+           }
+         }",
+    );
+    assert_eq!(
+        quotients,
+        [
+            "\"0.333333333333333333333333\"",
+            "\"0.666666666666666666666667\"",
+            "\"-0.666666666666666666666667\"",
+            "\"-0.666666666666666666666667\"",
+            "\"2.5\"",
+            "\"2.0\"",
+            "\"0.0009765625\"",
+            "\"0.0000000000009094947017729282379150390625\"",
+            "\"0.000000000000000000333333\"",
+            "-",
+            "\"0.0\""
+        ]
+    );
+    // The quotient is a decimal that compares, sorts and computes with as a number (its value
+    // has 18 fraction digits), and AVG divides the same way.
+    let mut uses = column(
+        &engine,
+        "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+         SELECT ?r {
+           { BIND(STR(DATATYPE(1 / 3)) AS ?r) }
+           UNION { BIND(STR(1 / 3 < 0.34 && 1 / 3 > 0.33) AS ?r) }
+           UNION { BIND(STR(1 / 3 * 3) AS ?r) }
+           UNION { BIND(STR(xsd:double(2 / 3)) AS ?r) }
+           UNION { SELECT (STR(AVG(?x)) AS ?r) { VALUES ?x { 1 2 2 } } }
+           UNION { SELECT (STR(AVG(?x)) AS ?r) { VALUES ?x { 1.5 2.5 } } }
+         }",
+    );
+    uses.sort();
+    assert_eq!(
+        uses,
+        [
+            // A double cast keeps the text of its argument when that is a valid double.
+            "\"0.666666666666666666666667\"",
+            "\"0.999999999999999999\"",
+            "\"1.666666666666666666666667\"",
+            "\"2.0\"",
+            "\"http://www.w3.org/2001/XMLSchema#decimal\"",
+            "\"true\""
+        ]
+    );
+}
+
+#[test]
+fn stored_decimals_with_more_than_18_digits_are_numbers() {
+    // A stored decimal written with 24 fraction digits (as Jena writes a quotient) takes part in
+    // arithmetic and comparisons, with its value rounded half to even at 18 digits.
+    let engine = Engine::new_tripletrail();
+    engine
+        .load(
+            RdfFormat::Turtle,
+            "<urn:a> <urn:v> 0.333333333333333333333333 .
+             <urn:b> <urn:v> 0.6666666666666666665 .
+             <urn:c> <urn:v> 0.6666666666666666675 ."
+                .as_bytes(),
+        )
+        .unwrap();
+    let values = column(
+        &engine,
+        "SELECT (STR(?v + 0) AS ?r) { ?s <urn:v> ?v } ORDER BY ?s",
+    );
+    assert_eq!(
+        values,
+        [
+            "\"0.333333333333333333\"",
+            "\"0.666666666666666666\"",
+            "\"0.666666666666666668\""
+        ]
+    );
+}
