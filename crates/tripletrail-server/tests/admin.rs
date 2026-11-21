@@ -99,24 +99,24 @@ fn attach_query_swap_and_detach() {
     let dir = temp_dir("swap");
     let v1 = saved_dataset(
         &dir,
-        "dim_v1",
+        "assets_v1",
         "<http://example.com/v> <http://example.com/is> 1",
     );
     let v2 = saved_dataset(
         &dir,
-        "dim_v2",
+        "assets_v2",
         "<http://example.com/v> <http://example.com/is> 2 . <http://example.com/w> <http://example.com/is> 2",
     );
     let s = start(&dir, Vec::new());
 
     // Without the token, nothing changes.
     let r = ureq::post(&format!("{}/$/datasets", s.base))
-        .query("name", "dim_v1")
+        .query("name", "assets_v1")
         .query("location", v1.to_str().unwrap())
         .call();
     assert_eq!(status(r), 401);
 
-    for (name, path) in [("dim_v1", &v1), ("dim_v2", &v2)] {
+    for (name, path) in [("assets_v1", &v1), ("assets_v2", &v2)] {
         let r = s
             .admin("POST", "/$/datasets")
             .query("name", name)
@@ -129,11 +129,11 @@ fn attach_query_swap_and_detach() {
     // Fuseki's form body works too, here for an alias.
     let r = s
         .admin("POST", "/$/datasets")
-        .send_form(&[("dbName", "assets"), ("alias-of", "dim_v1")])
+        .send_form(&[("dbName", "assets"), ("alias-of", "assets_v1")])
         .unwrap();
     assert_eq!(r.status(), 200);
     assert_eq!(s.count("assets"), 5);
-    assert_eq!(s.count("dim_v2"), 6);
+    assert_eq!(s.count("assets_v2"), 6);
 
     // Read-only: updates and uploads answer 405.
     assert_eq!(
@@ -146,39 +146,39 @@ fn attach_query_swap_and_detach() {
     assert_eq!(status(r), 405);
 
     let d = s.get_json("/$/datasets/assets");
-    assert_eq!(d["target"], "dim_v1");
+    assert_eq!(d["target"], "assets_v1");
     assert_eq!(d["mode"], "read-only");
 
     // Swap: new requests see the new version, and the previous one is remembered.
     let r = s
         .admin("POST", "/$/datasets/assets/swap")
-        .query("to", "dim_v2")
+        .query("to", "assets_v2")
         .call()
         .unwrap();
     assert_eq!(r.status(), 200);
     assert_eq!(s.count("assets"), 6);
     let d = s.get_json("/$/datasets/assets");
-    assert_eq!(d["target"], "dim_v2");
-    assert_eq!(d["previous"], "dim_v1");
+    assert_eq!(d["target"], "assets_v2");
+    assert_eq!(d["previous"], "assets_v1");
     // An aliased dataset is not detached by accident.
-    assert_eq!(status(s.admin("DELETE", "/$/datasets/dim_v2").call()), 409);
+    assert_eq!(status(s.admin("DELETE", "/$/datasets/assets_v2").call()), 409);
     // Rollback is a swap back.
     s.admin("POST", "/$/datasets/assets/swap")
-        .query("to", "dim_v1")
+        .query("to", "assets_v1")
         .call()
         .unwrap();
     assert_eq!(s.count("assets"), 5);
 
-    // Detach dim_v2 and delete its files.
+    // Detach assets_v2 and delete its files.
     let r = s
-        .admin("DELETE", "/$/datasets/dim_v2")
+        .admin("DELETE", "/$/datasets/assets_v2")
         .query("delete-files", "true")
         .call()
         .unwrap();
     assert_eq!(r.status(), 200);
     assert!(!v2.exists());
     assert_eq!(
-        status(ureq::get(&format!("{}/dim_v2/query?query=ASK{{}}", s.base)).call()),
+        status(ureq::get(&format!("{}/assets_v2/query?query=ASK{{}}", s.base)).call()),
         404
     );
     let list = s.get_json("/$/datasets");
@@ -188,7 +188,7 @@ fn attach_query_swap_and_detach() {
         .iter()
         .map(|d| d["ds.name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["/dim_v1", "/assets"]);
+    assert_eq!(names, ["/assets_v1", "/assets"]);
 }
 
 #[test]
