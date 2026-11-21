@@ -268,6 +268,65 @@ the resource's own vector is used.
 The card asks [`/{dataset}/search/similar`](../vector-search.md#retrieval-for-graphrag), as
 an application would.
 
+## The Records page
+
+<http://localhost:7878/$/ui/records/ds> browses the dataset's records like a database tool
+lists its tables. On the left are the classes with how many records each has. Pick one, and
+the middle shows its records in a grid, a column per property:
+
+- Click a column's header to sort by it. Each header has a filter box: text that a value
+  contains, a number with `>`, `<=` or a range such as `20..60`, yes or no for a boolean.
+- **Label contains…** keeps the records whose label holds the text.
+- The grid pages through the records 50 at a time, and the server does the sorting, the
+  filtering and the paging, so a class of a million records stays quick.
+- **CSV** downloads the filtered records (up to 10,000), and **Open as SPARQL** puts the
+  grid's query on the Query page.
+
+Click a record and the right shows it as a form, drawn from the shapes: their groups in their
+order, each property with its viewer (`dash:viewer`), and the resources that link to it under
+**Referenced by**. **Describe**, **Map**, **Explore** and **Open as SPARQL** open the record in
+the other tools. The link holds the class and the record, so it can be shared. A property
+kept from the forms with `tts:hiddenFrom tts:Reader-Forms` (see
+[below](#keep-a-property-from-the-record-forms)) does not show in the form.
+
+The grid uses the search above with three more parts: `sort` (a key, or `{"key": …, "desc":
+true}`; the label by default), `q` (the label contains it, case aside) and the `offset`
+parameter. These are the longest sections after the first:
+
+<!-- test: run -->
+```sh
+curl -s -G http://localhost:7878/ds/search/results --data-urlencode 'm={
+  "class": "Section", "show": ["lengthKm"], "sort": {"key": "lengthKm", "desc": true}}' \
+  --data-urlencode limit=3 --data-urlencode offset=1 | grep -o '"iri":"[^"]*#S[0-9]*"'
+```
+
+<!-- test: output -->
+```text
+"iri":"https://example.org/rail#S11"
+"iri":"https://example.org/rail#S12"
+"iri":"https://example.org/rail#S08"
+```
+
+`f=csv` gives the same rows as CSV, the IRI and the label first (with Windows line ends,
+which `tr` takes out here):
+
+<!-- test: run -->
+```sh
+curl -s -G http://localhost:7878/ds/search/results \
+  --data-urlencode 'm={"class": "Station", "q": "brussels"}' --data-urlencode f=csv | tr -d '\r'
+```
+
+<!-- test: output -->
+```text
+iri,label
+https://example.org/rail#BXC,Brussels-Central
+https://example.org/rail#BXN,Brussels-North
+https://example.org/rail#BXS,Brussels-South
+```
+
+The form is the describe view read for the forms reader:
+`/ds/describe?iri=…&format=view&reader=forms`.
+
 ## The Explore page
 
 <http://localhost:7878/$/ui/explore/ds?iri=https://example.org/rail%23BXC> draws the graph

@@ -2889,6 +2889,9 @@ the dataset's DASH shapes when it has them (#140).
   they come from (the first 10,000 links are read), on the page's Incoming links tab.
 - **JSON.** `?format=view` gives the view model (label, classes, groups of rows, and in
   `incoming` the links to the resource that no row shows), for a page that draws it itself.
+  `reader=forms` reads the shapes for the forms reader (`tts:Reader-Forms`), as the web UI's
+  **Records** page (`/$/ui/records/{ds}`) does; `reader=describe` is the default, and another
+  reader a 400.
 
 The page has no `ETag`: it also depends on the shapes, which can change without a write to the
 data.
@@ -2974,6 +2977,21 @@ reader's shapes, and a limited caller sees only what it can read.
   of their own for the rows answered, so columns do not multiply the search's rows, and
   `sparql` leaves them out. `/search/sparql` has them joined (`GROUP_CONCAT`) instead. An unknown class is a 404; an unknown key or operator, or a
   value that does not fit, a 422.
+
+  For the Records page (#81) a search also takes:
+  - `"sort": "lengthKm"` or `{"key": "lengthKm", "desc": true}`: the rows in the order of that
+    key's value (numbers as numbers, other values by their text, case aside; records without
+    a value last), then by label. The key is a condition's or a shown one, and has at most one
+    value (`sh:maxCount 1`), else a 422; `label` is the default.
+  - `"q": "text"`: the records whose label (or IRI, when they have none) contains the text,
+    case aside.
+  - the `offset` parameter: the rows after the first `offset` (0 to 1,000,000), and the answer
+    says `offset`.
+  - `f=csv`: the rows as CSV (`text/csv`, as a download named after the class): `iri`,
+    `label`, then a column per key, a resource as its IRI and several values joined with
+    ` | `. `limit` is then at most 10,000. A cell that a spreadsheet would run as a formula
+    (starting with `=`, `+`, `-` or `@`, not a number) gets a `'` before it. Another `f` is a
+    400.
 - `GET /{ds}/search/sparql?m=…` gives the SPARQL of a search, as `application/sparql-query`.
 - `GET /{ds}/search/values?m=…&key=…` suggests values for a condition: the values property
   `key` takes among the resources the search finds, most frequent first (then by value),

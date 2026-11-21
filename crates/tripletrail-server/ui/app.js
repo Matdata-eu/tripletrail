@@ -738,10 +738,11 @@
   function route() {
     const [p = "datasets", arg] = location.pathname.slice(UI.length).split("/").filter(Boolean);
     const name = arg ? decodeURIComponent(arg) : null;
-    page = ["datasets", "query", "map", "search", "explore", "tasks", "server", "workbench", "access", "shapes", "import"].includes(p) ? p : "datasets";
+    page = ["datasets", "query", "map", "search", "explore", "tasks", "server", "workbench", "access", "shapes", "import", "records"].includes(p) ? p : "datasets";
     if (page !== "workbench" && document.body.dataset.page === "workbench" && window.TripleTrailWorkbench) window.TripleTrailWorkbench.leave();
     if (page !== "map" && window.TripleTrailMap) window.TripleTrailMap.leave();
     if (page !== "explore" && window.TripleTrailExplore) window.TripleTrailExplore.leave();
+    if (page !== "records" && window.TripleTrailRecords) window.TripleTrailRecords.leave();
     document.body.dataset.page = page;
     if (!(page === "datasets" && name)) for (const d of $$("dialog[open]")) if (d.id === "ds-dialog") d.close();
     for (const s of $$(".page")) s.hidden = s.id !== "page-" + page;
@@ -761,6 +762,10 @@
     else if (page === "explore") {
       if (window.TripleTrailExplore) window.TripleTrailExplore.render(shared, name ? [encodeURIComponent(name)] : []);
       else $("#page-explore").replaceChildren(el("p", { class: "error loading" }, "The Explore page could not be loaded."));
+    }
+    else if (page === "records") {
+      if (window.TripleTrailRecords) window.TripleTrailRecords.render(shared, name ? [encodeURIComponent(name)] : []);
+      else $("#page-records").replaceChildren(el("p", { class: "error loading" }, "The Records page could not be loaded."));
     }
     else if (page === "import") {
       if (window.TripleTrailImport) window.TripleTrailImport.render(shared, name ? [encodeURIComponent(name)] : []);

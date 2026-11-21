@@ -217,6 +217,10 @@ struct Model {
     show: Vec<String>,
     /// A map area (`minLon,minLat,maxLon,maxLat`, CRS84) the resources' geometry meets, as WKT.
     area: Option<String>,
+    /// The key the rows are sorted by (`label` by default) and whether descending (#81).
+    sort: Option<(String, bool)>,
+    /// Words the resource's label holds, case aside (#81).
+    q: Option<String>,
 }
 
 /// Operators that take no value.
@@ -305,11 +309,29 @@ fn model(params: &Params) -> Result<Model, HttpError> {
     }
     .map(|a| crate::ogc::crs84_bbox(&a))
     .transpose()?;
+    let sort = match m.get("sort") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(key)) => Some((key.clone(), false)),
+        Some(o) => Some((
+            o.get("key")
+                .and_then(|k| k.as_str())
+                .ok_or_else(|| HttpError(422, "sort has no key".to_owned()))?
+                .to_owned(),
+            o.get("desc").and_then(|d| d.as_bool()).unwrap_or(false),
+        )),
+    };
+    let q = m
+        .get("q")
+        .and_then(|q| q.as_str())
+        .map(|q| q.trim().to_lowercase())
+        .filter(|q| !q.is_empty());
     Ok(Model {
         class,
         conditions,
         show,
         area,
+        sort,
+        q,
     })
 }
 
@@ -467,16 +489,28 @@ enum Ask {
     Whole,
 }
 
-/// The SPARQL of `m`: the rows (with `limit`) or their number; and the columns.
+/// The SPARQL of `m`: the rows (with `limit`, after `offset`) or their number; and the columns.
 fn sparql<'a>(
     sets: &'a [ApiSet],
     m: &Model,
     limit: usize,
+    offset: usize,
     ask: Ask,
     near: Option<(&Entry, &View)>,
 ) -> Result<(String, &'a ApiSet, Vec<Column<'a>>), HttpError> {
     let bad = |m: String| HttpError(422, m);
     let (set, mut pattern, mut columns) = pattern(sets, m, None, near)?;
+    // `q`: the label holds the text, case aside (a class without a label path: its IRI).
+    if let Some(q) = &m.q {
+        let text = match &set.label {
+            Some(label) => {
+                pattern.push(format!("OPTIONAL {{ ?s {label} ?ql }}"));
+                "COALESCE(STR(?ql), STR(?s))"
+            }
+            None => "STR(?s)",
+        };
+        pattern.push(format!("FILTER(CONTAINS(LCASE({text}), {}))", literal(q)));
+    }
     if ask == Ask::Count {
         return Ok((
             format!(
@@ -528,9 +562,47 @@ fn sparql<'a>(
             _ => select.push(format!("(MIN({0}) AS {0}_)", c.var)),
         }
     }
+    // By label, or by a column with one value per row (#81), then by label and IRI so that
+    // pages follow each other.
+    let by = match &m.sort {
+        None => String::new(),
+        Some((key, _)) if key == "label" => String::new(),
+        Some((key, desc)) => {
+            let Some(c) = columns.iter().find(|c| &c.field.key == key) else {
+                return Err(bad(format!(
+                    "Sort by {key}: it is no condition's or shown property"
+                )));
+            };
+            if c.many {
+                return Err(bad(format!(
+                    "Sort by {key}: it may have several values (no sh:maxCount 1)"
+                )));
+            }
+            // Numbers as numbers, other values by their text; rows without one last.
+            let v = format!("{}_", c.var);
+            let order = format!("COALESCE(xsd:double({v}), LCASE(STR({v})))");
+            let order = order.replace("xsd:double", "<http://www.w3.org/2001/XMLSchema#double>");
+            if *desc {
+                format!("(!BOUND({v})) DESC({order}) ")
+            } else {
+                format!("(!BOUND({v})) {order} ")
+            }
+        }
+    };
+    let label_desc = matches!(&m.sort, Some((k, true)) if k == "label");
+    let label_order = if label_desc {
+        "DESC(LCASE(STR(?l))) ?s"
+    } else {
+        "LCASE(STR(?l)) ?s"
+    };
+    let offset = if offset > 0 {
+        format!("\nOFFSET {offset}")
+    } else {
+        String::new()
+    };
     Ok((
         format!(
-            "SELECT {} WHERE {{\n  {}\n}}\nGROUP BY ?s\nORDER BY LCASE(STR(?l)) ?s\nLIMIT {}",
+            "SELECT {} WHERE {{\n  {}\n}}\nGROUP BY ?s\nORDER BY {by}{label_order}\nLIMIT {}{offset}",
             select.join(" "),
             pattern.join("\n  "),
             limit + 1
@@ -664,7 +736,7 @@ pub(crate) fn query_text(
 ) -> Result<Reply, HttpError> {
     let m = model(params)?;
     let sets = sets_for(state, entry, view, Reader::Search)?;
-    let (query, _, _) = sparql(&sets, &m, rows(params)?, Ask::Whole, None)?;
+    let (query, _, _) = sparql(&sets, &m, rows(params)?, 0, Ask::Whole, None)?;
     Ok(Reply::bytes(
         200,
         "application/sparql-query; charset=utf-8",
@@ -673,17 +745,25 @@ pub(crate) fn query_text(
 }
 
 fn rows(params: &Params) -> Result<usize, HttpError> {
+    rows_up_to(params, MAX_ROWS)
+}
+
+/// `limit`, from 1 to `max`, or [`DEFAULT_ROWS`].
+fn rows_up_to(params: &Params, max: usize) -> Result<usize, HttpError> {
     match params.get("limit") {
         Some(l) => l
             .parse::<usize>()
             .ok()
-            .filter(|l| (1..=MAX_ROWS).contains(l))
-            .ok_or_else(|| {
-                HttpError::bad_request(format!("limit is a number from 1 to {MAX_ROWS}"))
-            }),
+            .filter(|l| (1..=max).contains(l))
+            .ok_or_else(|| HttpError::bad_request(format!("limit is a number from 1 to {max}"))),
         None => Ok(DEFAULT_ROWS),
     }
 }
+
+/// The most rows a CSV of a search gives (`f=csv`, #81).
+const MAX_CSV_ROWS: usize = 10_000;
+/// The furthest a search pages (`offset`).
+const MAX_OFFSET: usize = 1_000_000;
 
 /// `GET /{ds}/search/results?m=`: the resources a search finds: how many, and the first
 /// `limit` (100; at most 1,000) by label, each with its label and the values of the
@@ -700,10 +780,29 @@ pub(crate) fn results(
     use std::collections::HashMap;
     use tripletrail::oxigraph::model::{NamedNode, Term};
     let m = model(params)?;
-    let limit = rows(params)?;
+    let csv = match params.get("f") {
+        None | Some("json") => false,
+        Some("csv") => true,
+        Some(other) => {
+            return Err(HttpError::bad_request(format!(
+                "Unknown format {other}: json or csv"
+            )));
+        }
+    };
+    let limit = rows_up_to(params, if csv { MAX_CSV_ROWS } else { MAX_ROWS })?;
+    let offset = match params.get("offset") {
+        None => 0,
+        Some(o) => o
+            .parse::<usize>()
+            .ok()
+            .filter(|o| *o <= MAX_OFFSET)
+            .ok_or_else(|| {
+                HttpError::bad_request(format!("offset is a number from 0 to {MAX_OFFSET}"))
+            })?,
+    };
     let sets = sets_for(state, entry, view, Reader::Search)?;
-    let (query, set, columns) = sparql(&sets, &m, limit, Ask::Rows, Some((entry, view)))?;
-    let (counting, _, _) = sparql(&sets, &m, limit, Ask::Count, Some((entry, view)))?;
+    let (query, set, columns) = sparql(&sets, &m, limit, offset, Ask::Rows, Some((entry, view)))?;
+    let (counting, _, _) = sparql(&sets, &m, limit, 0, Ask::Count, Some((entry, view)))?;
     let deadline = timeout.map(|t| std::time::Instant::now() + t);
     let left = || deadline.map(|d| d.saturating_duration_since(std::time::Instant::now()));
     let found = crate::ogc::run(entry, &query, left(), view)?;
@@ -902,10 +1001,14 @@ pub(crate) fn results(
             })
         })
         .collect();
+    if csv {
+        return Ok(csv_reply(&set.slug, &columns, &rows));
+    }
     let body = json!({
         "class": set.slug,
         "title": set.title,
         "count": total,
+        "offset": offset,
         "more": more,
         "columns": columns,
         "rows": rows,
@@ -916,4 +1019,62 @@ pub(crate) fn results(
         "application/json",
         serde_json::to_vec(&body).expect("JSON"),
     ))
+}
+
+/// The rows of a search as CSV (#81): `iri`, `label`, then a column per key; a resource is its
+/// IRI, several values are joined with ` | `, and a cell that a spreadsheet would run as a
+/// formula gets a `'` before it, as the REST API's CSV does.
+fn csv_reply(class: &str, columns: &[serde_json::Value], rows: &[serde_json::Value]) -> Reply {
+    fn cell(v: &serde_json::Value) -> String {
+        match v {
+            serde_json::Value::Null => String::new(),
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(a) => a.iter().map(cell).collect::<Vec<_>>().join(" | "),
+            serde_json::Value::Object(o) => o
+                .get("iri")
+                .and_then(|i| i.as_str())
+                .unwrap_or_default()
+                .to_owned(),
+            other => other.to_string(),
+        }
+    }
+    fn quote(text: &str) -> String {
+        let risky = text.starts_with(['=', '+', '-', '@']) && text.parse::<f64>().is_err();
+        let text = if risky {
+            format!("'{text}")
+        } else {
+            text.to_owned()
+        };
+        if text.contains([',', '"', '\n', '\r']) {
+            format!("\"{}\"", text.replace('"', "\"\""))
+        } else {
+            text
+        }
+    }
+    let keys: Vec<&str> = columns.iter().filter_map(|c| c["key"].as_str()).collect();
+    let mut out = String::new();
+    let header: Vec<String> = ["iri", "label"]
+        .into_iter()
+        .chain(keys.iter().copied())
+        .map(quote)
+        .collect();
+    out.push_str(&header.join(","));
+    out.push_str("\r\n");
+    for row in rows {
+        let mut line = vec![quote(&cell(&row["iri"])), quote(&cell(&row["label"]))];
+        for k in &keys {
+            line.push(quote(&cell(&row["values"][*k])));
+        }
+        out.push_str(&line.join(","));
+        out.push_str("\r\n");
+    }
+    let mut reply = Reply::bytes(200, "text/csv; charset=utf-8", out.into_bytes());
+    reply.headers.push((
+        "Content-Disposition",
+        format!(
+            "attachment; filename=\"{}.csv\"",
+            class.replace(['"', '\\', '/'], "_")
+        ),
+    ));
+    reply
 }
