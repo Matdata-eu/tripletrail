@@ -13,7 +13,7 @@
 // `custom(field, ctx)`, which may answer a control of its own before the registry is asked.
 "use strict";
 
-window.TripleTrailForms = (function () {
+(function (root) {
   const editors = new Map();
   const viewers = new Map();
 
@@ -132,17 +132,28 @@ window.TripleTrailForms = (function () {
   /** A value's label: `{label}` when the page gave one, else the IRI's last segment. */
   const labelOf = (v) => (v && typeof v === "object" ? v.label || v.value : String(v).replace(/^.*[#/:](?=[^#/:]+$)/, ""));
   const iriOf = (v) => (v && typeof v === "object" ? v.value : String(v));
+  /** The IRI as a link target when it is a web address (http or https), else null: values come
+   *  from the data, and a `javascript:` IRI must never become a link or an image source. */
+  const webLink = (iri) => (/^https?:\/\//i.test(iri) ? iri : null);
+  /** A link to the IRI when it is a web address, else the text alone. */
+  const link = (ctx, v, text, title) => (webLink(iriOf(v))
+    ? ctx.el("a", { href: webLink(iriOf(v)), title: title || null, rel: "noopener noreferrer" }, text)
+    : ctx.el("span", { title: title || null }, text));
 
   registerViewer("LiteralViewer", (f, ctx) => list(ctx, values(ctx).map((v, i) =>
     ctx.el("span", {}, i ? ", " : null, v && typeof v === "object" ? (v.label ?? v.value) : String(v)))));
   registerViewer("URIViewer", (f, ctx) => list(ctx, values(ctx).map((v, i) =>
-    ctx.el("span", {}, i ? ", " : null, ctx.el("a", { href: iriOf(v) }, iriOf(v))))));
+    ctx.el("span", {}, i ? ", " : null, link(ctx, v, iriOf(v))))));
   registerViewer("LabelViewer", (f, ctx) => list(ctx, values(ctx).map((v, i) =>
-    ctx.el("span", {}, i ? ", " : null, ctx.el("a", { href: iriOf(v), title: iriOf(v) }, labelOf(v))))));
-  registerViewer("ImageViewer", (f, ctx) => list(ctx, values(ctx).map((v) =>
-    ctx.el("img", { src: iriOf(v), alt: f.label || "", loading: "lazy", style: "max-width: 240px; max-height: 160px" }))));
+    ctx.el("span", {}, i ? ", " : null, link(ctx, v, labelOf(v), iriOf(v))))));
+  // Only web images, fetched without telling their host which page shows them.
+  registerViewer("ImageViewer", (f, ctx) => list(ctx, values(ctx).map((v) => (webLink(iriOf(v))
+    ? ctx.el("img", { src: webLink(iriOf(v)), alt: f.label || "", loading: "lazy", referrerpolicy: "no-referrer", style: "max-width: 240px; max-height: 160px" })
+    : ctx.el("span", {}, iriOf(v))))));
   registerViewer("HTMLViewer", viewers.get("LiteralViewer")); // shown as text: no markup from data
   registerViewer("BlankNodeViewer", viewers.get("LiteralViewer"));
 
-  return { registerEditor, registerViewer, editorName, viewerName, editor, viewer, field };
-})();
+  const api = { registerEditor, registerViewer, editorName, viewerName, editor, viewer, field, webLink };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.TripleTrailForms = api;
+})(typeof window !== "undefined" ? window : globalThis);

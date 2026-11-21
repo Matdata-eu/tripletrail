@@ -515,6 +515,9 @@ two requests:
   `TextAreaWithLangEditor`, `TextFieldEditor`, `DatePickerEditor`, `DateTimePickerEditor`,
   `URIEditor`; `LiteralViewer`, `URIViewer`, `LabelViewer`, `ImageViewer`), else chosen by the
   field's values, and a page may register its own with `registerEditor` and `registerViewer`.
+  Values come from the data, so the viewers link only `http` and `https` IRIs and show any
+  other IRI (`urn:`, `javascript:`…) as text; `ImageViewer` shows only web images, fetched
+  without a referrer, so their host does not learn which record shows them.
 - `POST …/shapes/edit` with `{"changes": [{"shape", "path"?, "setting", "value", "lang"?}]}`
   changes settings in the own set and keeps it as its next version (`{"version", "changed"}`).
   `path` picks the property shape of that `sh:path` (none: the node shape itself); `value:
