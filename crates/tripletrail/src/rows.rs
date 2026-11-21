@@ -303,7 +303,7 @@ fn shape(p: &GraphPattern) -> Option<Shape<'_>> {
 /// The numbers of the first `keep` rows of `t` in the order `by` (the first row of each
 /// combination of the `distinct` variables only, when given), in that order. `None` when a
 /// column holds values not ordered on ids.
-fn first_rows(
+pub(crate) fn first_rows(
     t: &Table,
     by: Vec<(&Variable, bool)>,
     distinct: Option<&[Variable]>,
@@ -446,7 +446,7 @@ fn sort_order(pick: &mut crate::idtree::Pick, a: TermId, b: TermId) -> Option<st
 }
 
 /// Whether [`Eval::eval`] handles every operator of `p` (it may still give up on the data).
-fn covered(p: &GraphPattern) -> bool {
+pub(crate) fn covered(p: &GraphPattern) -> bool {
     use GraphPattern as G;
     match p {
         G::Bgp { patterns } => patterns.iter().all(|t| {

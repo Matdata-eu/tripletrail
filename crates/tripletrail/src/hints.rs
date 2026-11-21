@@ -10,6 +10,9 @@
 //! - `#pragma tt.range-rewrite off`: numeric range `FILTER`s without the range index.
 //! - `#pragma tt.id-rewrites off`: counts and rows without the shortcuts on term ids.
 //! - `#pragma tt.result-cache off`: the result cache neither answers nor keeps the query.
+//! - `#pragma tt.executor ids` (or `spareval`): which executor runs the query (#11), over the
+//!   server's `--executor`. `ids` answers a whole query from tables of term ids when they
+//!   cover it, and leaves the rest to the evaluator.
 //! - `#pragma tt.timeout 30s` (`500ms`, `2m` or seconds): the request's timeout, capped by
 //!   the server's, like `?timeout=`.
 //!
@@ -47,6 +50,8 @@ pub struct Hints {
     pub id_rewrites_off: bool,
     pub result_cache_off: bool,
     pub timeout: Option<Duration>,
+    /// `tt.executor`: `Some(true)` for `ids`, `Some(false)` for `spareval`.
+    pub executor_ids: Option<bool>,
 }
 
 impl Hints {
@@ -112,11 +117,23 @@ impl Hints {
                 "range-rewrite" => hints.range_rewrite_off = off(name)?,
                 "id-rewrites" => hints.id_rewrites_off = off(name)?,
                 "result-cache" => hints.result_cache_off = off(name)?,
+                "executor" => {
+                    hints.executor_ids = Some(match value {
+                        "ids" => true,
+                        "spareval" => false,
+                        _ => {
+                            return Err(format!(
+                                "#pragma tt.executor: expected `ids` or `spareval`, not `{value}`"
+                            ));
+                        }
+                    })
+                }
                 "timeout" => hints.timeout = Some(duration(value)?),
                 _ => {
                     return Err(format!(
                         "Unknown query hint #pragma tt.{name} (known: optimizer, join-order, \
-                         spatial-rewrite, range-rewrite, id-rewrites, result-cache, timeout)"
+                         spatial-rewrite, range-rewrite, id-rewrites, result-cache, executor, \
+                         timeout)"
                     ));
                 }
             }
@@ -132,6 +149,7 @@ impl Hints {
             || self.spatial_rewrite_off
             || self.range_rewrite_off
             || self.id_rewrites_off
+            || self.executor_ids.is_some()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -165,6 +183,12 @@ impl fmt::Display for Hints {
         }
         if let Some(t) = self.timeout {
             lines.push(format!("tt.timeout {}s", t.as_secs_f64()));
+        }
+        if let Some(ids) = self.executor_ids {
+            lines.push(format!(
+                "tt.executor {}",
+                if ids { "ids" } else { "spareval" }
+            ));
         }
         f.write_str(&lines.join("\n"))
     }

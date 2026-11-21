@@ -344,10 +344,11 @@ fn equality_filters_match_the_rows() {
                     "{stage}: {fast}"
                 );
             }
-            let rows =
-                format!("PREFIX ex: <http://example.org/> SELECT * WHERE {{ {p} }} ORDER BY ?s ?o");
+            // Ordered on every variable: rows that tie on some may come in any order.
+            let order = "ORDER BY ?s ?o ?p ?x ?c ?a ?b";
+            let rows = format!("PREFIX ex: <http://example.org/> SELECT * WHERE {{ {p} }} {order}");
             let slow = format!(
-                "PREFIX ex: <http://example.org/> SELECT * WHERE {{ {{ {p} }} FILTER(true) }} ORDER BY ?s ?o"
+                "PREFIX ex: <http://example.org/> SELECT * WHERE {{ {{ {p} }} FILTER(true) }} {order}"
             );
             assert_eq!(
                 values(&engine, &rows),

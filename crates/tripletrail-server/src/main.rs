@@ -950,6 +950,13 @@ struct ServeArgs {
     /// again without evaluating until the next write (`X-Cache: HIT`). 0 turns it off.
     #[arg(long, env = "TRIPLETRAIL_RESULT_CACHE_MB", default_value_t = 256)]
     result_cache_mb: usize,
+    /// What answers a SELECT whose body runs on term ids: `ids` answers it straight from the
+    /// id tables (patterns, joins, OPTIONAL, MINUS, FILTER, ORDER BY, DISTINCT, LIMIT), only
+    /// decoding the terms it returns; `spareval` hands the rows to the term evaluator, as
+    /// before. A query can choose with `#pragma tt.executor ids|spareval`.
+    #[arg(long, env = "TRIPLETRAIL_EXECUTOR", default_value = "spareval",
+          value_parser = ["ids", "spareval"])]
+    executor: String,
     /// Memory a bulk load (`--load`, or a Graph Store upload) may use to sort its quads
     /// (e.g. 32G; suffixes K, M, G, T); a larger one sorts them on disk. No limit by default.
     #[arg(long, env = "TRIPLETRAIL_MEMORY_LIMIT", value_parser = parse_size)]
@@ -1948,6 +1955,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         git_fetch_mb,
         network_cache_mb,
         result_cache_mb,
+        executor,
         memory_limit,
         query_memory,
         lookup_joins,
@@ -2060,6 +2068,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         mb => mb.saturating_mul(1 << 20),
     });
     tripletrail::Engine::set_default_result_cache(result_cache_mb.saturating_mul(1 << 20));
+    tripletrail::Engine::set_default_executor_ids(executor == "ids");
     tripletrail::store::par::set_query_threads(query_threads);
     if let Some(bytes) = memory_limit {
         tripletrail::store::Store::set_memory_limit(bytes);

@@ -111,10 +111,12 @@ how that request runs (#238). Other engines read them as comments.
 | `#pragma tt.range-rewrite off` | Evaluate numeric range `FILTER`s without the range index. |
 | `#pragma tt.id-rewrites off` | Evaluate counts and rows without the shortcuts on term ids. These shortcuts order their own joins, so a `COUNT` keeps its order under `tt.optimizer off` unless this hint is given too. |
 | `#pragma tt.result-cache off` | The result cache neither answers nor keeps the query. |
+| `#pragma tt.executor ids` (or `spareval`) | Which executor answers the query, over `--executor`: `ids` answers a `SELECT` whose pattern runs on term ids straight from the id tables; `spareval` hands it to the evaluator. `/{ds}/explain` says which one did under `executor`. |
 | `#pragma tt.timeout 30s` | The request's timeout (`500ms`, `2m`, or seconds), like `?timeout=`, which wins when both are given. Never more than the server's or the dataset's timeout. |
 
 The answers stay the same; only the work done changes. A query with one of the first five
-hints is neither answered from nor kept in the result cache, so timing it measures the work.
+hints, or `tt.executor`, is neither answered from nor kept in the result cache, so timing it
+measures the work.
 Hints are read from comments only: a `#pragma` line inside a string literal is data. An unknown `tt.` hint, or a bad
 value, is answered with 400. Another engine's `#pragma` lines are ignored. `/{ds}/explain`
 lists the hints in force under `hints`. `--log-requests` and the slow query log write them
@@ -186,6 +188,15 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   other than TripleTrail's own, a user-defined function that is not inlined,
   `CONSTRUCT`/`DESCRIBE`, or Oxigraph's store). In the library,
   `Engine::set_result_cache` (off by default).
+- `--executor` (`TRIPLETRAIL_EXECUTOR`, `spareval` by default) picks what answers a `SELECT`
+  whose pattern runs on term ids (#11). `ids` answers it straight from the id tables (triple
+  patterns, joins, `OPTIONAL`, `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, the filters on ids,
+  `ORDER BY` of variables, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
+  only the terms of the answer, each once; anything else still goes to the evaluator. On
+  133k orders, a three-pattern join returning every row took 340 ms and takes 164 ms, and an
+  `OPTIONAL` 129 → 16 ms. The answers are the same; `spareval` stays the default until the
+  test suites agree under `ids` too. A query picks its own with `#pragma tt.executor`. In the
+  library, `Engine::set_default_executor_ids`.
 - `--memory-limit` (`TRIPLETRAIL_MEMORY_LIMIT`, e.g. `32G`; also on `tripletrail load`) is the
   memory a bulk load (`--load`, or a Graph Store upload) may use to sort its quads. A larger
   load sorts them on disk, under the dataset's directory, and writes the indexes straight to
