@@ -97,6 +97,70 @@ pub fn hide_generated(all: &Graph, generated: &Graph, uppers: &[&Graph]) -> Grap
     out
 }
 
+/// The key of the data-quality facet [`add_quality`] gives.
+pub const QUALITY_KEY: &str = "quality";
+
+/// `all` with a data-quality facet on each node shape, when a higher set names the named
+/// graph that holds a stored SHACL validation report with `tts:qualityReport` (#92): key
+/// [`QUALITY_KEY`], computed on the map (`tts:select`) as the worst severity of the report's
+/// results about the feature, `violation`, `warning` or `info`, else `ok`. Its counts, filters
+/// and colours work as any facet's, and its key is the same on every collection, so a map of
+/// several shares it. A node shape that has a facet of that key keeps its own.
+pub fn add_quality(all: &Graph, uppers: &[&Graph]) -> Graph {
+    let report = tts("qualityReport");
+    let graph = uppers
+        .iter()
+        .flat_map(|g| g.triples_for_predicate(&report))
+        .find_map(|t| match t.object {
+            TermRef::NamedNode(n) => Some(n.into_owned()),
+            _ => None,
+        });
+    let Some(graph) = graph else {
+        return all.clone();
+    };
+    let shacl = "http://www.w3.org/ns/shacl#";
+    let exists = |severity: &str| {
+        format!(
+            "EXISTS {{ GRAPH {graph} {{ ?r <{shacl}focusNode> $this ; <{shacl}resultSeverity> <{shacl}{severity}> }} }}"
+        )
+    };
+    let select = format!(
+        "BIND(IF({}, \"violation\", IF({}, \"warning\", IF({}, \"info\", \"ok\"))) AS ?value)",
+        exists("Violation"),
+        exists("Warning"),
+        exists("Info")
+    );
+    let (property, key, target) = (sh("property"), tts("key"), sh("targetClass"));
+    let mut out = all.clone();
+    for node in node_shapes(all) {
+        if all.object_for_subject_predicate(&node, &target).is_none() {
+            continue;
+        }
+        let has = all
+            .objects_for_subject_predicate(&node, &property)
+            .filter_map(subject_of)
+            .any(|p| {
+                matches!(all.object_for_subject_predicate(p, &key),
+                    Some(TermRef::Literal(l)) if l.value() == QUALITY_KEY)
+            });
+        if has {
+            continue;
+        }
+        let p = oxigraph::model::BlankNode::default();
+        out.insert(TripleRef::new(&node, &property, &p));
+        // A path of its own, which no data has: the value is computed.
+        let path = NamedNode::new_unchecked("urn:tripletrail:quality");
+        out.insert(TripleRef::new(&p, &sh("path"), &path));
+        let text = |v: &str| oxigraph::model::Literal::new_simple_literal(v);
+        out.insert(TripleRef::new(&p, &key, &text(QUALITY_KEY)));
+        out.insert(TripleRef::new(&p, &sh("name"), &text("Data quality")));
+        out.insert(TripleRef::new(&p, &tts("facet"), &tts("Facet-Values")));
+        out.insert(TripleRef::new(&p, &tts("onlyFor"), &Reader::Map.iri()));
+        out.insert(TripleRef::new(&p, &tts("select"), &text(&select)));
+    }
+    out
+}
+
 /// How a node shape of a lower set is met by an upper set (see [`overlay`]).
 struct Meeting {
     /// The lower node shape.

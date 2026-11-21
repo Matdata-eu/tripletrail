@@ -413,7 +413,12 @@ percent-encoded, so a customised set can override it by IRI) with:
 
 `reader=` (`validation`, `map`, `describe`, `search`, `ogc-features`, `rest-api`, `graphql`,
 `ai`) answers that reader's projection: shapes it is `tts:hiddenFrom`, or not `tts:onlyFor`,
-left out, deactivated shapes (`sh:deactivated true`) left out, the generated node shapes left
+left out, deactivated shapes (`sh:deactivated true`) left out, a data-quality facet added to
+each node shape for the map when a pack or the own set names a named graph holding a stored
+SHACL validation report with `tts:qualityReport` (key `quality`, a `tts:select` facet: the
+worst `sh:resultSeverity` of the report's results whose `sh:focusNode` is the feature,
+`violation`, `warning` or `info`, else `ok`; a shape with a facet of that key keeps its own)
+(#92), the generated node shapes left
 out when a pack or the dataset's own set names the reader with `tts:hidesGenerated` (on a
 `tts:ShapeSet` node of its own, such as `<urn:my:set> a tts:ShapeSet ; tts:hidesGenerated
 tts:Reader-Map`: the map shows only the set's classes; a generated shape the set overrides or
