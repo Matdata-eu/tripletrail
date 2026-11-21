@@ -28,6 +28,11 @@ cosign verify ghcr.io/matdata-eu/tripletrail:<tag> \
 docker buildx imagetools inspect ghcr.io/matdata-eu/tripletrail:<tag> --format '{{ json .SBOM }}'
 ```
 
+A version tag (`v1.2.3`) publishes `1.2.3`, `1.2` and `latest`. Another image can copy the
+command out of it: the binary is `/usr/local/bin/tripletrail` (glibc 2.36 or newer), and
+`/usr/share/doc/tripletrail` holds `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.md` to copy
+with it (see [Ship the command in another image](guide/13-production.md#ship-the-command-in-another-image)).
+
 ## Endpoints
 
 Every dataset `{ds}` has these endpoints, at the same paths as on Fuseki, so clients written
