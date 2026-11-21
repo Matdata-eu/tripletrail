@@ -1400,6 +1400,80 @@ curl -s 'http://localhost:7878/ds/tiles/facets/Section' | grep -o '"key":"qualit
 It is computed on the map only, as a `tts:select` facet: the OGC API and the other readers
 have no such property. A class whose shape has a facet of key `quality` keeps its own.
 
+### Show the features of a time
+
+Features with a time, such as works on the network with a start and an end, can be shown for
+a day or a span. The data:
+
+<!-- test: file works.ttl -->
+```turtle
+@prefix ex: <https://example.org/rail#> .
+@prefix geo: <http://www.opengis.net/ont/geosparql#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:W1 a ex:Works ; ex:start "2026-03-01"^^xsd:date ; ex:end "2026-04-15"^^xsd:date ;
+  geo:hasGeometry [ geo:asWKT "POINT(4.3606 50.8603)"^^geo:wktLiteral ] .
+ex:W2 a ex:Works ; ex:start "2026-06-01"^^xsd:date ;
+  geo:hasGeometry [ geo:asWKT "POINT(4.4824 51.0177)"^^geo:wktLiteral ] .
+```
+
+and a shape that says which properties are the time, with `tts:time` (`tts:Time-Start` and
+`tts:Time-End`, or `tts:Time-Instant` for a moment):
+
+<!-- test: file works-shape.ttl -->
+```turtle
+@prefix ex: <https://example.org/rail#> .
+@prefix geo: <http://www.opengis.net/ont/geosparql#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix tts: <http://w3id.org/tripletrail/shapes#> .
+
+ex:WorksShape a sh:NodeShape ;
+  sh:targetClass ex:Works ;
+  tts:key "Works" ;
+  tts:geometry [ sh:order 0 ; sh:path ( geo:hasGeometry geo:asWKT ) ] ;
+  sh:property [ sh:path ex:start ; tts:key "start" ; tts:time tts:Time-Start ] ,
+    [ sh:path ex:end ; tts:key "end" ; tts:time tts:Time-End ] .
+```
+
+The map's tiles and counts then take `datetime`, as the OGC API's items do: a day, or a span
+`start/end` with `..` for an open end. On 1 April only the first works are on, from 1 May
+none, and in July the second (it has no end):
+
+<!-- test: run -->
+```sh
+curl -s -X POST 'http://localhost:7878/ds/data' -H 'Content-Type: text/turtle' --data-binary @works.ttl -o /dev/null
+curl -s -X PUT 'http://localhost:7878/$/datasets/ds/shapes/files/works.ttl' --data-binary @works-shape.ttl -o /dev/null
+for day in 2026-04-01 2026-05-01 2026-07-01; do
+  echo "$day $(curl -s "http://localhost:7878/ds/tiles/facets/Works?datetime=$day" | grep -o '"features":[0-9]*')"
+done
+```
+
+<!-- test: output -->
+```text
+2026-04-01 "features":1
+2026-05-01 "features":0
+2026-07-01 "features":1
+```
+
+On the Map page, the clock button above the zoom shows the time: two sliders over the span of
+the layers' times, or a date typed, or **One day**. The map, its counts, the OGC API links and
+the page's link follow it (`datetime=` in the link). Layers without a `tts:time` keep all of
+their features.
+
+### Export and cite the map
+
+The Map page's download button makes a PNG of the map as it is: the map with a scale bar, a
+north arrow turned with it, the legend of the layers shown, and under it the base map's credit,
+the dataset, its data version and the time shown. Give it a title, or keep the dataset's name.
+
+**Cite this map**, the button beside it, gives a text to paste into a report or a paper: the
+dataset and its data version (the store's write generation, and the version of its own shapes
+when it has some, from `metadata."tripletrail:dataVersion"` of `/{ds}/tiles/style.json`), the
+day, the link that opens the same map again, the time shown, and for every layer shown its OGC
+API items and the SPARQL that picks its features under the filters, so a reader can run the
+same query. A later write to the dataset changes its data version: the citation says which
+data the map showed.
+
 ### Start a pack from RINF Atlas shapes
 
 If you draw your data with [RINF Atlas](https://rinf-atlas.matdata.eu), its shapes (SHACL with
