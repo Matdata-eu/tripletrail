@@ -1014,6 +1014,7 @@ window.TripleTrailMap = (function () {
 
   /** Called when another page opens: the map stops. */
   function leave() {
+    // Removing the map removes its controls, the tools' key listener with them.
     if (map) { map.remove(); map = null; }
     tools = null;
     shown = null;

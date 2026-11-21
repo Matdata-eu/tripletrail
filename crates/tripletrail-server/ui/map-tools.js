@@ -359,13 +359,25 @@
         live();
       });
       map.on("dblclick", (e) => { if (mode) { e.preventDefault(); finish(); } });
-      document.addEventListener("keydown", (e) => {
-        if (!mode || (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName))) return;
-        if (e.key === "Escape") stop();
-        else if (e.key === "Enter") { e.preventDefault(); finish(); }
-        else if (e.key === "Backspace" && mode.pts.length) { e.preventDefault(); mode.pts.pop(); draw(); live(); }
-      });
+      document.addEventListener("keydown", onKey);
       draw();
+    }
+    /** Esc, Enter and Backspace while a tool is on; Enter and Backspace stay with a focused
+     *  field, button or link. */
+    function onKey(e) {
+      if (!mode) return;
+      if (e.key === "Escape") return stop();
+      const t = e.target;
+      if (t && (/^(INPUT|SELECT|TEXTAREA|BUTTON|A)$/.test(t.tagName) || t.isContentEditable)) return;
+      if (e.key === "Enter") { e.preventDefault(); finish(); }
+      else if (e.key === "Backspace" && mode.pts.length) { e.preventDefault(); mode.pts.pop(); draw(); live(); }
+    }
+    /** The map is gone (another page opened): the key listener goes, and the tool with it. */
+    function detach() {
+      document.removeEventListener("keydown", onKey);
+      mode = null;
+      measured = null;
+      wrap.remove();
     }
 
     /** The measurement under way or last made, as lines of text. */
@@ -472,7 +484,7 @@
       refresh();
     }
 
-    return { control: { onAdd: () => wrap, onRemove: () => wrap.remove() }, attach, click, busy: () => !!mode, useFeature, refresh };
+    return { control: { onAdd: () => wrap, onRemove: detach }, attach, click, busy: () => !!mode, useFeature, refresh };
   }
 
   const api = { panel, geometry };
