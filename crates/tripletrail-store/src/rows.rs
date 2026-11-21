@@ -22,7 +22,7 @@ pub struct SharedHidden {
 
 /// The ids of a [`SharedHidden`]: a bitmap over their range when they are dense enough (term
 /// ids of one kind are numbered in order, so the targets of a class usually are), else a set.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum Ids {
     Bits { base: u64, words: Vec<u64> },
     Set(FxHashSet<u64>),
@@ -82,6 +82,13 @@ impl SharedHidden {
             Ids::Set(set) => set.capacity() * 16,
         }
     }
+}
+
+/// Whether two shared sets hold the same ids: the same set, or equal ids, never their keys
+/// alone, so that two filters are equal (and share what is cached for them) only when they
+/// hide the same.
+fn same_ids(a: &Arc<SharedHidden>, b: &Arc<SharedHidden>) -> bool {
+    Arc::ptr_eq(a, b) || (a.len == b.len && a.key == b.key && a.ids == b.ids)
 }
 
 /// A shared set hidden but for some of its resources ([`RowFilter::hide_shared`]).
@@ -182,7 +189,7 @@ impl PartialEq for RowFilter {
             && self.graphs == other.graphs
             && self.shared.len() == other.shared.len()
             && self.shared.iter().zip(&other.shared).all(|(a, b)| {
-                a.hidden.key == b.hidden.key && a.shown == b.shown && a.references == b.references
+                same_ids(&a.hidden, &b.hidden) && a.shown == b.shown && a.references == b.references
             })
     }
 }
@@ -455,6 +462,15 @@ mod tests {
         let mut c = RowFilter::new();
         c.hide_shared(Arc::clone(&hidden), [2], true);
         assert_eq!(a, c);
+        // Another set of the same ids is equal; one of other ids is not, even with its key.
+        let mut copy = RowFilter::new();
+        copy.hide_shared(Arc::new(SharedHidden::new([3, 2, 1])), [2], true);
+        assert_eq!(a, copy);
+        let mut forged = SharedHidden::new([1, 2, 4]);
+        forged.key = hidden.key;
+        let mut other = RowFilter::new();
+        other.hide_shared(Arc::new(forged), [2], true);
+        assert_ne!(a, other);
         assert_eq!(a.fingerprint(), c.fingerprint());
         a.forget(&[1]);
         assert!(!a.hides(&[1, 9, 9, 0]));
