@@ -61,6 +61,8 @@ Matdata. Please open an issue instead, and we'll pick it up.
 4. Check with `.github/scripts/release-notes.sh --check 1.2.3`, merge, then tag `v1.2.3`
    on main and push the tag. The tag is `v` and the version exactly as `Cargo.toml` has it: a
    release candidate is `v0.1.0-rc.2`, with the dot, not `v0.1.0-rc2`.
+   Creating the release on GitHub's Releases page with that new tag on main works too: it
+   pushes the tag, and the workflow adds the files and, when the release has none, the notes.
 
 The "Release" workflow then builds `tripletrail` for Linux (x86_64, aarch64), macOS (x86_64,
 arm64) and Windows (x86_64). Each archive holds `LICENSE`, `NOTICE` and

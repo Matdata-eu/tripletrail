@@ -7,6 +7,10 @@ versions may change the store format and the API; the release notes say how to u
 
 ## [Unreleased]
 
+## 0.1.0 - 2026-11-21
+
+The first release: an Import page, a faster and richer map, SHACL messages and lookup graphs, the id executor behind `--executor ids`, and a Docker image published with each version tag.
+
 ### Added
 
 - `--map-basemap 'TITLE|URL|ATTRIBUTION|MAXZOOM'` (#52): a base map may give the last zoom its provider has tiles for (0 to 24, default 19), and the Map page enlarges that zoom's tiles beyond it instead of asking for tiles that are not there. `metadata."tripletrail:basemaps"` in `style.json` lists each one's `maxzoom`.
