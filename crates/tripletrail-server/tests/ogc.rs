@@ -628,11 +628,12 @@ fn a_style_draws_each_collection_over_the_tiles() {
             threads: 2,
             map_tiles: Some("https://tile.example.org/{z}/{x}/{y}.png".to_owned()),
             map_attribution: Some("© Example".to_owned()),
-            map_basemaps: vec![(
-                "Aerial".to_owned(),
-                "https://aerial.example.org/{z}/{y}/{x}.jpg".to_owned(),
-                "© Aerial".to_owned(),
-            )],
+            map_basemaps: vec![tripletrail_server::Basemap {
+                title: "Aerial".to_owned(),
+                tiles: "https://aerial.example.org/{z}/{y}/{x}.jpg".to_owned(),
+                attribution: "© Aerial".to_owned(),
+                maxzoom: 17,
+            }],
             ..Options::default()
         },
     )
@@ -653,6 +654,9 @@ fn a_style_draws_each_collection_over_the_tiles() {
         "https://aerial.example.org/{z}/{y}/{x}.jpg"
     );
     assert_eq!(basemaps[1]["attribution"], "© Aerial");
+    // The last zoom of each one's tiles, for the page to enlarge them beyond it (#52).
+    assert_eq!(basemaps[0]["maxzoom"], 19);
+    assert_eq!(basemaps[1]["maxzoom"], 17);
 }
 
 /// The features without a geometry are left out of the facets by name when they can be
