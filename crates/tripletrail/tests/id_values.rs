@@ -135,9 +135,17 @@ fn filters_on_numbers_and_dates_match_the_evaluator() {
         "?v < \"2005-06-01T00:00:00Z\"^^xsd:dateTime",
         "?v < \"2005-06-01T00:00:00\"^^xsd:dateTime",
         "?v > ?w",
+        // Doubles (#11): constants, promotion of integers and decimals, arithmetic.
+        "?v > \"100.5\"^^xsd:double",
+        "?v = \"3.0\"^^xsd:double",
+        "?v * 1.21 > 500",
+        "?v * \"0.1\"^^xsd:double <= 20.5",
+        "?v + ?w < 100",
+        "-?v >= \"-7.25\"^^xsd:double",
     ];
     for p in [
-        "ex:int", "ex:dec", "ex:date", "ex:when", "ex:mixed", "ex:maybe",
+        "ex:int", "ex:dec", "ex:date", "ex:when", "ex:mixed", "ex:maybe", "ex:dbl", "ex:num",
+        "ex:zdbl",
     ] {
         for f in filters {
             let q = format!(

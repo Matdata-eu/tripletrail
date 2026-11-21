@@ -3,7 +3,7 @@
 //! and comparisons on them that FILTERs and `SUM` use.
 //!
 //! Everything here follows the evaluator exactly or gives up (`None`): integer overflow,
-//! arithmetic and comparisons on doubles, dictionary literals (`xsd:int`, exponent forms),
+//! doubles that are not finite, dictionary literals (`xsd:int`, exponent forms),
 //! dates compared with date-times or with and without a time zone. The caller then leaves the
 //! expression to the evaluator. The one difference is `SUM` and `AVG` over doubles (#62): the
 //! evaluator adds them in row order, rounding after each addition, while these are summed
@@ -28,7 +28,7 @@ pub(crate) enum Value {
     Integer(i64),
     /// A decimal times 10^18, as the evaluator holds it.
     Decimal(i128),
-    /// An inline `xsd:double` (only `SUM` and `AVG` take it).
+    /// An `xsd:double`, always finite: an inline one, or computed from one (#11).
     Double(f64),
     DateTime {
         /// `xsd:date`, else `xsd:dateTime`.
@@ -103,6 +103,7 @@ pub(crate) fn compile<'k>(
                 Some(Ok(match a(row)? {
                     Ok(Value::Integer(i)) => Value::Integer(i.checked_neg()?),
                     Ok(Value::Decimal(d)) => Value::Decimal(d.checked_neg()?),
+                    Ok(Value::Double(d)) => Value::Double(-d),
                     Ok(_) => return None,
                     Err(()) => return Some(Err(())),
                 }))
@@ -247,7 +248,12 @@ fn column<'k>(t: &Table, v: &Variable) -> ValueKernel<'k> {
 fn constant(l: &Literal, snapshot: &Snapshot) -> Option<Value> {
     // Only canonical-looking constants: the store inlines those with the exact lexical form.
     let d = l.datatype();
-    if d != xsd::INTEGER && d != xsd::DECIMAL && d != xsd::DATE && d != xsd::DATE_TIME {
+    if d != xsd::INTEGER
+        && d != xsd::DECIMAL
+        && d != xsd::DOUBLE
+        && d != xsd::DATE
+        && d != xsd::DATE_TIME
+    {
         return None;
     }
     of_id(snapshot.term_id(l.as_ref().into())?)
@@ -274,9 +280,19 @@ enum Unary {
 }
 
 /// `x op y` with the evaluator's promotion: integer with integer is an integer, anything
-/// with a decimal a decimal. Overflow, an inexact product and other types give up.
+/// with a decimal a decimal, anything with a double a double. Overflow, an inexact product,
+/// a double that is not finite and other types give up.
 fn arithmetic(op: Op, x: Value, y: Value) -> Option<Value> {
     match (x, y) {
+        (Value::Double(_), _) | (_, Value::Double(_)) => {
+            let (a, b) = (double(x)?, double(y)?);
+            let r = match op {
+                Op::Add => a + b,
+                Op::Subtract => a - b,
+                Op::Multiply => a * b,
+            };
+            r.is_finite().then_some(Value::Double(r))
+        }
         (Value::Integer(a), Value::Integer(b)) => Some(Value::Integer(match op {
             Op::Add => a.checked_add(b)?,
             Op::Subtract => a.checked_sub(b)?,
@@ -298,6 +314,18 @@ fn arithmetic(op: Op, x: Value, y: Value) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+/// A number as a double, converted as the evaluator converts it (`oxsdatatypes`).
+fn double(v: Value) -> Option<f64> {
+    Some(match v {
+        Value::Integer(i) => f64::from(oxsdatatypes::Double::from(oxsdatatypes::Integer::from(i))),
+        Value::Decimal(d) => f64::from(oxsdatatypes::Double::from(
+            oxsdatatypes::Decimal::from_be_bytes(d.to_be_bytes()),
+        )),
+        Value::Double(d) => d,
+        Value::DateTime { .. } => return None,
+    })
 }
 
 fn decimal(v: Value) -> Option<i128> {
@@ -371,6 +399,11 @@ fn civil(days: i64) -> (i64, i64, i64) {
 /// `Some(None)` an error (values that don't compare), `None` give up.
 pub(crate) fn compare(x: Value, y: Value) -> Option<Option<Ordering>> {
     match (x, y) {
+        // Finite doubles: always ordered (`-0` equals `0`).
+        (Value::Double(_), Value::Integer(_) | Value::Decimal(_) | Value::Double(_))
+        | (Value::Integer(_) | Value::Decimal(_), Value::Double(_)) => {
+            Some(double(x)?.partial_cmp(&double(y)?))
+        }
         (Value::Integer(a), Value::Integer(b)) => Some(Some(a.cmp(&b))),
         (Value::Integer(_) | Value::Decimal(_), Value::Integer(_) | Value::Decimal(_)) => {
             Some(Some(decimal(x)?.cmp(&decimal(y)?)))
