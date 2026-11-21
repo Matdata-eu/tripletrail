@@ -14,6 +14,7 @@ pub mod complexity;
 mod cosine_order;
 mod direct;
 pub use cache::{CacheStatus, ResultCacheStats};
+pub use direct::IdSolutions;
 pub use hints::{Hints, without_defines};
 pub mod bind_join;
 mod count;
@@ -231,7 +232,7 @@ impl ReadableGraphs {
             | spargebra::Query::Describe { pattern, .. }
             | spargebra::Query::Ask { pattern, .. } => pattern,
         };
-        scoped_services_only(pattern, &query.to_string())?;
+        scoped_services_only(pattern, &query.to_string(), SOME_GRAPHS)?;
         let own = match query {
             spargebra::Query::Select { dataset, .. }
             | spargebra::Query::Construct { dataset, .. }
@@ -293,12 +294,16 @@ impl ReadableGraphs {
 /// path search reads, then come from the caller's dataset (#203).
 const SCOPED_SERVICES: [&str; 4] = [ST_SERVICE, WINDOW_SERVICE, PATH_SERVICE, PGR_SERVICE];
 
+/// How [`scoped_services_only`] names the limit of a caller who reads only some graphs.
+const SOME_GRAPHS: &str = "with access to only some graphs";
+
 /// Refuses a `SERVICE` other than [`SCOPED_SERVICES`], and one of them called inside another
 /// (the inner one would read the store). `text` is the query's text: every `SERVICE` in it
 /// must be one found here, so one inside an `EXISTS` (not walked) is refused too.
 fn scoped_services_only(
     pattern: &spargebra::algebra::GraphPattern,
     text: &str,
+    limit: &str,
 ) -> Result<(), Error> {
     use spargebra::algebra::GraphPattern as G;
     fn walk(p: &G, found: &mut usize) -> Result<(), ()> {
@@ -334,11 +339,9 @@ fn scoped_services_only(
     }
     let mut found = 0;
     let refused = || {
-        Error::Request(
-            "SERVICE is not available with access to only some graphs, except st:, window:, \
-             path: and pgr:, not nested"
-                .to_owned(),
-        )
+        Error::Request(format!(
+            "SERVICE is not available {limit}, except st:, window:, path: and pgr:, not nested"
+        ))
     };
     walk(pattern, &mut found).map_err(|()| refused())?;
     if text.matches("SERVICE ").count() != found {
@@ -440,7 +443,7 @@ fn limit_update(
                     let text = where_.to_string();
                     let calls_service = text.contains("SERVICE ");
                     if calls_service {
-                        scoped_services_only(where_, &text)?;
+                        scoped_services_only(where_, &text, SOME_GRAPHS)?;
                     }
                     let keep = |n: &NamedNode| r.contains(n.as_ref().into());
                     *using = Some(match using.take() {
@@ -909,6 +912,9 @@ pub struct Engine {
     /// The dataset the sub-selects of the `st:` and window services read, for a caller who
     /// reads only some graphs (#203): the calling query's, narrowed to those graphs.
     service_dataset: Option<QueryDataset>,
+    /// What the built-in services read for a caller under row rules (#202): the rows the
+    /// calling query sees, so their sub-selects and searches see no more.
+    service_rows: Option<tripletrail_store::RowView>,
 }
 
 /// What a view of [`Engine::view_shortcuts`] shows: the store version, the graphs (`None` for
@@ -1195,6 +1201,7 @@ impl Engine {
             text_properties: Arc::new(Mutex::new(text::default_properties())),
             text_views: Arc::default(),
             service_dataset: None,
+            service_rows: None,
             text_view_work: Arc::default(),
             vectors: Arc::default(),
             vector_graph_min: Arc::new(std::sync::atomic::AtomicUsize::new(vector::GRAPH_MIN)),
@@ -1405,8 +1412,12 @@ impl Engine {
                     self.union_default_graph(),
                     self.cancellation.clone(),
                 );
-                match &self.service_dataset {
+                let path = match &self.service_dataset {
                     Some(d) => path.with_dataset(d.clone()),
+                    None => path,
+                };
+                match &self.service_rows {
+                    Some(r) => path.with_rows(r.clone()),
                     None => path,
                 }
             })
@@ -1445,8 +1456,12 @@ impl Engine {
             Some(token) => self.st.with_cancellation_token(token.clone()),
             None => self.st.clone(),
         };
-        match self.services_dataset() {
+        let st = match self.services_dataset() {
             Some(d) => st.with_dataset(d),
+            None => st,
+        };
+        match &self.service_rows {
+            Some(r) => st.with_rows(r.clone()),
             None => st,
         }
     }
@@ -1458,8 +1473,12 @@ impl Engine {
             Some(token) => self.window.with_cancellation_token(token.clone()),
             None => self.window.clone(),
         };
-        match self.services_dataset() {
+        let window = match self.services_dataset() {
             Some(d) => window.with_dataset(d),
+            None => window,
+        };
+        match &self.service_rows {
+            Some(r) => window.with_rows(r.clone()),
             None => window,
         }
     }
@@ -1471,8 +1490,12 @@ impl Engine {
             Some(token) => self.pgr.with_cancellation_token(token.clone()),
             None => self.pgr.clone(),
         };
-        match self.services_dataset() {
+        let pgr = match self.services_dataset() {
             Some(d) => pgr.with_dataset(d),
+            None => pgr,
+        };
+        match &self.service_rows {
+            Some(r) => pgr.with_rows(r.clone()),
             None => pgr,
         }
     }
@@ -2557,10 +2580,15 @@ impl Engine {
                 "Row-level access rules need the tripletrail store".to_owned(),
             ));
         };
-        if query.to_string().contains("SERVICE ") {
-            return Err(Error::Request(
-                "SERVICE is not available under row-level access rules".to_owned(),
-            ));
+        // The built-in services read what the query reads (#202); others, and one inside
+        // another, are refused.
+        let text = query.to_string();
+        if text.contains("SERVICE ") {
+            let (spargebra::Query::Select { pattern, .. }
+            | spargebra::Query::Construct { pattern, .. }
+            | spargebra::Query::Describe { pattern, .. }
+            | spargebra::Query::Ask { pattern, .. }) = &query;
+            scoped_services_only(pattern, &text, "under row-level access rules")?;
         }
         let union = !has_own_dataset(&query);
         let dataset = options
@@ -2614,7 +2642,20 @@ impl Engine {
             } else {
                 query
             };
-            let mut prepared = self.evaluator().for_query(plan::plan_query(query));
+            let evaluator = if text.contains("SERVICE ") {
+                Self {
+                    service_rows: Some(tripletrail_store::RowView {
+                        rows: Arc::clone(&rows),
+                        base: base.clone(),
+                    }),
+                    service_dataset: self.service_dataset.clone().or_else(|| dataset.clone()),
+                    ..self.clone()
+                }
+                .evaluator()
+            } else {
+                self.evaluator()
+            };
+            let mut prepared = evaluator.for_query(plan::plan_query(query));
             if let Some(dataset) = &dataset {
                 *prepared.dataset_mut() = dataset.clone();
             }
@@ -2697,12 +2738,9 @@ impl Engine {
                         cancelled: &|| self.is_cancelled(),
                         graph,
                     };
-                    if let Some((variables, rows)) = direct::answer(&query, &eval) {
+                    if let Some(answer) = direct::answer(&query, &eval) {
                         self.check_cancelled()?;
-                        return Ok(QueryResults::Solutions(QuerySolutionIter::from_tuples(
-                            variables,
-                            rows.into_iter().map(Ok),
-                        )));
+                        return Ok(direct::results(Arc::new(answer)));
                     }
                 }
                 query = rows::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;

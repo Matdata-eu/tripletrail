@@ -231,7 +231,8 @@ pub(crate) fn route(
                     timeout,
                     budget,
                     tripletrail::QueryOptions::default(),
-                );
+                )
+                .map_err(caller_error);
             }
             context.operation = Some(crate::Operation::Update);
             let graph = params
@@ -275,16 +276,18 @@ pub(crate) fn route(
             };
             let before = count(engine)?;
             let (reading, _deadline) = crate::with_deadline(&reading, timeout);
-            reading.update_with_options(
-                &update.to_string(),
-                &tripletrail::UpdateOptions {
-                    base_iri: None,
-                    using: None,
-                    readable: context.readable.clone(),
-                    writable: context.writable.clone(),
-                    row_rules: context.row_rules.clone(),
-                },
-            )?;
+            reading
+                .update_with_options(
+                    &update.to_string(),
+                    &tripletrail::UpdateOptions {
+                        base_iri: None,
+                        using: None,
+                        readable: context.readable.clone(),
+                        writable: context.writable.clone(),
+                        row_rules: context.row_rules.clone(),
+                    },
+                )
+                .map_err(|e| caller_error(e.into()))?;
             let after = count(engine)?;
             let body = serde_json::json!({
                 "graph": graph.as_str(),
@@ -329,6 +332,16 @@ fn reads_upload(query: &str, name: &str) -> String {
         }
     }
     out
+}
+
+/// A source the mapping may not read (a file outside the allowed folders, a URL, another
+/// upload) or cannot read is the caller's query at fault, not the server: 400, not 500.
+fn caller_error(e: HttpError) -> HttpError {
+    if e.0 >= 500 && e.1.contains("Facade-X") {
+        HttpError(400, e.1)
+    } else {
+        e
+    }
 }
 
 fn gone() -> HttpError {

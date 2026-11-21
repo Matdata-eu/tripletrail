@@ -179,6 +179,10 @@ struct Args {
     /// against `tripletrail serve`. Without it those suites are not run.
     #[arg(long)]
     server: Option<PathBuf>,
+    /// The executor the queries run on (`--executor` of the server, #11): `spareval`, the
+    /// default, or `ids`. The known failures are the same for both.
+    #[arg(long, default_value = "spareval", value_parser = ["ids", "spareval"])]
+    executor: String,
     /// Seconds a test may take.
     #[arg(long, default_value_t = 30)]
     timeout: u64,
@@ -213,6 +217,8 @@ struct Run {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    tripletrail::Engine::set_default_executor_ids(args.executor == "ids");
+    let _ = protocol::EXECUTOR.set(args.executor.clone());
     let rdf_tests = Arc::new(Files::new(&args.tests));
     let mut suites: Vec<(&str, &str, Arc<Files>, String)> = SUITES
         .iter()
@@ -569,7 +575,9 @@ fn markdown(
          --server target/debug/tripletrail   # after cargo build -p tripletrail-server\n```\n\n\
          CI runs the commits in `RDF_TESTS_COMMIT`, `DATA_SHAPES_COMMIT` and \
          `GEOSPARQL_BENCHMARK_COMMIT` of `.github/workflows/ci.yml`; bump them with the page \
-         and the known failures.\n",
+         and the known failures. It runs them twice, under each executor (`--executor \
+         spareval`, the default, and `--executor ids`, #11), and fails unless both give this \
+         page.\n",
         shapes = shacl_commit.unwrap_or("gh-pages"),
         geo = benchmark.map_or("master", |b| b.commit.as_str())
     );

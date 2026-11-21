@@ -15,6 +15,10 @@ remote endpoints in `SERVICE`.
    `trim_text` option is gone; whitespace at the ends of the text is trimmed as it was, but
    not whitespace written as a character reference (`&#32;`).
 
+2. **The CSV and TSV term writers are public** (`src/csv.rs`, `src/lib.rs`: `write_csv_term`,
+   `write_tsv_term`, hidden from the docs), so that TripleTrail's server writes each distinct
+   term of an answer kept as term ids once, byte for byte as the serializer would (#11).
+
 `Cargo.toml` also asks for `thiserror` 2 (the version the rest of the workspace uses).
 
 To move to a newer sparesults: as for oxrdfxml, and run the SPARQL query suites

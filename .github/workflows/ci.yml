@@ -128,6 +128,14 @@ jobs:
             --earl "$RUNNER_TEMP/conformance/tripletrail-earl.ttl"
           diff -u docs/conformance.md "$RUNNER_TEMP/conformance/conformance.md" \
             || { echo "docs/conformance.md is out of date: regenerate it (see the page)"; exit 1; }
+          # The same suites under the id executor (#11): the same failures, the same page.
+          cargo run -q -p tripletrail-testsuite -- --executor ids --tests "$tests" \
+            --shacl-tests "$shapes" --geosparql-tests "$geo" \
+            --server "${CARGO_TARGET_DIR:-target}/debug/tripletrail" \
+            --known crates/tripletrail-testsuite/known-failures.txt \
+            --report "$RUNNER_TEMP/conformance/conformance-ids.md"
+          diff -u docs/conformance.md "$RUNNER_TEMP/conformance/conformance-ids.md" \
+            || { echo "the id executor's conformance differs from docs/conformance.md"; exit 1; }
       # The REST API's OpenAPI definitions pass Spectral's OpenAPI rules without a warning (#143).
       - uses: actions/setup-node@v4
         with:

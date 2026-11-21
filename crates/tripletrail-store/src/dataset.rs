@@ -13,6 +13,22 @@ use oxigraph::sparql::{
 use oxigraph::store::{LoaderError, StorageError};
 use std::io::Read;
 
+/// What a caller under row rules sees of the tripletrail store (#202): the rows `rows` leaves
+/// of `base`, the snapshot they were judged on. The built-in services of such a caller's query
+/// read through it, as the query does.
+#[derive(Clone)]
+pub struct RowView {
+    pub rows: std::sync::Arc<crate::RowFilter>,
+    pub base: crate::Snapshot,
+}
+
+impl RowView {
+    /// A key for what the view hides, for caches of what is read through it.
+    pub fn fingerprint(&self) -> u64 {
+        self.rows.fingerprint()
+    }
+}
+
 /// The store a dataset lives in. Cheap to clone; clones share the data.
 #[derive(Clone)]
 pub enum Dataset {
@@ -305,6 +321,43 @@ impl Dataset {
                 union_default_graph,
                 prepare,
             )?)),
+        }
+    }
+
+    /// [`Dataset::execute`], or under `view` when given: the query then sees only the rows
+    /// the view's filter leaves (the built-in services of a query under row rules, #202).
+    pub fn execute_in(
+        &self,
+        query: PreparedSparqlQuery,
+        view: Option<&RowView>,
+    ) -> Result<QueryResults<'static>, QueryEvaluationError> {
+        match view {
+            Some(v) => {
+                self.execute_with_rows(query, std::sync::Arc::clone(&v.rows), v.base.clone())
+            }
+            None => self.execute(query),
+        }
+    }
+
+    /// [`Dataset::quads_for_pattern`], or on `view` when given: only the quads its filter
+    /// leaves.
+    pub fn quads_in(
+        &self,
+        subject: Option<NamedOrBlankNodeRef<'_>>,
+        predicate: Option<NamedNodeRef<'_>>,
+        object: Option<TermRef<'_>>,
+        graph_name: Option<GraphNameRef<'_>>,
+        view: Option<&RowView>,
+    ) -> QuadIter {
+        match view {
+            Some(v) => Box::new(
+                v.base
+                    .clone()
+                    .with_rows(Some(std::sync::Arc::clone(&v.rows)))
+                    .quads_for_pattern(subject, predicate, object, graph_name)
+                    .map(Ok),
+            ),
+            None => self.quads_for_pattern(subject, predicate, object, graph_name),
         }
     }
 

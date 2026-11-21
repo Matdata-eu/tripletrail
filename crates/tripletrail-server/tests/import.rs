@@ -288,6 +288,8 @@ fn options_and_queries_read_only_the_upload() {
             "CONSTRUCT {{ ?s ?p ?o }} WHERE {{ SERVICE <x-sparql-anything:{location}> {{ ?s ?p ?o }} }}"
         );
         let (code, body) = post(&base, &format!("/kg/import/{id}/preview"), q.as_bytes());
+        // The caller's query at fault: 400, never a server error.
+        assert!(code < 500, "{location}: {code} {body}");
         // Refused, or the upload's own rows; never the page's icon or the host's name.
         assert!(!body.contains("<svg"), "{location}: {body}");
         if let Some(host) = hostname.as_deref() {

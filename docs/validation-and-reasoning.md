@@ -14,7 +14,10 @@ a report with a million results is never held in memory; it returns `sh:conforms
 failing constraint (per failing value node for constraints on each value), with `sh:focusNode`,
 `sh:resultPath`, `sh:value`, `sh:sourceShape` (the property shape for property constraints),
 `sh:sourceConstraintComponent`, `sh:resultSeverity` (the shape's `sh:severity`) and
-`sh:resultMessage` (the shape's `sh:message`s, or those of the SPARQL constraint). Failures of
+`sh:resultMessage` (the shape's `sh:message`s, or those of the SPARQL constraint; for a
+SPARQL-based result, each `{$var}` and `{?var}` is filled in from the solution and the
+component's parameters, as SHACL 5.3.2 and 6.4 say: an IRI as the IRI, a literal as its
+lexical form, an unbound variable left as written). Failures of
 shapes reached through `sh:node`, `sh:not`, `sh:and`, `sh:or`, `sh:xone` or
 `sh:qualifiedValueShape` are one result of that constraint, whose `sh:detail`s are the results
 of the value node against the nested shapes it fails: the shape of `sh:node`, the members of

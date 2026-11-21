@@ -36,6 +36,7 @@ mod dcat;
 mod describe_view;
 pub mod fuseki_config;
 mod geometry_ways;
+mod id_results;
 mod import;
 #[doc(hidden)]
 pub mod jena_binary;
@@ -3658,6 +3659,30 @@ fn run_query(
                     None => results_format?,
                 };
                 let variables = solutions.variables().to_vec();
+                // An answer on term ids (#11) is written from its ids, each term once.
+                if budget.max.is_none()
+                    && binary.is_none()
+                    && let Some(answer) = solutions
+                        .attachment()
+                        .and_then(|a| Arc::clone(a).downcast::<tripletrail::IdSolutions>().ok())
+                {
+                    let sink = Sink::default();
+                    if let Some(writer) = id_results::IdResultsWriter::start(
+                        sink.clone(),
+                        Arc::clone(&answer),
+                        format,
+                    )? {
+                        let (body, length) = Pulled::start(
+                            sink,
+                            (0..answer.len()).map(Ok),
+                            writer,
+                            |w, &i| w.row(i),
+                            |w| w.finish(),
+                            deadline,
+                        )?;
+                        return Ok((format.media_type(), body, length));
+                    }
+                }
                 // With a budget, the rows (at most one more than it) are evaluated before
                 // answering, so going over it is a status, not a cut body. Without one, the rows
                 // of the first chunk are, so an error (a timeout of an aggregate, say) still

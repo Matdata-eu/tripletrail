@@ -17,11 +17,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tripletrail_store::TermId;
 
-/// Solutions as rows of terms, a cell `None` where unbound.
-type Rows = Vec<Vec<Option<Term>>>;
-
 /// The answer of `query`: its variables and rows. `None` when the ids don't answer it.
-pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<(Arc<[Variable]>, Rows)> {
+pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<IdSolutions> {
     use GraphPattern as G;
     let Query::Select {
         dataset: None,
@@ -93,14 +90,89 @@ pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<(Arc<[Variable]>, Row
         Some(l) => picked.skip(start).take(l).collect(),
         None => picked.skip(start).collect(),
     };
-    let out = decode(&t, &columns, &picked, eval)?;
-    Some((variables.clone().into(), out))
+    decode(variables.clone().into(), &t, &columns, &picked, eval)
 }
 
-/// The rows `picked` of `t`, the columns `columns` of each as terms (an unbound cell or a
-/// variable `t` doesn't have as `None`), each distinct id decoded once, under one lock of the
-/// dictionary.
-fn decode(t: &Table, columns: &[Option<usize>], picked: &[usize], eval: &Eval) -> Option<Rows> {
+/// `answer` as the results of a query: the solutions as terms, with `answer` attached for
+/// writers that write it from its ids.
+pub(crate) fn results(answer: Arc<IdSolutions>) -> spareval::QueryResults<'static> {
+    let variables: Arc<[Variable]> = answer.variables().into();
+    spareval::QueryResults::Solutions(
+        spareval::QuerySolutionIter::from_tuples(variables, Arc::clone(&answer).rows().map(Ok))
+            .with_attachment(answer),
+    )
+}
+
+/// The solutions of a query answered on ids: each distinct term of the answer once, and the
+/// rows as numbers of those terms. Writers of results write each term once and copy it
+/// where it occurs; [`IdSolutions::rows`] gives the solutions as terms for anything else.
+pub struct IdSolutions {
+    variables: Arc<[Variable]>,
+    terms: Vec<Term>,
+    /// `variables.len()` cells per row, each a number into `terms` or [`IdSolutions::UNBOUND`].
+    cells: Vec<u32>,
+    len: usize,
+}
+
+impl IdSolutions {
+    /// A cell with no value.
+    pub const UNBOUND: u32 = u32::MAX;
+
+    pub fn variables(&self) -> &[Variable] {
+        &self.variables
+    }
+
+    /// The distinct terms of the answer, numbered as the cells number them.
+    pub fn terms(&self) -> &[Term] {
+        &self.terms
+    }
+
+    /// The number of solutions.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Solution `i`: one cell per variable, as numbers into [`IdSolutions::terms`].
+    pub fn row(&self, i: usize) -> &[u32] {
+        let width = self.variables.len();
+        &self.cells[i * width..(i + 1) * width]
+    }
+
+    /// The memory it takes, about.
+    pub(crate) fn bytes(&self) -> usize {
+        self.cells.len() * 4
+            + self
+                .terms
+                .iter()
+                .map(crate::cache::term_bytes)
+                .sum::<usize>()
+    }
+
+    /// The solutions as terms, in order.
+    pub fn rows(self: Arc<Self>) -> impl Iterator<Item = Vec<Option<Term>>> {
+        (0..self.len).map(move |i| {
+            self.row(i)
+                .iter()
+                .map(|&n| (n != Self::UNBOUND).then(|| self.terms[n as usize].clone()))
+                .collect()
+        })
+    }
+}
+
+/// The rows `picked` of `t`, the columns `columns` of each (an unbound cell or a variable `t`
+/// doesn't have as unbound), each distinct id decoded to its term once: in chunks on the
+/// query threads, each under one lock of the dictionary.
+fn decode(
+    variables: Arc<[Variable]>,
+    t: &Table,
+    columns: &[Option<usize>],
+    picked: &[usize],
+    eval: &Eval,
+) -> Option<IdSolutions> {
     // Each distinct id once, numbered in the order met.
     let mut index: HashMap<TermId, u32, std::hash::BuildHasherDefault<IdHasher>> =
         HashMap::default();
@@ -111,7 +183,7 @@ fn decode(t: &Table, columns: &[Option<usize>], picked: &[usize], eval: &Eval) -
         for c in columns {
             let id = c.map_or(TermId(0), |c| row[c]);
             if id == TermId(0) {
-                cells.push(u32::MAX);
+                cells.push(IdSolutions::UNBOUND);
                 continue;
             }
             let n = *index.entry(id).or_insert_with(|| {
@@ -121,27 +193,28 @@ fn decode(t: &Table, columns: &[Option<usize>], picked: &[usize], eval: &Eval) -
             cells.push(n);
         }
     }
-    let mut terms: Vec<Term> = Vec::with_capacity(ids.len());
-    let reader = eval.snapshot.reader();
-    for (i, &id) in ids.iter().enumerate() {
-        if i % 4096 == 0 && (eval.cancelled)() {
-            return None;
+    drop(index);
+    let parts = tripletrail_store::par::chunks_sized(ids.len(), 16_384, 4_096, |range| {
+        let reader = eval.snapshot.reader();
+        let mut terms = Vec::with_capacity(range.len());
+        for (i, &id) in ids[range].iter().enumerate() {
+            if i % 4096 == 0 && (eval.cancelled)() {
+                return None;
+            }
+            terms.push(reader.term(id).ok()?);
         }
-        terms.push(reader.term(id).ok()?);
+        Some(terms)
+    });
+    let mut terms = Vec::with_capacity(ids.len());
+    for part in parts {
+        terms.extend(part?);
     }
-    drop(reader);
-    if columns.is_empty() {
-        return Some(vec![Vec::new(); picked.len()]);
-    }
-    let mut out = Vec::with_capacity(picked.len());
-    for row in cells.chunks(columns.len()) {
-        out.push(
-            row.iter()
-                .map(|&n| (n != u32::MAX).then(|| terms[n as usize].clone()))
-                .collect(),
-        );
-    }
-    Some(out)
+    Some(IdSolutions {
+        variables,
+        terms,
+        cells,
+        len: picked.len(),
+    })
 }
 
 /// Hashes a term id by multiplying it and folding the high half in, so that both the low

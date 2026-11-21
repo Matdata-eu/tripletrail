@@ -192,9 +192,12 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   whose pattern runs on term ids (#11). `ids` answers it straight from the id tables (triple
   patterns, joins, `OPTIONAL`, `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, the filters on ids,
   `ORDER BY` of variables, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
-  only the terms of the answer, each once; anything else still goes to the evaluator. On
-  133k orders, a three-pattern join returning every row took 340 ms and takes 164 ms, and an
-  `OPTIONAL` 129 → 16 ms. The answers are the same; `spareval` stays the default until the
+  only the terms of the answer, each once, on the query threads; anything else still goes to
+  the evaluator. SPARQL JSON, CSV and TSV answers are written from the ids: each distinct term
+  is written once and copied into the rows where it occurs (the bytes are those of the usual
+  writers); other formats, and a `--max-rows` budget, get the solutions as terms. The result
+  cache keeps such an answer as it is. On 133k orders, a three-pattern join returning every
+  row took 333 ms as CSV and takes 88 ms (JSON 402 → 119 ms), and an `OPTIONAL` 180 → 15 ms. The answers are the same; `spareval` stays the default until the
   test suites agree under `ids` too. A query picks its own with `#pragma tt.executor`. In the
   library, `Engine::set_default_executor_ids`.
 - `--memory-limit` (`TRIPLETRAIL_MEMORY_LIMIT`, e.g. `32G`; also on `tripletrail load`) is the
@@ -1719,8 +1722,12 @@ ex:NetworkWriters a sg:Policy ; sg:group "network-assets" ; sg:writeAllGraphs tr
   `rdfs:subClassOf`. Otherwise, and after bulk loads or writes of more than 65,536 quads, the
   rules are compiled anew. Full-text search (`tt:search`, `text:query`, the map search) reads
   an index of the visible labels alone, ranked as on a store holding only them (#203; see
-  [full-text search](full-text-search.md#access-control)). Queries with `SERVICE` are refused (400), and the query
-  cache is not used. Compiling the rules stops with the query's timeout. Such a caller may
+  [full-text search](full-text-search.md#access-control)). The built-in services (`st:`, the window service, path search and `pgr`)
+  read the same view: their sub-selects, the edges path search follows and the networks routing
+  builds hold only the visible rows, and the networks are cached apart per rules. `pgr:shapes`,
+  `pgr:vehicle`, `pgr:compatibilityShapes` and `pgr:shaclRules`, which read the store
+  directly, are refused, as are other services and a service called inside another (400). The
+  query cache is not used. Compiling the rules stops with the query's timeout. Such a caller may
   also read RDF descriptions (`describe`, Linked Data; a hidden resource is not found, 404)
   and the Graph Store Protocol (`GET`; a named graph with nothing visible is not found), from
   one view of the store judged as a whole, and the RDF4J API's reads (queries, `statements`,

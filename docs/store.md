@@ -144,8 +144,13 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
 - **Whole queries on term ids.** Under `--executor ids` (#11, `crates/tripletrail/src/direct.rs`)
   a `SELECT` without a dataset of its own whose pattern the tables cover (as above) is answered
   from its table alone: the projection, `DISTINCT` and `REDUCED` on the ids of the projected
-  columns, `ORDER BY` of variables as above, then `OFFSET` and `LIMIT`. The ids of the answer
-  are decoded under one lock of the dictionary, each distinct id once. A `LIMIT` without an
+  columns, `ORDER BY` of variables as above, then `OFFSET` and `LIMIT`. The answer is an
+  `IdSolutions`: each distinct term once (decoded in chunks on the query threads, each chunk
+  under one lock of the dictionary) and the rows as numbers of those terms. It rides on the
+  solution iterator as its attachment (`QuerySolutionIter::with_attachment`, a TripleTrail
+  change to the vendored spareval), so the server writes JSON, CSV and TSV from it
+  (`crates/tripletrail-server/src/id_results.rs`) and the result cache keeps it whole; any
+  other reader iterates the solutions as usual. A `LIMIT` without an
   order, order expressions other than variables, columns the ids don't order, and every other
   operator (`GROUP BY` beyond the count shortcuts, `BIND`, property paths outside the tables)
   leave the query to the evaluator, which then runs it as before.

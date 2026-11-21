@@ -278,6 +278,42 @@ https://example.org/rail#BXN
 https://example.org/rail#BXS
 ```
 
+Routing ([chapter 5](05-routing.md)) and the other built-in services (`st:`, the window
+service, path search) read his view too. The shortest way from Mechelen to Leuven is section
+S06 for Ann; Bob does not see it, so his route goes through Brussels-North:
+
+<!-- test: enterprise run -->
+```sh
+for key in writer-secret-2 reader-secret-1; do
+  curl -s -H "Authorization: Bearer $key" -H 'Accept: text/csv' http://localhost:7878/ds/query \
+    --data-urlencode 'query=PREFIX ex: <https://example.org/rail#>
+PREFIX pgr: <http://w3id.org/tripletrail/pgr#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?seq ?station ?km {
+  SERVICE <http://w3id.org/tripletrail/pgr> {
+    [] pgr:function pgr:pgr_dijkstra ; pgr:start_vid ex:MEC ; pgr:end_vid ex:LV ;
+       pgr:directed false ; pgr:seq ?seq ; pgr:node ?node ; pgr:agg_cost ?km .
+    { SELECT ?id ?source ?target ?cost {
+        ?id a ex:Section ; ex:from ?source ; ex:to ?target ; ex:lengthKm ?cost } }
+  }
+  ?node rdfs:label ?station
+} ORDER BY ?seq'
+done
+```
+
+<!-- test: enterprise output -->
+```text
+seq,station,km
+1,Mechelen,0
+2,Leuven,24
+seq,station,km
+1,Mechelen,0
+2,Brussels-North,20
+3,Leuven,50
+```
+
+A `SERVICE` other than these is refused to him, as is one of them called inside another.
+
 Now Bob raises the speed of section S03 (line 25), then of S05 (line 36), then tries to move
 S03 to another line:
 
