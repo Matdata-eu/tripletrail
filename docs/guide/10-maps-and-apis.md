@@ -422,6 +422,37 @@ curl -s -o tile.mvt -w '%{http_code} %{content_type}\n' http://localhost:7878/ds
 200 application/vnd.mapbox-vector-tile
 ```
 
+### Narrow facets and tiles to an area, a graph or a text
+
+`/ds/tiles/facets/{collection}` counts what the Map page's filters keep. Three more filters
+work on the facets and on the tiles alike, for an application that draws its own map:
+
+- `bbox=minLon,minLat,maxLon,maxLat` keeps the features whose geometry meets the box ("search
+  in this map area");
+- `graph=IRI`, repeated for several, keeps the features with triples in those named graphs
+  (one source of data on the map; the dataset needs a union default graph to draw them);
+- `q=words` keeps the features whose indexed text holds every word, as the map's search box
+  matches: the last word as a prefix, case and accents aside.
+
+The stations around Brussels, then those named Brussels, then Brussels-North alone:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?bbox=4.3,50.8,4.4,50.9' | grep -o '"features":[0-9]*'
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?q=brussels' | grep -o '"features":[0-9]*'
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?q=brussels%20no' | grep -o '"features":[0-9]*'
+```
+
+<!-- test: output -->
+```text
+"features":3
+"features":3
+"features":1
+```
+
+They combine with each other and with facet filters, and a tile asked with them
+(`/ds/tiles/all/8/131/86.mvt?q=brussels`) draws only those features.
+
 ## The REST API
 
 `/ds/api/v1` is a JSON API for developers: one list per class, records by id, with an OpenAPI
