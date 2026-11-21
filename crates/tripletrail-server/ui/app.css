@@ -713,6 +713,10 @@ body[data-page=workbench] main { max-width: none; padding: 8px 12px; }
 .imp-card h2 { font-size: 15px; margin: 0; }
 .imp-tree { max-height: 40vh; overflow: auto; font-family: var(--mono); font-size: 12px; white-space: pre; padding: 8px 12px; background: var(--surface-2); border-radius: 6px; margin: 8px 0 0; }
 .imp-query { width: 100%; box-sizing: border-box; margin-top: 8px; font-family: var(--mono); font-size: 12px; padding: 8px; background: var(--surface-2); color: inherit; border: 1px solid var(--border); border-radius: 6px; resize: vertical; }
+.imp-ai { margin-top: 12px; }
+.imp-ai summary { cursor: pointer; font-weight: 600; }
+.imp-ai input[type=text] { flex: 1 1 320px; min-width: 0; }
+#imp-ai-log { margin-top: 8px; white-space: pre-wrap; }
 /* The map's tools (#33): an area to filter by, measuring, coordinates. */
 .map-tools-wrap { position: relative; }
 .map-ctrl-btn.on { background: var(--brand-soft) !important; }

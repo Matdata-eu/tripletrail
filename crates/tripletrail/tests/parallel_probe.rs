@@ -73,3 +73,50 @@ fn parallel_probes_give_the_sequential_rows_in_order() {
         assert_eq!(one, all, "{q}");
     }
 }
+
+/// 120,000 orders of 9,000 customers in 50 countries (#4): the orders come out of the first
+/// join in customer order, so the next join on the order sorts them, and seeks.
+fn orders() -> String {
+    let mut d = String::from("@prefix ex: <http://example.org/> .\n");
+    for c in 0..9_000 {
+        writeln!(d, "ex:c{c} ex:country ex:k{} ; ex:name \"c{c}\" .", c % 50).unwrap();
+    }
+    for o in 0..120_000u64 {
+        let c = o.wrapping_mul(7_919) % 9_000;
+        writeln!(d, "ex:o{o} ex:customer ex:c{c} ; ex:amount {} .", o % 1_000).unwrap();
+        if o % 4 != 0 {
+            writeln!(d, "ex:o{o} ex:status ex:s{} .", o % 5).unwrap();
+        }
+        if o % 6 == 0 {
+            writeln!(d, "ex:o{o} ex:status ex:late .").unwrap();
+        }
+    }
+    d
+}
+
+#[test]
+fn parallel_seek_joins_and_groups_give_the_sequential_rows_in_order() {
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, orders().as_bytes()).unwrap();
+    let queries = [
+        // Seek joins whose rows come unsorted, some keys with no match and some with two.
+        "SELECT * { ?c ex:country ?k . ?o ex:customer ?c ; ex:status ?s }",
+        "SELECT * { ?c ex:country ex:k3 . ?o ex:customer ?c ; ex:amount ?a ; ex:status ?s }",
+        "SELECT (COUNT(*) AS ?n) { ?o ex:customer ?c ; ex:status ?s . ?c ex:country ?k }",
+        // Grouped on several cores: many groups (one a customer), few, and two keys.
+        "SELECT ?c (SUM(?a) AS ?s) (AVG(?a) AS ?m) (MAX(?a) AS ?x) { ?o ex:customer ?c ; ex:amount ?a } GROUP BY ?c",
+        "SELECT ?k (SUM(?a) AS ?s) (COUNT(*) AS ?n) { ?o ex:customer ?c ; ex:amount ?a . ?c ex:country ?k } GROUP BY ?k",
+        "SELECT ?k ?s (MIN(?a) AS ?m) (SAMPLE(?o) AS ?x) { ?o ex:customer ?c ; ex:amount ?a ; ex:status ?s . ?c ex:country ?k } GROUP BY ?k ?s",
+    ];
+    for q in queries {
+        for executor in ["spareval", "ids"] {
+            let q = format!("#pragma tt.executor {executor}\n{q}");
+            tripletrail::store::par::set_query_threads(1);
+            let one = rows(&e, &q);
+            tripletrail::store::par::set_query_threads(0);
+            let all = rows(&e, &q);
+            assert!(!one.is_empty(), "{q}");
+            assert_eq!(one, all, "{q}");
+        }
+    }
+}

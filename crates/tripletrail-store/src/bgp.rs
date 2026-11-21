@@ -12,6 +12,7 @@ use crate::{GraphSelector, Snapshot, TermId};
 use oxigraph::model::{BlankNode, TermRef};
 use rustc_hash::FxHashMap;
 use spargebra::term::{NamedNodePattern, TermPattern, TriplePattern, Variable};
+use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A position of an [`IdTriple`]: a term id, or a variable by its column in the rows.
@@ -175,17 +176,22 @@ struct Out<'c> {
     /// Ids this join may make.
     max: usize,
     made: usize,
-    cancelled: &'c dyn Fn() -> bool,
+    cancelled: &'c (dyn Fn() -> bool + Sync),
 }
 
 impl<'c> Out<'c> {
     /// For about `rows` rows from `input`.
-    fn new(input: &IdRows, rows: usize, cancelled: &'c dyn Fn() -> bool) -> Self {
+    fn new(input: &IdRows, rows: usize, cancelled: &'c (dyn Fn() -> bool + Sync)) -> Self {
         Self::with_used(input.width, input.ids.len(), rows, cancelled)
     }
 
     /// For about `rows` rows of `width` ids, with `used` ids held already.
-    fn with_used(width: usize, used: usize, rows: usize, cancelled: &'c dyn Fn() -> bool) -> Self {
+    fn with_used(
+        width: usize,
+        used: usize,
+        rows: usize,
+        cancelled: &'c (dyn Fn() -> bool + Sync),
+    ) -> Self {
         let max = max_ids().saturating_sub(used);
         Self {
             ids: Vec::with_capacity(rows.saturating_mul(width).min(max)),
@@ -342,7 +348,7 @@ impl Snapshot {
         triples: &[IdTriple],
         width: usize,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<IdRows> {
         match self.join(triples, width, graph, cancelled, false, None)? {
             Joined::Rows(rows) => Some(rows),
@@ -360,7 +366,7 @@ impl Snapshot {
         seed: IdRows,
         bound: usize,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<IdRows> {
         let width = seed.width;
         match self.join(triples, width, graph, cancelled, false, Some((seed, bound)))? {
@@ -379,7 +385,7 @@ impl Snapshot {
         width: usize,
         graph: GraphSelector,
         count: BgpCount,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<u64> {
         match count {
             BgpCount::Rows if let Some(n) = self.count_star(triples, graph, cancelled) => n,
@@ -414,7 +420,7 @@ impl Snapshot {
         &self,
         triples: &[IdTriple],
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<Option<u64>> {
         let centre = star_centre(triples, graph)?;
         let at = |t: &IdTriple| centre_at(t, centre);
@@ -542,7 +548,7 @@ impl Snapshot {
         centre: usize,
         key: usize,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<Vec<(u64, u64)>> {
         let (i, k) = (centre_at(t, centre), centre_at(t, key));
         let c = |s: IdSlot| match s {
@@ -582,7 +588,7 @@ impl Snapshot {
         t: &IdTriple,
         centre: usize,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<Vec<(u64, u64)>> {
         let i = centre_at(t, centre);
         let c = |s: IdSlot| match s {
@@ -631,7 +637,7 @@ impl Snapshot {
         t: &IdTriple,
         key: usize,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<Vec<(u64, u64)>> {
         if !keyable(t, key, graph) {
             return None;
@@ -649,7 +655,7 @@ impl Snapshot {
         key: usize,
         values: &[u64],
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<Option<Vec<(u64, u64)>>> {
         if !keyable(t, key, graph) {
             return None;
@@ -677,7 +683,7 @@ impl Snapshot {
         key: usize,
         values: &[u64],
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<Vec<(u64, u64)>> {
         if !keyable(t, key, graph) {
             return None;
@@ -716,7 +722,7 @@ impl Snapshot {
         graph: GraphSelector,
         key: usize,
         max_groups: usize,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<Option<Vec<(TermId, u64)>>> {
         let centre = star_centre(triples, graph)?;
         // This reads every match of every triple: when one triple matches far fewer quads
@@ -821,7 +827,7 @@ impl Snapshot {
         holder: Option<usize>,
         sizes: &[usize],
         max_groups: usize,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<Option<Vec<(TermId, u64)>>> {
         let small = (0..triples.len()).min_by_key(|&k| sizes[k])?;
         // The key's triple is the smallest: its (centre, key) pairs, read once in the order of
@@ -977,7 +983,7 @@ impl Snapshot {
         triples: &[IdTriple],
         width: usize,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
         count_last: bool,
         seed: Option<(IdRows, usize)>,
     ) -> Option<Joined> {
@@ -1305,7 +1311,7 @@ impl Snapshot {
         t: &IdTriple,
         width: usize,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
         by: Option<usize>,
     ) -> Option<IdRows> {
         let mut ids = Vec::with_capacity((self.estimate_slots(t, graph) * width).min(max_ids()));
@@ -1377,7 +1383,7 @@ impl Snapshot {
         &self,
         t: &IdTriple,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<u64> {
         // Without a variable twice in the triple, the block index counts it exactly (except
         // over named graphs only), without reading the quads.
@@ -1432,7 +1438,7 @@ impl Snapshot {
         &self,
         t: &IdTriple,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<Option<Vec<[u64; 4]>>> {
         let (IdSlot::Var(x), IdSlot::Const(p), IdSlot::Var(y)) = (t.s, t.p, t.o) else {
             return None;
@@ -1507,7 +1513,7 @@ impl Snapshot {
         t: &IdTriple,
         bound: &[bool],
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
         count: bool,
     ) -> Option<Joined> {
         let slots = t.slots();
@@ -1538,7 +1544,7 @@ impl Snapshot {
         t: &IdTriple,
         bound: &[bool],
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
         count: bool,
     ) -> Option<Joined> {
         let width = rows.width;
@@ -1616,7 +1622,7 @@ impl Snapshot {
         var: usize,
         at: usize,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
         count: bool,
     ) -> Option<Option<Joined>> {
         let slots = t.slots();
@@ -1624,16 +1630,92 @@ impl Snapshot {
             IdSlot::Const(id) => Some(id),
             IdSlot::Var(_) => None,
         };
-        let scan = self
-            .quads
-            .scan_sorted(
-                crate::Pattern::of_ids(c(t.s), c(t.p), c(t.o), graph),
-                Some(at),
-            )
-            .with_rows(self.rows());
-        if scan.sorted_by() != Some(at) {
+        let pattern = crate::Pattern::of_ids(c(t.s), c(t.p), c(t.o), graph);
+        let open = || {
+            self.quads
+                .scan_sorted(pattern, Some(at))
+                .with_rows(self.rows())
+        };
+        if open().sorted_by() != Some(at) {
             return None;
         }
+        let width = rows.width;
+        let n = rows.len();
+        let key = |r: usize| rows.ids[r * width + var].0;
+        // The rows in key order: as they are when already sorted, else each row's key and
+        // number, sorted (equal keys by number, so in row order, as a stable sort gives).
+        let order: Option<Vec<(u64, u32)>> = if (1..n).all(|r| key(r - 1) <= key(r)) {
+            None
+        } else {
+            let mut order: Vec<(u64, u32)> = (0..n).map(|r| (key(r), r as u32)).collect();
+            crate::par::sort_unstable(&mut order);
+            Some(order)
+        };
+        let row_at = |i: usize| order.as_ref().map_or(i, |o| o[i].1 as usize);
+        let key = |i: usize| order.as_ref().map_or_else(|| key(i), |o| o[i].0);
+        // Many rows on several cores (#4): each chunk of rows, its ends moved to the next
+        // change of key so that no key is split, walks a scan of its own; the chunks' rows
+        // are put back in chunk order, which is the order one walk gives.
+        let made = AtomicUsize::new(rows.ids.len());
+        let edge = |x: usize| {
+            (x..n)
+                .find(|&y| y == 0 || key(y) != key(y - 1))
+                .unwrap_or(n)
+        };
+        let parts = crate::par::chunks(n, |range| {
+            let (lo, hi) = (edge(range.start), edge(range.end));
+            self.seek_run(
+                rows,
+                &slots,
+                at,
+                open(),
+                lo..hi,
+                &key,
+                &row_at,
+                &made,
+                cancelled,
+                count,
+            )
+        });
+        // A chunk cancelled or too large: the join is.
+        let Some(parts) = parts.into_iter().collect::<Option<Vec<_>>>() else {
+            return Some(None);
+        };
+        let matched: u64 = parts.iter().map(|(_, m)| m).sum();
+        let total: usize = parts.iter().map(|(part, _)| part.ids.len()).sum();
+        let mut parts = parts.into_iter().map(|(part, _)| part);
+        let Some(mut out) = parts.next() else {
+            return Some(None);
+        };
+        out.ids.reserve_exact(total - out.ids.len());
+        for part in parts {
+            out.ids.extend_from_slice(&part.ids);
+        }
+        Some(Some(if count {
+            Joined::Count(matched)
+        } else {
+            Joined::Rows(out)
+        }))
+    }
+
+    /// The rows `range` (in key order: `key` and `row_at`) of [`Snapshot::seek_join`] joined
+    /// with the quads of `scan`, sorted by position `at`; with `count`, only how many. `None`
+    /// once cancelled or too large: the ids made by every chunk, counted in `made`, past
+    /// [`max_ids`].
+    #[allow(clippy::too_many_arguments)]
+    fn seek_run(
+        &self,
+        rows: &IdRows,
+        slots: &[IdSlot; 3],
+        at: usize,
+        scan: crate::index::Scan,
+        range: Range<usize>,
+        key: &(dyn Fn(usize) -> u64 + Sync),
+        row_at: &(dyn Fn(usize) -> usize + Sync),
+        made: &AtomicUsize,
+        cancelled: &(dyn Fn() -> bool + Sync),
+        count: bool,
+    ) -> Option<(IdRows, u64)> {
         // A variable repeated in the triple takes one value.
         let keep = |q: &[u64; 4]| {
             (0..3).all(|i| match slots[i] {
@@ -1642,20 +1724,17 @@ impl Snapshot {
             })
         };
         let width = rows.width;
-        let n = rows.len();
-        let key = |r: usize| rows.ids[r * width + var].0;
-        // The rows in key order: as they are when already sorted, else through an order.
-        let order: Option<Vec<u32>> = if (1..n).all(|r| key(r - 1) <= key(r)) {
-            None
-        } else {
-            let mut order: Vec<u32> = (0..n as u32).collect();
-            order.sort_by_key(|&r| key(r as usize));
-            Some(order)
-        };
-        let row_at = |i: usize| order.as_ref().map_or(i, |o| o[i] as usize);
-        let key = |i: usize| key(row_at(i));
+        let n = range.end;
         // About one output row per row is the common case (a star on the subject).
-        let mut out = Out::new(rows, if count { 0 } else { n }, cancelled);
+        let mut out = Out::new(rows, if count { 0 } else { range.len() }, cancelled);
+        let max = out.max.saturating_add(rows.ids.len());
+        // The ids of this chunk already added to `made`; false once past the limit.
+        let mut counted = 0;
+        let within = |now: usize, counted: &mut usize| {
+            let more = now - *counted;
+            *counted = now;
+            made.fetch_add(more, Ordering::Relaxed) + more <= max
+        };
         let mut matched = 0u64;
         let mut run: Vec<[TermId; 3]> = Vec::new();
         let mut scan = Chunked {
@@ -1665,14 +1744,18 @@ impl Snapshot {
             at,
             single: 0,
         };
+        let mut i = range.start;
+        if i < n {
+            scan.seek(key(i));
+        }
         let mut cur = scan.next();
-        let mut i = 0;
         let mut steps = 0usize;
         while i < n {
             let Some(q) = cur else { break };
             steps += 1;
-            if steps.is_multiple_of(1024) && cancelled() {
-                return Some(None);
+            // The other chunks' rows count against the same limit.
+            if steps.is_multiple_of(1024) && (cancelled() || !within(out.ids.len(), &mut counted)) {
+                return None;
             }
             let a = key(i);
             // Runs of a key are short: step through them.
@@ -1701,19 +1784,13 @@ impl Snapshot {
                     let r = row_at(x);
                     let row = &rows.ids[r * width..(r + 1) * width];
                     for q in &run {
-                        if out.push(row, &slots, q).is_none() {
-                            return Some(None);
-                        }
+                        out.push(row, slots, q)?;
                     }
                 }
             }
             i = i2;
         }
-        Some(Some(if count {
-            Joined::Count(matched)
-        } else {
-            Joined::Rows(out.rows())
-        }))
+        within(out.ids.len(), &mut counted).then(|| (out.rows(), matched))
     }
 
     /// Joins `rows` with `t` on the one variable `var` they share: both sides sorted by it
@@ -1724,7 +1801,7 @@ impl Snapshot {
         t: &IdTriple,
         var: usize,
         graph: GraphSelector,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
         count: bool,
     ) -> Option<Joined> {
         let width = rows.width;

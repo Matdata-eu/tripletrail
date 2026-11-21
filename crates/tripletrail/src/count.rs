@@ -1593,8 +1593,9 @@ impl Pass<'_> {
                 _ => None,
             });
         }
-        let mut values: Vec<Value> = Vec::with_capacity(order.len() * n);
-        for &g in &order {
+        // A group's values from its rows; groups of many rows on several cores (#4), each chunk
+        // of groups with its own `Pick`, the values back in the order of the groups.
+        let value_of = |pick: &mut crate::idtree::Pick, g: usize, values: &mut Vec<Value>| {
             let rows = by_rows.as_ref().map_or(&[][..], |r| r.rows(g));
             for (i, a) in aggs.iter().enumerate() {
                 values.push(match (a, &table) {
@@ -1622,6 +1623,25 @@ impl Pass<'_> {
                     (_, None) => return None,
                 });
             }
+            Some(())
+        };
+        let rows = table.as_ref().map_or(0, |t| t.len());
+        let parallel = if rows >= tripletrail_store::par::PARALLEL_ROWS {
+            2
+        } else {
+            usize::MAX
+        };
+        let parts = tripletrail_store::par::chunks_sized(order.len(), parallel, 1, |range| {
+            let mut pick = crate::idtree::Pick::new(self.snapshot);
+            let mut values = Vec::with_capacity(range.len() * n);
+            for &g in &order[range] {
+                value_of(&mut pick, g, &mut values)?;
+            }
+            Some(values)
+        });
+        let mut values: Vec<Value> = Vec::with_capacity(order.len() * n);
+        for part in parts {
+            values.extend(part?);
         }
         let variables: Vec<Variable> = keys
             .iter()
