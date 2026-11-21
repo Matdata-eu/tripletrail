@@ -93,7 +93,8 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `AVG` of integers and decimals only (a decimal division) stays with the evaluator.
   Comparisons and `+ - *` take inline doubles too (#11), with integers and decimals turned
   into doubles as the evaluator turns them, and `-0` equal to `0`. Dictionary literals
-  (`1.5E2`), a double result that is not finite, overflow, inexact decimal products, dates
+  (`1.5E2`), a double result that is not finite, overflow, decimal products with more than 18
+  fraction digits (they are exact on 256 bits otherwise), dates
   against date-times or with and without a time zone, and unbound values give the expression
   back to the evaluator. On 133 k doubles: `FILTER(?a > 4000)` 60 → 15 ms,
   `FILTER(?a * 1.21 > 5000 && ?a < 9000)` 89 → 27 ms. On 300 k rows: `SUM(YEAR(?d))` 83 → 14 ms,
@@ -150,10 +151,19 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   solution iterator as its attachment (`QuerySolutionIter::with_attachment`, a TripleTrail
   change to the vendored spareval), so the server writes JSON, CSV and TSV from it
   (`crates/tripletrail-server/src/id_results.rs`) and the result cache keeps it whole; any
-  other reader iterates the solutions as usual. A `LIMIT` without an
-  order, order expressions other than variables, columns the ids don't order, and every other
-  operator (`GROUP BY` beyond the count shortcuts, `BIND`, property paths outside the tables)
-  leave the query to the evaluator, which then runs it as before.
+  other reader iterates the solutions as usual. `BIND` and `SELECT (expr AS ?v)` are a
+  column of the table too (`idtree::Eval::extend`): a copy of a column, a constant, or a
+  number the expression kernels above compute, as the literal the evaluator writes (decimals
+  in Jena's form, doubles as `oxsdatatypes` writes them), each distinct value given its id
+  once; an error leaves the cell unbound. A `FILTER` on such a value is evaluated on the
+  expression itself, under the `BIND` (`BIND(?a * ?q AS ?g) FILTER(?g > 400000)` on 133k
+  orders 222 → 49 ms; a select expression over a join 197 → 59 ms). A computed double that
+  doesn't fit an inline id gets one made up for the query, which doesn't order, so an
+  `ORDER BY` of a computed value is left to the evaluator. A `LIMIT` without an order, order
+  expressions other than variables, columns the ids don't order, an expression the kernels
+  don't compute (`STR`, a division), and every other operator (`GROUP BY` beyond the count
+  shortcuts, property paths outside the tables) leave the query to the evaluator, which then
+  runs it as before.
 - **Geometries.** Geometry literals (`geo:wktLiteral`, `geoJSONLiteral`, `gmlLiteral`,
   `kmlLiteral`, H3 cell lists) get their own term kind. They are parsed the first time
   something asks for them (`Snapshot::geometry(id)`, the spatial index) and then kept by term

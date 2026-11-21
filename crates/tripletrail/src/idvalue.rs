@@ -69,6 +69,17 @@ pub(crate) fn of_id(id: TermId) -> Option<Value> {
     }
 }
 
+/// The literal the evaluator gives for a value it computed (`BIND(?a * 1.21 AS ?b)`), if
+/// the ids decide it: dates and date-times are left to the evaluator.
+pub(crate) fn literal(v: Value) -> Option<Literal> {
+    Some(match v {
+        Value::Integer(i) => Literal::from(i),
+        Value::Decimal(d) => Literal::new_typed_literal(decimal_lexical(d), xsd::DECIMAL),
+        Value::Double(d) => Literal::from(oxsdatatypes::Double::from(d)),
+        Value::DateTime { .. } => return None,
+    })
+}
+
 /// Compiles `e` to a kernel over the rows of `t`, if every part of it is decided on ids.
 pub(crate) fn compile<'k>(
     e: &Expression,
@@ -244,10 +255,26 @@ fn column<'k>(t: &Table, v: &Variable) -> ValueKernel<'k> {
     }
 }
 
-/// A literal constant, through the id the store gives it (inline numbers and dates only).
+/// A literal constant: a number by its value, a date through the id the store gives it
+/// (inline dates only).
 fn constant(l: &Literal, snapshot: &Snapshot) -> Option<Value> {
-    // Only canonical-looking constants: the store inlines those with the exact lexical form.
     let d = l.datatype();
+    if d == xsd::INTEGER {
+        return l
+            .value()
+            .parse::<oxsdatatypes::Integer>()
+            .ok()
+            .map(|i| Value::Integer(i64::from(i)));
+    }
+    if d == xsd::DECIMAL {
+        let v: oxsdatatypes::Decimal = l.value().parse().ok()?;
+        return Some(Value::Decimal(i128::from_be_bytes(v.to_be_bytes())));
+    }
+    if d == xsd::DOUBLE {
+        let v: oxsdatatypes::Double = l.value().parse().ok()?;
+        let v = f64::from(v);
+        return v.is_finite().then_some(Value::Double(v));
+    }
     if d != xsd::INTEGER
         && d != xsd::DECIMAL
         && d != xsd::DOUBLE
@@ -303,17 +330,53 @@ fn arithmetic(op: Op, x: Value, y: Value) -> Option<Value> {
             Some(Value::Decimal(match op {
                 Op::Add => a.checked_add(b)?,
                 Op::Subtract => a.checked_sub(b)?,
-                Op::Multiply => {
-                    let p = a.checked_mul(b)?;
-                    if p % ONE != 0 {
-                        return None;
-                    }
-                    p / ONE
-                }
+                Op::Multiply => scaled_product(a, b)?,
             }))
         }
         _ => None,
     }
+}
+
+/// `a * b / 10^18` for decimals times 10^18, exact: the product is taken on 256 bits, so
+/// large factors don't overflow it. `None` when it doesn't fit, or has more than 18 fraction
+/// digits (the evaluator's would be cut).
+fn scaled_product(a: i128, b: i128) -> Option<i128> {
+    let negative = (a < 0) != (b < 0);
+    let (x, y) = (a.unsigned_abs(), b.unsigned_abs());
+    let (x0, x1) = (x as u64 as u128, (x >> 64) as u64 as u128);
+    let (y0, y1) = (y as u64 as u128, (y >> 64) as u64 as u128);
+    // The product in four 64-bit limbs, lowest first.
+    let mut limbs = [0u64; 4];
+    for (i, xi) in [x0, x1].into_iter().enumerate() {
+        let mut carry = 0u128;
+        for (j, yj) in [y0, y1].into_iter().enumerate() {
+            let t = xi * yj + u128::from(limbs[i + j]) + carry;
+            limbs[i + j] = t as u64;
+            carry = t >> 64;
+        }
+        let mut k = i + 2;
+        while carry != 0 && k < 4 {
+            let t = u128::from(limbs[k]) + carry;
+            limbs[k] = t as u64;
+            carry = t >> 64;
+            k += 1;
+        }
+    }
+    // Divided by 10^18, from the highest limb down.
+    let d = ONE as u128;
+    let mut quotient = [0u64; 4];
+    let mut rest = 0u128;
+    for k in (0..4).rev() {
+        let current = (rest << 64) | u128::from(limbs[k]);
+        quotient[k] = (current / d) as u64;
+        rest = current % d;
+    }
+    if rest != 0 || quotient[2] != 0 || quotient[3] != 0 {
+        return None;
+    }
+    let q = (u128::from(quotient[1]) << 64) | u128::from(quotient[0]);
+    let q = i128::try_from(q).ok()?;
+    Some(if negative { -q } else { q })
 }
 
 /// A number as a double, converted as the evaluator converts it (`oxsdatatypes`).
@@ -640,6 +703,39 @@ pub(crate) fn comparison<'k>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimal_products_are_exact() {
+        let d = |s: &str| {
+            let v: oxsdatatypes::Decimal = s.parse().unwrap();
+            i128::from_be_bytes(v.to_be_bytes())
+        };
+        for (a, b) in [
+            ("1057.1", "1.5"),
+            ("-1057.1", "1.21"),
+            ("123456789012.345", "-98765.4321"),
+            ("0.000000001", "0.000000001"),
+            ("99999999999999999999", "1.7"),
+            ("0", "-5.5"),
+        ] {
+            let expected: oxsdatatypes::Decimal = a
+                .parse::<oxsdatatypes::Decimal>()
+                .unwrap()
+                .checked_mul(b.parse::<oxsdatatypes::Decimal>().unwrap())
+                .unwrap();
+            assert_eq!(
+                scaled_product(d(a), d(b)),
+                Some(i128::from_be_bytes(expected.to_be_bytes())),
+                "{a} * {b}"
+            );
+        }
+        // More than 18 fraction digits, or too large: left to the evaluator.
+        assert_eq!(scaled_product(d("0.000000001"), d("0.0000000001")), None);
+        assert_eq!(
+            scaled_product(d("10000000000000000000"), d("100000000000000000000")),
+            None
+        );
+    }
 
     #[test]
     fn civil_dates() {

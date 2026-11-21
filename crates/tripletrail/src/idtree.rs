@@ -165,6 +165,29 @@ impl Eval<'_> {
                 if let Some(p) = pushed_filter(expr, inner) {
                     return self.eval(&p);
                 }
+                // A filter on a computed `BIND` value: on the expression itself, under the
+                // `BIND`, so its kernel computes the value (#11).
+                if let GraphPattern::Extend {
+                    inner: below,
+                    variable,
+                    expression,
+                } = &**inner
+                    && crate::executor_ids()
+                    && !matches!(
+                        expression,
+                        Expression::Variable(_) | Expression::NamedNode(_) | Expression::Literal(_)
+                    )
+                    && let Some(e) = substituted(expr, variable, expression)
+                {
+                    return self.eval(&GraphPattern::Extend {
+                        inner: Box::new(GraphPattern::Filter {
+                            expr: e,
+                            inner: below.clone(),
+                        }),
+                        variable: variable.clone(),
+                        expression: expression.clone(),
+                    });
+                }
                 if let GraphPattern::Bgp { patterns } = &**inner
                     && let Some((keep, copy, patterns)) = equal_vars(expr, patterns)
                 {
@@ -180,9 +203,98 @@ impl Eval<'_> {
                 path,
                 object,
             } => self.path(subject, path, object, None)?,
+            // `BIND`, while the id executor answers whole queries (#11).
+            GraphPattern::Extend {
+                inner,
+                variable,
+                expression,
+            } if crate::executor_ids() => {
+                let t = self.eval(inner)?;
+                self.extend(t, variable, expression)?
+            }
             _ => return None,
         };
         (t.ids.len() <= max_ids()).then_some(t)
+    }
+
+    /// `t` with the column `variable` of `expression`'s values: a copy of a column, a constant,
+    /// or a number computed on ids (`idvalue::compile`), as the term the evaluator gives; an
+    /// error leaves the cell unbound. `None` when the ids don't decide every value.
+    fn extend(&self, t: Table, variable: &Variable, expression: &Expression) -> Option<Table> {
+        if t.col(variable).is_some() {
+            return None;
+        }
+        let width = t.width();
+        let rows = t.len();
+        let mut column: Vec<TermId> = Vec::with_capacity(rows);
+        let maybe = match expression {
+            Expression::Variable(v) => match t.col(v) {
+                Some(c) => {
+                    column.extend((0..rows).map(|r| t.row(r)[c]));
+                    t.maybe[c]
+                }
+                None => {
+                    column.resize(rows, TermId(0));
+                    rows > 0
+                }
+            },
+            Expression::NamedNode(n) => {
+                let id = self.snapshot.id_of(n.clone().into());
+                column.resize(rows, id);
+                false
+            }
+            Expression::Literal(l) => {
+                let id = self.snapshot.id_of(l.clone().into());
+                column.resize(rows, id);
+                false
+            }
+            _ => {
+                let kernel = crate::idvalue::compile(expression, &t, self.snapshot)?;
+                // Each value once: the same value gives the same id.
+                let mut ids: HashMap<(u8, i128), TermId> = HashMap::new();
+                let mut unbound = false;
+                for r in 0..rows {
+                    if r % 4096 == 0 && (self.cancelled)() {
+                        return None;
+                    }
+                    match kernel(t.row(r))? {
+                        Ok(v) => {
+                            let key = value_key(v)?;
+                            let id = match ids.get(&key) {
+                                Some(&id) => id,
+                                None => {
+                                    let id =
+                                        self.snapshot.id_of(crate::idvalue::literal(v)?.into());
+                                    ids.insert(key, id);
+                                    id
+                                }
+                            };
+                            column.push(id);
+                        }
+                        Err(()) => {
+                            unbound = true;
+                            column.push(TermId(0));
+                        }
+                    }
+                }
+                unbound
+            }
+        };
+        let mut vars = t.vars;
+        vars.push(variable.clone());
+        let mut ids = Vec::with_capacity(rows * (width + 1));
+        for (r, &id) in column.iter().enumerate() {
+            ids.extend_from_slice(&t.ids[r * width..(r + 1) * width]);
+            ids.push(id);
+        }
+        let mut flags = t.maybe;
+        flags.push(maybe);
+        Some(Table {
+            vars,
+            ids,
+            maybe: flags,
+            ones: rows,
+        })
     }
 
     /// `?s <p>+ ?o`, `?s ^<p>+ ?o`, and with a constant end `<p>*` too (#11): the pairs of
@@ -806,6 +918,11 @@ impl Eval<'_> {
                     if set.contains_key(&mix(x)) {
                         return Some(Some(true));
                     }
+                    // A term only this query knows (a `BIND` constant the store doesn't hold,
+                    // `2.5e0`) may equal an item by value: the evaluator decides.
+                    if x.kind() == Kind::Ephemeral {
+                        return None;
+                    }
                     if !is_literal(x) {
                         // Items are IRIs and literals, never triple terms.
                         return Some(Some(false));
@@ -850,6 +967,9 @@ impl Eval<'_> {
                     let Some(id) = c.map(|c| row[c]).filter(|id| *id != UNBOUND) else {
                         return Some(None);
                     };
+                    if id.kind() == Kind::Ephemeral {
+                        return None;
+                    }
                     Some(Some(match f {
                         Function::IsLiteral => is_literal(id),
                         Function::IsIri => id.kind() == Kind::Iri,
@@ -870,6 +990,7 @@ impl Eval<'_> {
                     Some(Some(match id.kind() {
                         Kind::Integer | Kind::Double | Kind::Decimal => true,
                         Kind::Typed => cache.numeric(id)?,
+                        Kind::Ephemeral => return None,
                         _ => false,
                     }))
                 })
@@ -1179,6 +1300,7 @@ impl<'a> Decoded<'a> {
             return Some(None);
         };
         Some(match id.kind() {
+            Kind::Ephemeral => return None,
             Kind::LangString => Some(self.literal(id)?.language()?.to_owned()),
             _ if is_literal(id) => Some(String::new()),
             _ => None,
@@ -1192,6 +1314,7 @@ impl<'a> Decoded<'a> {
             return Some(None);
         };
         Some(match id.kind() {
+            Kind::Ephemeral => return None,
             Kind::String => Some(xsd::STRING.into_owned()),
             Kind::LangString => Some(rdf::LANG_STRING.into_owned()),
             Kind::Integer => Some(xsd::INTEGER.into_owned()),
@@ -1262,6 +1385,11 @@ fn equal_ids(x: TermId, y: TermId) -> Option<Option<bool>> {
     // Two different triple terms are equal when their parts are, and a literal part compares
     // by value (`<<( :a :b 1 )>> = <<( :a :b 1.0 )>>`): the ids don't decide it.
     if x.kind() == Kind::Triple && y.kind() == Kind::Triple {
+        return None;
+    }
+    // A term only this query knows (a `BIND` constant the store doesn't hold, `2.5e0`) may
+    // be a literal equal by value to another: the ids don't decide it.
+    if x.kind() == Kind::Ephemeral || y.kind() == Kind::Ephemeral {
         return None;
     }
     match (is_literal(x), is_literal(y)) {
@@ -2931,4 +3059,42 @@ impl<'a> Pick<'a> {
             _ => return None,
         })
     }
+}
+
+/// A key that tells computed values apart exactly (the type and the value), for the ids of
+/// `BIND`'s values; `None` for dates.
+fn value_key(v: crate::idvalue::Value) -> Option<(u8, i128)> {
+    use crate::idvalue::Value as V;
+    Some(match v {
+        V::Integer(i) => (0, i128::from(i)),
+        V::Decimal(d) => (1, d),
+        V::Double(d) => (2, i128::from(d.to_bits())),
+        V::DateTime { .. } => return None,
+    })
+}
+
+/// `e` with `variable` replaced by `by`, when `variable` occurs in it only as a value (not
+/// under `BOUND` or `EXISTS`); `None` if it doesn't occur or can't be replaced.
+fn substituted(e: &Expression, variable: &Variable, by: &Expression) -> Option<Expression> {
+    fn walk(
+        e: &mut Expression,
+        variable: &Variable,
+        by: &Expression,
+        found: &mut bool,
+        ok: &mut bool,
+    ) {
+        match e {
+            Expression::Variable(v) if v == variable => {
+                *e = by.clone();
+                *found = true;
+            }
+            Expression::Bound(v) if v == variable => *ok = false,
+            Expression::Exists(_) => *ok = false,
+            _ => crate::udf::expression_children(e, &mut |c| walk(c, variable, by, found, ok)),
+        }
+    }
+    let mut e = e.clone();
+    let (mut found, mut ok) = (false, true);
+    walk(&mut e, variable, by, &mut found, &mut ok);
+    (found && ok).then_some(e)
 }
