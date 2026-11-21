@@ -227,6 +227,8 @@ const BINDS: &[(&str, bool)] = &[
         true,
     ),
     ("SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x + 1 AS ?y) }", true),
+    // A top-level offset without an order: the ids' rows, in the evaluator's order.
+    ("SELECT ?s ?o WHERE { ?s ex:p ?o } OFFSET 2", true),
     (
         "SELECT ?s ?y WHERE { ?s ex:d ?x BIND(?x * 1.5 AS ?y) }",
         true,

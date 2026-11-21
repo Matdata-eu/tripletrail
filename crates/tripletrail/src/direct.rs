@@ -92,9 +92,9 @@ fn select(pattern: &GraphPattern, eval: &Eval, top: bool) -> Option<Selected> {
     if !top && !distinct && order.is_none() && length.is_none() && start == 0 {
         return None;
     }
-    // Under a slice without an order the evaluator stops after the first rows (faster), and
-    // the rows it keeps are its own to choose.
-    if (length.is_some() || start > 0) && order.is_none() {
+    // Under a limit without an order the evaluator stops after the first rows (faster); in a
+    // sub-select, the rows any slice without an order keeps are the evaluator's to choose.
+    if (length.is_some() || (!top && start > 0)) && order.is_none() {
         return None;
     }
     if !covered(body) {
