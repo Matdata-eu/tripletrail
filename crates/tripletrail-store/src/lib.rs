@@ -38,7 +38,7 @@ pub use bgp::{
     BgpCount, CompiledBgp, DEFAULT_JOIN_MEMORY, IdRows, IdSlot, IdTriple, join_memory,
     memory_limit, set_join_memory, with_join_memory,
 };
-pub use dataset::{Dataset, DatasetError, QuadIter};
+pub use dataset::{Dataset, DatasetError, QuadIter, RowView};
 pub use labels::BlankNodes;
 pub use persist::{LogEntry, STORE_FORMAT};
 

@@ -909,6 +909,9 @@ pub struct Engine {
     /// The dataset the sub-selects of the `st:` and window services read, for a caller who
     /// reads only some graphs (#203): the calling query's, narrowed to those graphs.
     service_dataset: Option<QueryDataset>,
+    /// What the built-in services read for a caller under row rules (#202): the rows the
+    /// calling query sees, so their sub-selects and searches see no more.
+    service_rows: Option<tripletrail_store::RowView>,
 }
 
 /// What a view of [`Engine::view_shortcuts`] shows: the store version, the graphs (`None` for
@@ -1195,6 +1198,7 @@ impl Engine {
             text_properties: Arc::new(Mutex::new(text::default_properties())),
             text_views: Arc::default(),
             service_dataset: None,
+            service_rows: None,
             text_view_work: Arc::default(),
             vectors: Arc::default(),
             vector_graph_min: Arc::new(std::sync::atomic::AtomicUsize::new(vector::GRAPH_MIN)),
@@ -1380,8 +1384,12 @@ impl Engine {
                     self.union_default_graph(),
                     self.cancellation.clone(),
                 );
-                match &self.service_dataset {
+                let path = match &self.service_dataset {
                     Some(d) => path.with_dataset(d.clone()),
+                    None => path,
+                };
+                match &self.service_rows {
+                    Some(r) => path.with_rows(r.clone()),
                     None => path,
                 }
             })
@@ -1420,8 +1428,12 @@ impl Engine {
             Some(token) => self.st.with_cancellation_token(token.clone()),
             None => self.st.clone(),
         };
-        match self.services_dataset() {
+        let st = match self.services_dataset() {
             Some(d) => st.with_dataset(d),
+            None => st,
+        };
+        match &self.service_rows {
+            Some(r) => st.with_rows(r.clone()),
             None => st,
         }
     }
@@ -1433,8 +1445,12 @@ impl Engine {
             Some(token) => self.window.with_cancellation_token(token.clone()),
             None => self.window.clone(),
         };
-        match self.services_dataset() {
+        let window = match self.services_dataset() {
             Some(d) => window.with_dataset(d),
+            None => window,
+        };
+        match &self.service_rows {
+            Some(r) => window.with_rows(r.clone()),
             None => window,
         }
     }
@@ -1446,8 +1462,12 @@ impl Engine {
             Some(token) => self.pgr.with_cancellation_token(token.clone()),
             None => self.pgr.clone(),
         };
-        match self.services_dataset() {
+        let pgr = match self.services_dataset() {
             Some(d) => pgr.with_dataset(d),
+            None => pgr,
+        };
+        match &self.service_rows {
+            Some(r) => pgr.with_rows(r.clone()),
             None => pgr,
         }
     }
@@ -2532,10 +2552,15 @@ impl Engine {
                 "Row-level access rules need the tripletrail store".to_owned(),
             ));
         };
-        if query.to_string().contains("SERVICE ") {
-            return Err(Error::Request(
-                "SERVICE is not available under row-level access rules".to_owned(),
-            ));
+        // The built-in services read what the query reads (#202); others, and one inside
+        // another, are refused.
+        let text = query.to_string();
+        if text.contains("SERVICE ") {
+            let (spargebra::Query::Select { pattern, .. }
+            | spargebra::Query::Construct { pattern, .. }
+            | spargebra::Query::Describe { pattern, .. }
+            | spargebra::Query::Ask { pattern, .. }) = &query;
+            scoped_services_only(pattern, &text)?;
         }
         let union = !has_own_dataset(&query);
         let dataset = options
@@ -2589,7 +2614,20 @@ impl Engine {
             } else {
                 query
             };
-            let mut prepared = self.evaluator().for_query(plan::plan_query(query));
+            let evaluator = if text.contains("SERVICE ") {
+                Self {
+                    service_rows: Some(tripletrail_store::RowView {
+                        rows: Arc::clone(&rows),
+                        base: base.clone(),
+                    }),
+                    service_dataset: self.service_dataset.clone().or_else(|| dataset.clone()),
+                    ..self.clone()
+                }
+                .evaluator()
+            } else {
+                self.evaluator()
+            };
+            let mut prepared = evaluator.for_query(plan::plan_query(query));
             if let Some(dataset) = &dataset {
                 *prepared.dataset_mut() = dataset.clone();
             }

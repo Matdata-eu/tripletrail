@@ -26,7 +26,7 @@ use tripletrail_routing::{
     edge_disjoint_paths, edward_moore, ksp, minimum_spanning_forest, strong_components,
     td_dijkstra, trsp, trsp_avoiding, turn_restricted_path,
 };
-use tripletrail_store::Dataset;
+use tripletrail_store::{Dataset, RowView};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PgrError {
@@ -71,6 +71,9 @@ pub struct PgrService {
     /// The graphs every sub-select reads, for a caller limited to some graphs (#203): the
     /// calling query's dataset. Networks built on it are cached apart.
     dataset: Option<QueryDataset>,
+    /// What a caller under row rules sees (#202): every sub-select reads only those rows,
+    /// and networks built on them are cached apart.
+    rows: Option<RowView>,
 }
 
 impl PgrService {
@@ -87,6 +90,7 @@ impl PgrService {
             stats: Arc::default(),
             cancellation: None,
             dataset: None,
+            rows: None,
         }
     }
 
@@ -97,6 +101,16 @@ impl PgrService {
     pub fn with_dataset(&self, dataset: QueryDataset) -> Self {
         Self {
             dataset: Some(dataset),
+            ..self.clone()
+        }
+    }
+
+    /// The same service, every sub-select reading only what `rows` shows (#202). As with
+    /// [`PgrService::with_dataset`], what reads the store directly is refused.
+    #[must_use]
+    pub fn with_rows(&self, rows: RowView) -> Self {
+        Self {
+            rows: Some(rows),
             ..self.clone()
         }
     }
@@ -112,14 +126,23 @@ impl PgrService {
 
     /// A network cache key: `key`, and the dataset when there is one.
     fn key(&self, key: String) -> String {
-        match &self.dataset {
+        let key = match &self.dataset {
             Some(d) => format!("{key}\n#dataset {d:?}"),
+            None => key,
+        };
+        match &self.rows {
+            Some(r) => format!("{key}\n#rows {:016x}", r.fingerprint()),
             None => key,
         }
     }
 
     /// Refuses what reads the store directly, for a caller limited to some graphs.
     fn unscoped(&self, what: &str) -> Result<(), PgrError> {
+        if self.rows.is_some() {
+            return Err(PgrError::Request(format!(
+                "{what} is not available under row-level access rules"
+            )));
+        }
         if self.dataset.is_some() {
             return Err(PgrError::Request(format!(
                 "{what} is not available with access to only some graphs"
@@ -175,6 +198,7 @@ impl PgrService {
                     Network::build_prefixed(
                         &self.store,
                         self.dataset.as_ref(),
+                        self.rows.as_ref(),
                         &*self.evaluator,
                         pattern,
                         request.directed,
@@ -198,6 +222,7 @@ impl PgrService {
                         Network::build_prefixed(
                             &self.store,
                             self.dataset.as_ref(),
+                            self.rows.as_ref(),
                             &*self.evaluator,
                             &pattern,
                             request.directed,
@@ -241,7 +266,7 @@ impl PgrService {
         }
         let results = self
             .store
-            .execute(prepared)
+            .execute_in(prepared, self.rows.as_ref())
             .map_err(|e| PgrError::EdgeQuery(Box::new(e)))?;
         let QueryResults::Solutions(mut solutions) = results else {
             unreachable!()
@@ -281,7 +306,7 @@ impl PgrService {
         };
         let QueryResults::Solutions(solutions) = self
             .store
-            .execute(self.prepare((self.evaluator)(), query))
+            .execute_in(self.prepare((self.evaluator)(), query), self.rows.as_ref())
             .map_err(|e| PgrError::EdgeQuery(Box::new(e)))?
         else {
             unreachable!()
@@ -370,7 +395,7 @@ impl PgrService {
         };
         let QueryResults::Solutions(solutions) = self
             .store
-            .execute(self.prepare((self.evaluator)(), query))
+            .execute_in(self.prepare((self.evaluator)(), query), self.rows.as_ref())
             .map_err(|e| PgrError::EdgeQuery(Box::new(e)))?
         else {
             unreachable!()
@@ -412,7 +437,7 @@ impl PgrService {
             .with_service_handler(NamedNode::new_unchecked(PGR_SERVICE), self.clone());
         let QueryResults::Solutions(solutions) = self
             .store
-            .execute(self.prepare(evaluator, query))
+            .execute_in(self.prepare(evaluator, query), self.rows.as_ref())
             .map_err(|e| PgrError::EdgeQuery(Box::new(e)))?
         else {
             unreachable!()
@@ -1420,6 +1445,7 @@ impl PgrService {
                     Network::build_prefixed(
                         &self.store,
                         self.dataset.as_ref(),
+                        self.rows.as_ref(),
                         &*self.evaluator,
                         pattern,
                         request.directed,

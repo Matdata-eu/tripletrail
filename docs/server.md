@@ -1719,8 +1719,12 @@ ex:NetworkWriters a sg:Policy ; sg:group "network-assets" ; sg:writeAllGraphs tr
   `rdfs:subClassOf`. Otherwise, and after bulk loads or writes of more than 65,536 quads, the
   rules are compiled anew. Full-text search (`tt:search`, `text:query`, the map search) reads
   an index of the visible labels alone, ranked as on a store holding only them (#203; see
-  [full-text search](full-text-search.md#access-control)). Queries with `SERVICE` are refused (400), and the query
-  cache is not used. Compiling the rules stops with the query's timeout. Such a caller may
+  [full-text search](full-text-search.md#access-control)). The built-in services (`st:`, the window service, path search and `pgr`)
+  read the same view: their sub-selects, the edges path search follows and the networks routing
+  builds hold only the visible rows, and the networks are cached apart per rules. `pgr:shapes`,
+  `pgr:vehicle`, `pgr:compatibilityShapes` and `pgr:shaclRules`, which read the store
+  directly, are refused, as are other services and a service called inside another (400). The
+  query cache is not used. Compiling the rules stops with the query's timeout. Such a caller may
   also read RDF descriptions (`describe`, Linked Data; a hidden resource is not found, 404)
   and the Graph Store Protocol (`GET`; a named graph with nothing visible is not found), from
   one view of the store judged as a whole, and the RDF4J API's reads (queries, `statements`,
