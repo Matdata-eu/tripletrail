@@ -628,11 +628,12 @@ fn a_style_draws_each_collection_over_the_tiles() {
             threads: 2,
             map_tiles: Some("https://tile.example.org/{z}/{x}/{y}.png".to_owned()),
             map_attribution: Some("© Example".to_owned()),
-            map_basemaps: vec![(
-                "Aerial".to_owned(),
-                "https://aerial.example.org/{z}/{y}/{x}.jpg".to_owned(),
-                "© Aerial".to_owned(),
-            )],
+            map_basemaps: vec![tripletrail_server::Basemap {
+                title: "Aerial".to_owned(),
+                tiles: "https://aerial.example.org/{z}/{y}/{x}.jpg".to_owned(),
+                attribution: "© Aerial".to_owned(),
+                maxzoom: 17,
+            }],
             ..Options::default()
         },
     )
@@ -653,6 +654,9 @@ fn a_style_draws_each_collection_over_the_tiles() {
         "https://aerial.example.org/{z}/{y}/{x}.jpg"
     );
     assert_eq!(basemaps[1]["attribution"], "© Aerial");
+    // The last zoom of each one's tiles, for the page to enlarge them beyond it (#52).
+    assert_eq!(basemaps[0]["maxzoom"], 19);
+    assert_eq!(basemaps[1]["maxzoom"], 17);
 }
 
 /// The features without a geometry are left out of the facets by name when they can be
@@ -2726,4 +2730,89 @@ fn legend_counts_of_a_map_coloured_by_a_range() {
             { "upTo": null, "label": null, "count": 1 },
         ])
     );
+}
+
+/// The map's spatial filter (#33): `area` (WKT or the IRI of a resource with a geometry),
+/// `rel` and `dist`, the same for the facets, the tiles and the OGC API's items.
+#[test]
+fn facets_tiles_and_items_by_a_spatial_relation_to_an_area() {
+    let mut ttl = String::from(
+        "@prefix ex: <http://example.com/> .\n\
+         @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+         ex:zone a ex:Zone ; geo:hasGeometry [ geo:asWKT \
+           \"POLYGON((3.95 50.7, 4.15 50.7, 4.15 50.9, 3.95 50.9, 3.95 50.7))\"^^geo:wktLiteral ] .\n\
+         ex:nowhere a ex:Zone .\n",
+    );
+    // Stations 0-3 at longitudes 4.0 to 4.3 (0.1° is about 7 km there), 4-5 in Norway.
+    for (i, lon) in [4.0, 4.1, 4.2, 4.3, 10.4, 10.5].iter().enumerate() {
+        ttl.push_str(&format!(
+            "ex:s{i} a ex:Station ; \
+             geo:hasGeometry [ geo:asWKT \"POINT({lon} 50.8)\"^^geo:wktLiteral ] .\n"
+        ));
+    }
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let base = start(engine);
+    let zone = "POLYGON((3.95%2050.7,%204.15%2050.7,%204.15%2050.9,%203.95%2050.9,%203.95%2050.7))";
+    let count = |query: &str| {
+        let (code, _, out) = get(&format!("{base}/kg/tiles/facets/Station?{query}"));
+        assert_eq!(code, 200, "{query}: {out}");
+        out["features"].as_u64().unwrap()
+    };
+    assert_eq!(count(""), 6);
+    assert_eq!(count(&format!("area={zone}")), 2);
+    assert_eq!(count(&format!("area={zone}&rel=intersects")), 2);
+    assert_eq!(count(&format!("area={zone}&rel=within")), 2);
+    assert_eq!(count(&format!("area={zone}&rel=contains")), 0);
+    assert_eq!(count(&format!("area={zone}&rel=touches")), 0);
+    assert_eq!(count(&format!("area={zone}&rel=disjoint")), 4);
+    // The zone by its IRI: its geometry, read through geo:hasGeometry.
+    assert_eq!(count("area=http%3A%2F%2Fexample.com%2Fzone&rel=within"), 2);
+    // Within a distance of a point: s1 is about 7 km from s0, s2 about 14 km.
+    let point = "POINT(4.0%2050.8)";
+    assert_eq!(count(&format!("area={point}&rel=dwithin&dist=5000")), 1);
+    assert_eq!(count(&format!("area={point}&rel=dwithin&dist=8000")), 2);
+    assert_eq!(count(&format!("area={point}&rel=dwithin&dist=15000")), 3);
+    // A CRS of its own, as a wktLiteral names it: EPSG:4326 is latitude first.
+    let epsg =
+        "%3Chttp%3A%2F%2Fwww.opengis.net%2Fdef%2Fcrs%2FEPSG%2F0%2F4326%3E%20POINT(50.8%204.0)";
+    assert_eq!(count(&format!("area={epsg}&rel=dwithin&dist=5000")), 1);
+    // With another filter: the area and the box together.
+    assert_eq!(
+        count(&format!("area={zone}&rel=disjoint&bbox=3,50,5,51")),
+        2
+    );
+    // Mistakes are 400s, with the reason.
+    for (query, reason) in [
+        (format!("area={zone}&rel=near"), "rel=near"),
+        (format!("area={zone}&dist=10"), "only with rel=dwithin"),
+        (format!("area={point}&rel=dwithin"), "needs a dist"),
+        (format!("area={point}&rel=dwithin&dist=-1"), "metres"),
+        ("area=POLYGON((1%202".to_owned(), "not a WKT geometry"),
+        ("rel=within".to_owned(), "need an area"),
+        (
+            "area=http%3A%2F%2Fexample.com%2Fnowhere".to_owned(),
+            "no geometry",
+        ),
+    ] {
+        let (code, _, out) = get(&format!("{base}/kg/tiles/facets/Station?{query}"));
+        assert_eq!(code, 400, "{query}");
+        assert!(out.as_str().unwrap().contains(reason), "{query}: {out}");
+    }
+    // A tile with the filter draws only what it keeps.
+    let (code, all) = tile(&format!("{base}/kg/tiles/Station/0/0/0.mvt"));
+    assert_eq!(code, 200);
+    let (code, near) = tile(&format!(
+        "{base}/kg/tiles/Station/0/0/0.mvt?area={point}&rel=dwithin&dist=8000"
+    ));
+    assert_eq!(code, 200);
+    assert!(holds(&all, "http://example.com/s5"));
+    assert!(holds(&near, "http://example.com/s1"));
+    assert!(!holds(&near, "http://example.com/s2"));
+    // The OGC API's items take the same parameters.
+    let (code, _, page) = get(&format!(
+        "{base}/kg/ogc/collections/Station/items?area={zone}&rel=disjoint"
+    ));
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page["numberReturned"], 4);
 }

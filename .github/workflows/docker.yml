@@ -5,8 +5,10 @@ name: Docker image
 # With the repository variable COSIGN_SIGN set to `true`, it also signs them with cosign
 # (keyless, by this workflow's GitHub identity). The Dockerfile
 # cross-compiles, so the arm64 image takes no emulation.
-# Manual only for now, to save runner time: start it from the Actions tab. Run on main it
-# publishes tag `main`, on a version tag `1.2.3`, `1.2` and `latest`, plus a short-sha tag either way.
+# A version tag (`v*`) publishes `1.2.3`, `1.2` and `latest` by itself, so each release has an
+# image other images can copy the command from (#93). Otherwise manual, to save runner time:
+# start it from the Actions tab; run on main it publishes tag `main`. A short-sha tag either way.
+# A pre-release tag (`v0.1.0-rc.3`) publishes only `0.1.0-rc.3`: `1.2` and `latest` move on releases.
 # Untick "publish" to only build and smoke-test (e.g. to try an image change on a branch).
 #
 # Signing is off until the repository is public (#150): keyless signing writes the
@@ -17,6 +19,8 @@ name: Docker image
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       publish:
@@ -49,7 +53,7 @@ jobs:
           python3 .github/scripts/third-party-licenses.py -o THIRD_PARTY_LICENSES.md
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
-        if: inputs.publish
+        if: (inputs.publish || github.event_name == 'push')
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -89,7 +93,7 @@ jobs:
           curl -sf "$base/\$/ui/" | grep -q yasgui
       - name: Push
         id: push
-        if: inputs.publish
+        if: (inputs.publish || github.event_name == 'push')
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -103,11 +107,11 @@ jobs:
           cache-to: type=gha,mode=max
       # Off until the repository is public: see the top of this file.
       - uses: sigstore/cosign-installer@v3
-        if: inputs.publish && vars.COSIGN_SIGN == 'true'
+        if: (inputs.publish || github.event_name == 'push') && vars.COSIGN_SIGN == 'true'
       # Signs the multi-platform index by digest, which covers both images; then checks the
       # signature the way a user would.
       - name: Sign
-        if: inputs.publish && vars.COSIGN_SIGN == 'true'
+        if: (inputs.publish || github.event_name == 'push') && vars.COSIGN_SIGN == 'true'
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}

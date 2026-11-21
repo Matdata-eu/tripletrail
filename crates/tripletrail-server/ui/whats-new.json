@@ -1,5 +1,28 @@
 [
   {
+    "version": "0.1.0",
+    "date": "2026-11-21",
+    "new": [
+      "Import page: drop a file, see it as triples, edit the drafted CONSTRUCT that maps it, preview the result and add it to a named graph.",
+      "Map: filter facets and tiles by map area, named graph or search text, count the classes of a coloured map, and show a stored SHACL validation report as a data-quality facet.",
+      "Map: a pack or your own shapes can show only their own classes, and a base map can name the last zoom of its tiles.",
+      "tripletrail validate --lookup reads vocabularies and code lists with the data without validating them.",
+      "Each version tag publishes the Docker image, so other images can copy the tripletrail command out of it."
+    ],
+    "improved": [
+      "The server makes each dataset's map in the background at start, so the first visitor of a large dataset no longer waits for it.",
+      "Lighter map tiles below zoom 8 for crowded layers.",
+      "With --executor ids, many SELECT queries are answered straight from term ids: joins, filters, BIND, VALUES, sub-selects and grouped counts.",
+      "SHACL: the messages of SPARQL-based constraints are filled in with the values of each result."
+    ],
+    "fixed": [
+      "A spatial join of a few lines against many polygons no longer runs out of memory.",
+      "With --union-default-graph, spatial queries over named graphs use the spatial index again.",
+      "ORDER BY over dates with and without a timezone no longer fails.",
+      "Installing or removing a shape pack changes the map and the OGC API at once."
+    ]
+  },
+  {
     "version": "0.1.0-rc.2",
     "date": "2026-11-20",
     "new": [

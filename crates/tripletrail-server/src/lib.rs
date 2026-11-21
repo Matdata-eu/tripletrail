@@ -25,6 +25,7 @@ mod access_history;
 mod access_review;
 mod admin;
 mod archive;
+mod area;
 #[cfg(feature = "enterprise")]
 mod audit;
 pub mod auth;
@@ -126,6 +127,24 @@ pub fn provenance_json(origin: &tripletrail::shacl::Origin) -> serde_json::Value
     reason::origin(origin)
 }
 
+/// A base map the Map page offers besides the server's own (`--map-basemap`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Basemap {
+    /// The title in the Map page's menu.
+    pub title: String,
+    /// An XYZ raster tile URL template.
+    pub tiles: String,
+    /// Its credit (HTML).
+    pub attribution: String,
+    /// The last zoom the provider has tiles for: the map shows those tiles enlarged beyond it.
+    pub maxzoom: u8,
+}
+
+impl Basemap {
+    /// The zoom a base map's tiles go up to when nothing says otherwise.
+    pub const DEFAULT_MAXZOOM: u8 = 19;
+}
+
 /// A running server's settings.
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -197,9 +216,8 @@ pub struct Options {
     /// attribution; without it the map has no base map and fetches nothing from elsewhere.
     pub map_tiles: Option<String>,
     pub map_attribution: Option<String>,
-    /// More base maps the Map page offers besides `map_tiles` (`--map-basemap`): each a
-    /// title, an XYZ raster tile URL template and its attribution (HTML).
-    pub map_basemaps: Vec<(String, String, String)>,
+    /// More base maps the Map page offers besides `map_tiles` (`--map-basemap`).
+    pub map_basemaps: Vec<Basemap>,
     /// Write one JSON line per request to standard output.
     pub log_requests: bool,
     /// On SIGTERM or Ctrl-C, how long running requests may take before the server exits

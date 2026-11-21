@@ -61,6 +61,8 @@ Matdata. Please open an issue instead, and we'll pick it up.
 4. Check with `.github/scripts/release-notes.sh --check 1.2.3`, merge, then tag `v1.2.3`
    on main and push the tag. The tag is `v` and the version exactly as `Cargo.toml` has it: a
    release candidate is `v0.1.0-rc.2`, with the dot, not `v0.1.0-rc2`.
+   Creating the release on GitHub's Releases page with that new tag on main works too: it
+   pushes the tag, and the workflow adds the files and, when the release has none, the notes.
 
 The "Release" workflow then builds `tripletrail` for Linux (x86_64, aarch64), macOS (x86_64,
 arm64) and Windows (x86_64). Each archive holds `LICENSE`, `NOTICE` and
@@ -69,8 +71,9 @@ texts it ships, written by `.github/scripts/third-party-licenses.py` (run it loc
 `cargo fetch --locked` to see the list). It publishes them as a GitHub release with `SHA256SUMS`, and
 the notes are the CHANGELOG section followed by the commits since the last tag, grouped by
 type. Starting the workflow by hand does a dry run that keeps everything as a workflow
-artifact. "Docker image" (run on the tag) publishes the image, and "Helm chart" with
-"publish" ticked publishes the chart.
+artifact. The tag also starts "Docker image", which publishes the image as `1.2.3`, `1.2` and
+`latest` (a pre-release tag such as `v0.1.0-rc.3` publishes only `0.1.0-rc.3`, so `latest` stays
+on the last release), and "Helm chart" with "publish" ticked publishes the chart.
 
 ## Security issues
 
