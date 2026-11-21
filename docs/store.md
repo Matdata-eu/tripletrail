@@ -81,10 +81,21 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   (`crates/tripletrail/src/idvalue.rs`, #170): `<`, `<=`, `>`, `>=` and `=` between them and
   numeric or date constants, `+ - *` and unary minus, `ABS`, `CEIL`, `FLOOR`, `ROUND`, `YEAR`,
   `MONTH`, `DAY`, `HOURS` and `MINUTES` in filters, and `SUM` of such expressions per group
-  (an integer, or a decimal written as the evaluator writes it). Doubles, dictionary
-  literals, overflow, inexact products, dates against date-times or with and without a time
-  zone, and unbound values give the expression back to the evaluator. On 300 k rows:
-  `SUM(YEAR(?d))` 83 → 14 ms, `SUM(?int)` 24 → 8 ms, `FILTER(?decimal > 5000.5)` 670 → 10 ms.
+  (an integer, or a decimal written as the evaluator writes it). `SUM` and `AVG` also take
+  inline `xsd:double` values (#62), mixed with integers and decimals: the sum is then a
+  double. The doubles are summed exactly and rounded once at the end, so the sum doesn't
+  depend on the order of the rows; the integers and decimals of the group are summed exactly
+  apart, and their total is rounded to a double before it is added, which can cost a last
+  digit against the exact sum of all of them. A group with a double that is not inline (more
+  than 16 digits, or an exponent form such as `1.5E2`) is summed by the evaluator in row
+  order, so the same query can round differently on other data. The evaluator, and Fuseki, round after each addition in row order, so the last
+  digit can differ: ten times `0.1` sums to `1` here and to `0.9999999999999999` there. An
+  `AVG` of integers and decimals only (a decimal division) stays with the evaluator.
+  Arithmetic and comparisons on doubles, dictionary literals (`1.5E2`), overflow, inexact
+  products, dates against date-times or with and without a time zone, and unbound values give
+  the expression back to the evaluator. On 300 k rows: `SUM(YEAR(?d))` 83 → 14 ms,
+  `SUM(?int)` 24 → 8 ms, `FILTER(?decimal > 5000.5)` 670 → 10 ms. On 133 k orders of 10 k
+  customers, `SUM` of a double per customer 170 → 50 ms, `AVG` 160 → 53 ms.
   Eager grouping before a filter is skipped when there are more than half as many distinct
   values as rows (it took 600 ms instead of 30 on 300 k distinct prices).
   IRIs and simple strings are compared by their string ranks (#171,
@@ -119,11 +130,14 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   ends, `*` between two free variables, or other path expressions are left to the evaluator.
   `ORDER BY ?a DESC(?b) ... LIMIT n` (with `OFFSET`, `DISTINCT` or `REDUCED`) over a pattern
   the tables cover is ordered on ids too: IRIs and simple strings by their string ranks
-  (#171), integers and booleans by value, unbound values first, and only the first
+  (#171), integers and booleans by value, inline doubles, decimals, dates and date-times by
+  the order key of their ids (#64), unbound values first, and only the first
   `OFFSET + LIMIT` rows are read back (the evaluator orders those few again). A column with
-  blank nodes, other literals or two kinds of literals is left to the evaluator, as are
+  blank nodes, other literals or two kinds of literals (an integer and a double, a date and
+  a date-time, date-times with and without a time zone) is left to the evaluator, as are
   order expressions other than variables. On 300 k labels, `ORDER BY ?label LIMIT 10`
-  1.1 s → 11 ms, `SELECT DISTINCT ?t ... ORDER BY ?t LIMIT 10` 1.0 s → 12 ms.
+  1.1 s → 11 ms, `SELECT DISTINCT ?t ... ORDER BY ?t LIMIT 10` 1.0 s → 12 ms. The top 50 of
+  133 k double amounts 54 → 17 ms, and with a three-pattern join 319 → 34 ms.
 - **Geometries.** Geometry literals (`geo:wktLiteral`, `geoJSONLiteral`, `gmlLiteral`,
   `kmlLiteral`, H3 cell lists) get their own term kind. They are parsed the first time
   something asks for them (`Snapshot::geometry(id)`, the spatial index) and then kept by term
