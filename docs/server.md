@@ -2870,7 +2870,8 @@ the dataset's DASH shapes when it has them (#140).
   `TITLE|URL|ATTRIBUTION|MAXZOOM`, gives the last zoom (0 to 24, default 19) the provider has
   tiles for: past it the map enlarges that zoom's tiles instead of asking for tiles that are
   not there. The attribution is everything after the URL, so it may hold a `|`, and only a
-  last field that is a number is taken as the zoom. Each viewer's browser fetches the tiles of the place it looks at, so the tile
+  last field of one or two digits is taken as the zoom (a year at the end of a credit stays
+  the credit's). Each viewer's browser fetches the tiles of the place it looks at, so the tile
   server learns where the viewed resources lie: check its usage policy (OpenStreetMap's
   allows light use, not heavy or commercial traffic), and use your own tile server or `none`
   for private data. The page sends only its origin as `Referer` (`strict-origin`), as tile
@@ -3288,7 +3289,10 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   The candidates come from the spatial index: the area's box, widened by `dist`. The exact
   test runs on those only. A bad `area` (not WKT, or an IRI without a geometry), `rel` or
   `dist`, or a `rel` or `dist` without an `area`, is `400`. The tile and facet caches key on
-  the filter. A facet named `area`, `rel` or `dist` is filtered only as `{collection}.{key}`.
+  the filter. A facet named `area`, `rel` or `dist` is filtered only as `{collection}.{key}`
+  on the tiles and facets, and is not a property filter of the OGC API's items (which have no
+  `{collection}.{key}` form): give such a property another `tts:key` to filter the items by
+  it. `dwithin` does not reach across the antimeridian: the widened box stops at ±180°.
 
 ## REST API (JSON-LD)
 
