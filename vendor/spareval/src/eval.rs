@@ -4,7 +4,7 @@ use crate::dataset::{ExpressionTerm, InternalQuad, QueryableDataset, decimal_div
 use crate::error::QueryEvaluationError;
 use crate::expression::{
     CustomFunctionRegistry, ExpressionEvaluator, ExpressionEvaluatorContext, NumericBinaryOperands,
-    build_expression_evaluator, partial_cmp_literals, try_build_internal_expression_evaluator,
+    build_expression_evaluator, order_cmp_literals, try_build_internal_expression_evaluator,
 };
 use crate::model::{QuerySolutionIter, QueryTripleIter};
 use crate::service::ServiceHandlerRegistry;
@@ -3096,7 +3096,7 @@ fn cmp_values_as_jena(a: &ExpressionTerm, b: &ExpressionTerm) -> Ordering {
         #[cfg(feature = "sparql-12")]
         (ExpressionTerm::Triple(_), _) => return cmp_terms(Some(&va), Some(&vb)),
         (ExpressionTerm::OtherTypedLiteral { .. }, _) => Ordering::Equal,
-        (x, y) => partial_cmp_literals(x, y).unwrap_or(Ordering::Equal),
+        (x, y) => order_cmp_literals(x, y).unwrap_or(Ordering::Equal),
     };
     if by_value != Ordering::Equal {
         return by_value;
@@ -3147,7 +3147,8 @@ fn cmp_terms(a: Option<&ExpressionTerm>, b: Option<&ExpressionTerm>) -> Ordering
                     #[cfg(feature = "sparql-12")]
                     ExpressionTerm::Triple(_) => Ordering::Less,
                     _ => {
-                        if let Some(ord) = partial_cmp_literals(a, b) {
+                        // tripletrail (#78): a total order, or the sort panics.
+                        if let Some(ord) = order_cmp_literals(a, b) {
                             ord
                         } else if let (Term::Literal(a), Term::Literal(b)) =
                             (a.clone().into(), b.clone().into())

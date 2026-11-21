@@ -641,6 +641,30 @@ third,eighth,avg
 0.666666666666666666666667,0.125,1.333333333333333333333333
 ```
 
+`ORDER BY` over dates and times with and without a timezone reads a value without one as UTC,
+as Jena's F&O comparison does, where XSD would leave `2020-01-01T03:00:00` and
+`2020-01-01T02:00:00+02:00` unordered; values at the same instant come in the order of their
+text:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/kg/sparql -H 'Accept: text/csv' \
+  --data-urlencode 'query=PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?v WHERE {
+  VALUES ?v { "2020-01-01T03:00:00"^^xsd:dateTime "2020-01-01T02:00:00+02:00"^^xsd:dateTime
+              "2020-01-01T00:00:00Z"^^xsd:dateTime "2020-01-01T00:00:00"^^xsd:dateTime }
+} ORDER BY ?v'
+```
+
+<!-- test: output -->
+```text
+v
+2020-01-01T00:00:00
+2020-01-01T00:00:00Z
+2020-01-01T02:00:00+02:00
+2020-01-01T03:00:00
+```
+
 A few things differ on purpose:
 
 - Typed literals keep the form they were loaded in (`"100.0"` stays `"100.0"`), while

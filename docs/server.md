@@ -3425,7 +3425,10 @@ to change it. `MIN` and `MAX` order values as Jena's `NodeValue.compareAlways` d
 by kind first (IRIs, plain strings, language-tagged strings by tag, numbers, booleans, dates
 and times, durations, other datatypes last), then by value, and equal values by their text, so
 `MAX` of `3.0`, `3` and `3.0e0` is `3.0e0` and a plain string is below every number. `ORDER BY`
-keeps SPARQL's order of terms. A division of decimals or integers, `AVG` and `win:avg` give
+keeps SPARQL's order of terms. Both read a date, time or dateTime without a timezone as UTC
+when it meets one with a timezone (#78), as Jena's F&O comparison does, and order values of the
+same instant by their text: XSD leaves `2020-01-01T03:00:00` and `2020-01-01T02:00:00+02:00`
+unordered, which made a sort of such values panic. `NaN` sorts after every other number. A division of decimals or integers, `AVG` and `win:avg` give
 what Jena's `XSDFuncOp.decimalDivide` gives (#8): the exact quotient when it ends (`1 / 8` is
 `0.125`), else 24 digits after the point rounded half to even (`2 / 3` is
 `0.666666666666666666666667`). Arithmetic and comparisons read a decimal with more than 18
