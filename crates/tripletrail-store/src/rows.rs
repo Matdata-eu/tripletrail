@@ -6,7 +6,65 @@
 //! already tested.
 
 use rustc_hash::FxHashSet;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
+/// A set of resources that many filters hide, shared rather than copied: the targets of an
+/// "own records" rule (`sh:hasValue sg:requestingAgent`), which each agent's filter hides
+/// except for that agent's own (enterprise #7). Made once per store generation, it keeps a
+/// thousand agents' filters from each holding every target.
+#[derive(Debug)]
+pub struct SharedHidden {
+    ids: FxHashSet<u64>,
+    /// A key for `ids`, made once.
+    key: u64,
+}
+
+impl SharedHidden {
+    pub fn new(ids: impl IntoIterator<Item = u64>) -> Self {
+        use std::hash::{Hash, Hasher};
+        let ids: FxHashSet<u64> = ids.into_iter().collect();
+        let mut sorted: Vec<u64> = ids.iter().copied().collect();
+        sorted.sort_unstable();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        sorted.hash(&mut h);
+        Self {
+            ids,
+            key: h.finish(),
+        }
+    }
+
+    pub fn contains(&self, id: u64) -> bool {
+        self.ids.contains(&id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    /// Roughly the heap bytes of the set (8 bytes and a hash slot each).
+    pub fn heap_size(&self) -> usize {
+        self.ids.capacity() * 16
+    }
+}
+
+/// A shared set hidden but for some of its resources ([`RowFilter::hide_shared`]).
+#[derive(Clone, Debug)]
+struct Shared {
+    hidden: Arc<SharedHidden>,
+    shown: FxHashSet<u64>,
+    references: bool,
+}
+
+impl Shared {
+    #[inline]
+    fn hides(&self, id: u64) -> bool {
+        self.hidden.contains(id) && !self.shown.contains(&id)
+    }
+}
 
 /// What a view hides, by term id.
 #[derive(Clone, Debug, Default)]
@@ -25,6 +83,8 @@ pub struct RowFilter {
     /// When set, quads in graphs outside these (the default graph is 0) are hidden: a caller
     /// who reads some graphs only, as the union of all graphs (#204).
     graphs: Option<FxHashSet<u64>>,
+    /// Shared sets hidden but for a few of their resources each ([`RowFilter::hide_shared`]).
+    shared: Vec<Shared>,
     /// [`RowFilter::fingerprint`], made once (#708): a filter is shared by every query on a
     /// store version, and each would otherwise sort and hash the whole hidden set again.
     /// Every change takes it.
@@ -39,6 +99,10 @@ impl PartialEq for RowFilter {
             && self.subject_predicates == other.subject_predicates
             && self.quads == other.quads
             && self.graphs == other.graphs
+            && self.shared.len() == other.shared.len()
+            && self.shared.iter().zip(&other.shared).all(|(a, b)| {
+                a.hidden.key == b.hidden.key && a.shown == b.shown && a.references == b.references
+            })
     }
 }
 
@@ -57,6 +121,43 @@ impl RowFilter {
         if references {
             self.objects.insert(resource.0);
         }
+    }
+
+    /// Hides the resources of `hidden` but those in `shown`, as subjects and, with
+    /// `references`, as objects: what [`RowFilter::hide_resource`] of each would hide, with the
+    /// set shared between filters instead of copied into each (enterprise #7).
+    pub fn hide_shared(
+        &mut self,
+        hidden: Arc<SharedHidden>,
+        shown: impl IntoIterator<Item = u64>,
+        references: bool,
+    ) {
+        let shown: FxHashSet<u64> = shown
+            .into_iter()
+            .filter(|&id| hidden.contains(id))
+            .collect();
+        self.fingerprint.take();
+        if hidden.is_empty() {
+            return;
+        }
+        self.shared.push(Shared {
+            hidden,
+            shown,
+            references,
+        });
+    }
+
+    /// Roughly the heap bytes of this filter's own sets (shared sets not counted).
+    pub fn heap_size(&self) -> usize {
+        (self.subjects.capacity() + self.objects.capacity() + self.predicates.capacity()) * 16
+            + self.subject_predicates.capacity() * 24
+            + self.quads_heap_size()
+            + self.graphs.as_ref().map_or(0, |g| g.capacity() * 16)
+            + self
+                .shared
+                .iter()
+                .map(|s| s.shown.capacity() * 16)
+                .sum::<usize>()
     }
 
     /// Hides `predicate` everywhere.
@@ -97,6 +198,7 @@ impl RowFilter {
         out.predicates.extend(&other.predicates);
         out.subject_predicates.extend(&other.subject_predicates);
         out.quads.extend(&other.quads);
+        out.shared.extend(other.shared.iter().cloned());
         if let Some(graphs) = &other.graphs {
             out.show_only_graphs(graphs.iter().copied());
         }
@@ -129,6 +231,13 @@ impl RowFilter {
         if !self.quads.is_empty() {
             self.quads.retain(|q| !gone(&q[0]));
         }
+        for shared in &mut self.shared {
+            for &r in resources {
+                if shared.hidden.contains(r) {
+                    shared.shown.insert(r);
+                }
+            }
+        }
     }
 
     /// Whether this hides `predicate` on some subject.
@@ -144,6 +253,7 @@ impl RowFilter {
             && self.subject_predicates.is_empty()
             && self.quads.is_empty()
             && self.graphs.is_none()
+            && self.shared.is_empty()
     }
 
     /// Whether the quad `[s, p, o, g]` is hidden.
@@ -156,6 +266,11 @@ impl RowFilter {
                 && self.subject_predicates.contains(&(q[0], q[1])))
             || (!self.quads.is_empty() && self.quads.contains(q))
             || self.graphs.as_ref().is_some_and(|g| !g.contains(&q[3]))
+            || (!self.shared.is_empty()
+                && self
+                    .shared
+                    .iter()
+                    .any(|s| s.hides(q[0]) || (s.references && s.hides(q[2]))))
     }
 
     /// Whether every quad with this subject, predicate or object (any of them `None`) is
@@ -164,11 +279,14 @@ impl RowFilter {
         s.is_some_and(|s| self.subjects.contains(&s))
             || p.is_some_and(|p| self.predicates.contains(&p))
             || o.is_some_and(|o| self.objects.contains(&o))
+            || self.shared.iter().any(|sh| {
+                s.is_some_and(|s| sh.hides(s)) || (sh.references && o.is_some_and(|o| sh.hides(o)))
+            })
     }
 
     /// Whether `resource` is hidden as a subject.
     pub fn hides_resource(&self, resource: crate::TermId) -> bool {
-        self.subjects.contains(&resource.0)
+        self.subjects.contains(&resource.0) || self.shared.iter().any(|s| s.hides(resource.0))
     }
 
     /// A key for what this filter hides, for caches of what a view reads: two filters with
@@ -197,6 +315,11 @@ impl RowFilter {
             g.sort_unstable();
         }
         graphs.hash(&mut h);
+        for shared in &self.shared {
+            let mut shown: Vec<u64> = shared.shown.iter().copied().collect();
+            shown.sort_unstable();
+            (shared.hidden.key, shown, shared.references).hash(&mut h);
+        }
         h.finish()
     }
 }
@@ -232,6 +355,41 @@ mod tests {
             seen.push(kept);
         }
         assert_eq!(asked, fresh);
+    }
+
+    /// A shared set hides its resources but the shown ones, as subjects and with references
+    /// as objects; forgetting a resource shows it; filters sharing the set with other shown
+    /// resources differ, and the same shown resources give equal filters.
+    #[test]
+    fn a_shared_set_hides_all_but_the_shown() {
+        let hidden = Arc::new(SharedHidden::new([1, 2, 3]));
+        let mut a = RowFilter::new();
+        a.hide_shared(Arc::clone(&hidden), [2], true);
+        assert!(a.hides(&[1, 9, 9, 0]));
+        assert!(a.hides(&[9, 9, 3, 0]), "a reference to a hidden resource");
+        assert!(!a.hides(&[2, 9, 9, 0]));
+        assert!(!a.hides(&[9, 9, 2, 0]));
+        assert!(a.hides_all(Some(1), None, None));
+        assert!(a.hides_all(None, None, Some(3)));
+        assert!(!a.hides_all(Some(2), None, None));
+        assert!(a.hides_resource(TermId(3)));
+        assert!(!a.is_empty());
+        let mut b = RowFilter::new();
+        b.hide_shared(Arc::clone(&hidden), [3], true);
+        assert_ne!(a, b);
+        assert_ne!(a.fingerprint(), b.fingerprint());
+        let mut c = RowFilter::new();
+        c.hide_shared(Arc::clone(&hidden), [2], true);
+        assert_eq!(a, c);
+        assert_eq!(a.fingerprint(), c.fingerprint());
+        a.forget(&[1]);
+        assert!(!a.hides(&[1, 9, 9, 0]));
+        assert_ne!(a.fingerprint(), c.fingerprint());
+        let mut plain = RowFilter::new();
+        plain.hide_shared(hidden, [], false);
+        assert!(plain.hides(&[2, 9, 9, 0]));
+        assert!(!plain.hides(&[9, 9, 2, 0]), "references are not hidden");
+        assert!(plain.merged(&RowFilter::new()).hides(&[1, 9, 9, 0]));
     }
 
     /// A merged filter hides what either hides, and a graph restriction hides the quads of

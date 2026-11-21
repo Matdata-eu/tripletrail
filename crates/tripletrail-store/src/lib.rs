@@ -79,7 +79,7 @@ pub fn scan_log(bytes: &[u8], f: impl FnMut(LogEntry) -> bool) -> Result<u64, St
 }
 pub use id::{DateTimeValue, Kind, Numeric, TermId};
 pub use ranks::StringRanks;
-pub use rows::RowFilter;
+pub use rows::{RowFilter, SharedHidden};
 pub use table::{is_table_column, register_table, table_scope};
 pub use update::{
     PrepareWhere, RowGuard, RowsOn, RunWhere, STORED_DEFAULT_GRAPH, UpdateError, WhereRead,
