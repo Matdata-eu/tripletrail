@@ -1646,12 +1646,12 @@ fn style(
 
 /// The base maps the Map page lets viewers switch between: the server's own (`--map-tiles`,
 /// key `map`) first, then each `--map-basemap` (keys `basemap-1`, `basemap-2`…), each with
-/// its `key`, `title`, `tiles` (an XYZ URL template) and `attribution`. The page adds a
-/// grey version of the first and a plain background.
+/// its `key`, `title`, `tiles` (an XYZ URL template), `attribution` and `maxzoom` (the last
+/// zoom of its tiles). The page adds a grey version of the first and a plain background.
 fn basemaps(
     tiles: Option<&str>,
     attribution: Option<&str>,
-    more: &[(String, String, String)],
+    more: &[crate::Basemap],
 ) -> serde_json::Value {
     use serde_json::json;
     let mut list = Vec::new();
@@ -1666,14 +1666,16 @@ fn basemaps(
             "title": title,
             "tiles": tiles,
             "attribution": attribution.unwrap_or_default(),
+            "maxzoom": crate::Basemap::DEFAULT_MAXZOOM,
         }));
     }
-    for (i, (title, tiles, attribution)) in more.iter().enumerate() {
+    for (i, b) in more.iter().enumerate() {
         list.push(json!({
             "key": format!("basemap-{}", i + 1),
-            "title": title,
-            "tiles": tiles,
-            "attribution": attribution,
+            "title": b.title,
+            "tiles": b.tiles,
+            "attribution": b.attribution,
+            "maxzoom": b.maxzoom,
         }));
     }
     list.into()

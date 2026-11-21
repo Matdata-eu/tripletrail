@@ -249,7 +249,7 @@ window.TripleTrailMap = (function () {
     const at = style.layers.findIndex((l) => l.type !== "background");
     style.layers.splice(at < 0 ? style.layers.length : at, 0, basemapLayer(b));
   }
-  const basemapSource = (b) => ({ type: "raster", tiles: [b.tiles], tileSize: 256, maxzoom: 19, attribution: b.attribution || "" });
+  const basemapSource = (b) => ({ type: "raster", tiles: [b.tiles], tileSize: 256, maxzoom: b.maxzoom ?? 19, attribution: b.attribution || "" });
   const basemapLayer = (b) => ({ id: "basemap", type: "raster", source: "basemap", paint: b.grey ? { "raster-saturation": -1, "raster-contrast": -0.1 } : {} });
 
   /** Swaps the base map under the layers on the map (its credit goes with its source). */

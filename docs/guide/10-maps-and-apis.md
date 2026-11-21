@@ -38,12 +38,13 @@ a geometry: here Station and Section.
 The map fetches its background from OpenStreetMap, which then learns where viewers look. For
 private data, or heavy use, start the server with `--map-tiles` naming your own tile server,
 or `--map-tiles none`. `--map-basemap` adds base maps to the menu, each as a title, an XYZ tile
-URL and its credit:
+URL and its credit, and, when the provider's tiles stop before zoom 19, the last zoom it has
+(here 17). Past that zoom the map enlarges the tiles of zoom 17 instead of showing blank ones:
 
 <!-- test: serve -->
 ```sh
 tripletrail serve --load network.ttl \
-  --map-basemap 'Aerial|https://tiles.example.org/aerial/{z}/{x}/{y}.jpg|© Example Aerial'
+  --map-basemap 'Aerial|https://tiles.example.org/aerial/{z}/{x}/{y}.jpg|© Example Aerial|17'
 ```
 
 The map's style lists the base maps the menu offers, and the page adds the grey one and none:
@@ -57,6 +58,19 @@ curl -s http://localhost:7878/ds/tiles/style.json | grep -o '"title":"[^"]*"' | 
 ```text
 "title":"OpenStreetMap"
 "title":"Aerial"
+```
+
+Each comes with the last zoom of its tiles:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/ds/tiles/style.json | grep -o '"maxzoom":1[0-9],"tiles"' | head -2
+```
+
+<!-- test: output -->
+```text
+"maxzoom":19,"tiles"
+"maxzoom":17,"tiles"
 ```
 
 On a large dataset the map's first request waits for TripleTrail to read the data's classes

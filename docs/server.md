@@ -2861,7 +2861,11 @@ the dataset's DASH shapes when it has them (#140).
   their credit, and `--map-tiles none` draws no base map, so the pages fetch nothing from
   elsewhere. `--map-basemap 'TITLE|URL|ATTRIBUTION'` (repeatable; `TRIPLETRAIL_MAP_BASEMAPS`,
   one per line) adds base maps the Map page's **Base map** menu offers besides it, such as
-  aerial photos; the describe pages keep `--map-tiles`. Each viewer's browser fetches the tiles of the place it looks at, so the tile
+  aerial photos; the describe pages keep `--map-tiles`. A fourth field,
+  `TITLE|URL|ATTRIBUTION|MAXZOOM`, gives the last zoom (0 to 24, default 19) the provider has
+  tiles for: past it the map enlarges that zoom's tiles instead of asking for tiles that are
+  not there. The attribution is everything after the URL, so it may hold a `|`, and only a
+  last field that is a number is taken as the zoom. Each viewer's browser fetches the tiles of the place it looks at, so the tile
   server learns where the viewed resources lie: check its usage policy (OpenStreetMap's
   allows light use, not heavy or commercial traffic), and use your own tile server or `none`
   for private data. The page sends only its origin as `Referer` (`strict-origin`), as tile
@@ -3162,7 +3166,8 @@ dataset, the one the web UI's Map page draws:
 - `metadata."tripletrail:basemaps"` lists the base maps the Map page lets viewers switch
   between: the server's `--map-tiles` first (`key` `map`, titled OpenStreetMap for its tiles,
   else Base map), then each `--map-basemap` (`basemap-1`, `basemap-2`…), with `key`, `title`,
-  `tiles` and `attribution`; empty without any.
+  `tiles`, `attribution` and `maxzoom` (the last zoom of its tiles: 19 for `--map-tiles`, the
+  base map's own for the others); empty without any.
 
 The Map page draws this style with buttons of its own: an eye per layer to show or hide it
 (and **Show all**/**Hide all**), a magnifier on a layer that is not drawn at this zoom, which

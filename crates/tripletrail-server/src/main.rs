@@ -1099,14 +1099,16 @@ struct ServeArgs {
     /// default tiles.
     #[arg(long, env = "TRIPLETRAIL_MAP_ATTRIBUTION")]
     map_attribution: Option<String>,
-    /// Another base map the Map page lets viewers switch to, as `TITLE|URL|ATTRIBUTION`: a
-    /// title for its menu, an XYZ raster tile URL template, and its credit (HTML). Repeat it
-    /// for more; in the environment, one per line.
+    /// Another base map the Map page lets viewers switch to, as `TITLE|URL|ATTRIBUTION`, or
+    /// `TITLE|URL|ATTRIBUTION|MAXZOOM`: a title for its menu, an XYZ raster tile URL template,
+    /// its credit (HTML), and the last zoom the provider has tiles for (default 19; the map
+    /// enlarges that zoom's tiles beyond it). Repeat it for more; in the environment, one per
+    /// line.
     #[arg(
         long = "map-basemap",
         env = "TRIPLETRAIL_MAP_BASEMAPS",
         value_delimiter = '\n',
-        value_name = "TITLE|URL|ATTRIBUTION"
+        value_name = "TITLE|URL|ATTRIBUTION[|MAXZOOM]"
     )]
     map_basemaps: Vec<String>,
     /// Write one JSON line per request to standard output (time, method, path, dataset,
@@ -3569,23 +3571,48 @@ fn run() -> Result<()> {
     }
 }
 
-/// The `--map-basemap` values as (title, tile URL, attribution); empty lines are skipped.
-fn read_basemaps(values: &[String]) -> Result<Vec<(String, String, String)>> {
+/// The `--map-basemap` values; empty lines are skipped. The attribution is the rest of the
+/// value after the URL, so it may hold a `|` itself; a last field that is a number is the
+/// maxzoom.
+fn read_basemaps(values: &[String]) -> Result<Vec<tripletrail_server::Basemap>> {
     let mut basemaps = Vec::new();
     for value in values.iter().map(|v| v.trim()).filter(|v| !v.is_empty()) {
         let mut parts = value.splitn(3, '|').map(str::trim);
-        let (title, url, attribution) = (
+        let (title, url, mut attribution) = (
             parts.next().unwrap_or_default(),
             parts.next().unwrap_or_default(),
             parts.next().unwrap_or_default(),
         );
         if title.is_empty() || !(url.starts_with("https://") || url.starts_with("http://")) {
             return Err(format!(
-                "--map-basemap takes TITLE|URL|ATTRIBUTION with an http(s) tile URL, not {value:?}"
+                "--map-basemap takes TITLE|URL|ATTRIBUTION[|MAXZOOM] with an http(s) tile URL, \
+                 not {value:?}"
             )
             .into());
         }
-        basemaps.push((title.to_owned(), url.to_owned(), attribution.to_owned()));
+        let mut maxzoom = tripletrail_server::Basemap::DEFAULT_MAXZOOM;
+        if let Some((credit, last)) = attribution.rsplit_once('|')
+            && let last = last.trim()
+            && !last.is_empty()
+            && last.bytes().all(|b| b.is_ascii_digit())
+        {
+            maxzoom = match last.parse() {
+                Ok(z @ 0..=24) => z,
+                _ => {
+                    return Err(format!(
+                        "--map-basemap: MAXZOOM is a zoom from 0 to 24, not {last:?} in {value:?}"
+                    )
+                    .into());
+                }
+            };
+            attribution = credit.trim();
+        }
+        basemaps.push(tripletrail_server::Basemap {
+            title: title.to_owned(),
+            tiles: url.to_owned(),
+            attribution: attribution.to_owned(),
+            maxzoom,
+        });
     }
     Ok(basemaps)
 }
@@ -3915,8 +3942,41 @@ fn audit_report_text(report: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, lookup_joins_from_env, parse_size};
+    use super::{Cli, Command, lookup_joins_from_env, parse_size, read_basemaps};
     use clap::Parser;
+
+    #[test]
+    fn a_basemap_may_name_its_last_zoom() {
+        let one = |v: &str| {
+            let b = read_basemaps(&[v.to_owned()]).unwrap().remove(0);
+            (b.title, b.tiles, b.attribution, b.maxzoom)
+        };
+        let url = "https://tiles.example.org/{z}/{x}/{y}.png";
+        let s = |x: &str| x.to_owned();
+        assert_eq!(
+            one(&format!("Aerial|{url}|© Example")),
+            (s("Aerial"), s(url), s("© Example"), 19)
+        );
+        assert_eq!(
+            one(&format!("Aerial | {url} | © Example | 17 ")),
+            (s("Aerial"), s(url), s("© Example"), 17)
+        );
+        // Without a credit, and a credit that holds a `|` of its own.
+        assert_eq!(one(&format!("Aerial|{url}||18")).2, "");
+        assert_eq!(one(&format!("Aerial|{url}||18")).3, 18);
+        assert_eq!(
+            one(&format!("Aerial|{url}|© A | © B")),
+            (s("Aerial"), s(url), s("© A | © B"), 19)
+        );
+        assert_eq!(one(&format!("Aerial|{url}|© A | © B|16")).2, "© A | © B");
+        for bad in [
+            format!("Aerial|{url}|© Example|25"),
+            format!("Aerial|{url}|x|999"),
+        ] {
+            let e = read_basemaps(&[bad]).unwrap_err().to_string();
+            assert!(e.contains("MAXZOOM is a zoom from 0 to 24"), "{e}");
+        }
+    }
 
     fn lookup_joins(args: &[&str]) -> Result<bool, clap::Error> {
         let mut argv = vec!["tripletrail", "serve"];
