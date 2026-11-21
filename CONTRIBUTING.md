@@ -69,8 +69,8 @@ texts it ships, written by `.github/scripts/third-party-licenses.py` (run it loc
 `cargo fetch --locked` to see the list). It publishes them as a GitHub release with `SHA256SUMS`, and
 the notes are the CHANGELOG section followed by the commits since the last tag, grouped by
 type. Starting the workflow by hand does a dry run that keeps everything as a workflow
-artifact. "Docker image" (run on the tag) publishes the image, and "Helm chart" with
-"publish" ticked publishes the chart.
+artifact. The tag also starts "Docker image", which publishes the image as `1.2.3`, `1.2` and
+`latest`, and "Helm chart" with "publish" ticked publishes the chart.
 
 ## Security issues
 

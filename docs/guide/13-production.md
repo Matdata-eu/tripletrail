@@ -406,6 +406,25 @@ On Kubernetes, the Helm chart in [`deploy/helm/tripletrail`](../../deploy/helm/t
 sets up the volume, secrets, probes, an Ingress and a ServiceMonitor. See
 [Kubernetes](../server.md#kubernetes).
 
+### Ship the command in another image
+
+Another image can carry the `tripletrail` command, to validate or convert data in a worker,
+by copying it out of the published image. The binary is `/usr/local/bin/tripletrail`, and
+`/usr/share/doc/tripletrail` holds `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.md`, which
+go with it:
+
+```dockerfile
+FROM debian:bookworm-slim
+COPY --from=ghcr.io/matdata-eu/tripletrail:0.1.0 /usr/local/bin/tripletrail /usr/local/bin/tripletrail
+COPY --from=ghcr.io/matdata-eu/tripletrail:0.1.0 /usr/share/doc/tripletrail /usr/share/doc/tripletrail
+```
+
+Pin a version tag rather than `latest`, so a rebuild gets the same command. The image is
+published for linux/amd64 and linux/arm64, and `COPY --from` takes the one for the platform
+being built, so a multi-platform build needs no emulation for this step. The binary is built
+on Debian 12 and needs glibc 2.36 or newer (Debian 12, Ubuntu 24.04 and later, not Alpine).
+Each release also has the binaries as archives on its GitHub release page.
+
 ## The enterprise edition
 
 TripleTrail Enterprise is the same server with a few features for larger organisations, sold
