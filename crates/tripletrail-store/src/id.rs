@@ -194,6 +194,18 @@ impl TermId {
         Some(Self::new(kind, payload))
     }
 
+    /// The inline id of the `xsd:integer` `value`, as the store gives that literal, if it
+    /// has one.
+    pub fn inline_integer(value: i64) -> Option<Self> {
+        Self::integer(value)
+    }
+
+    /// The inline id of the `xsd:double` (`double`) or `xsd:decimal` literal with this
+    /// lexical form, as the store gives that literal, if it has one.
+    pub fn inline_number(double: bool, lexical: &str) -> Option<Self> {
+        Self::number(if double { Kind::Double } else { Kind::Decimal }, lexical)
+    }
+
     /// The sign, the digits as an integer and the number of fraction digits of an inline
     /// number: the lexical form without its decimal point.
     fn number_parts(self) -> (bool, u64, u32) {

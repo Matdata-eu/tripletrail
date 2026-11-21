@@ -80,6 +80,25 @@ pub(crate) fn literal(v: Value) -> Option<Literal> {
     })
 }
 
+/// The inline id of the literal [`literal`] gives for `v`, if the store inlines it: the id
+/// it gives that literal, made without the literal.
+pub(crate) fn inline_id(v: Value) -> Option<TermId> {
+    match v {
+        Value::Integer(i) => TermId::inline_integer(i),
+        Value::Decimal(d) => TermId::inline_number(false, &decimal_lexical(d)),
+        Value::Double(d) if d.is_finite() => {
+            use std::io::Write;
+            // `oxsdatatypes::Double` writes a finite double as `f64` does.
+            let mut buf = [0_u8; 32];
+            let mut w = &mut buf[..];
+            write!(w, "{d}").ok()?;
+            let len = 32 - w.len();
+            TermId::inline_number(true, std::str::from_utf8(&buf[..len]).ok()?)
+        }
+        _ => None,
+    }
+}
+
 /// Compiles `e` to a kernel over the rows of `t`, if every part of it is decided on ids.
 pub(crate) fn compile<'k>(
     e: &Expression,
@@ -703,6 +722,51 @@ pub(crate) fn comparison<'k>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_ids_are_the_ids_of_the_literals() {
+        let snapshot = tripletrail_store::Store::new().snapshot();
+        let dec = |s: &str| {
+            let v: oxsdatatypes::Decimal = s.parse().unwrap();
+            Value::Decimal(i128::from_be_bytes(v.to_be_bytes()))
+        };
+        let mut values = vec![
+            Value::Integer(0),
+            Value::Integer(-7),
+            Value::Integer(i64::MAX),
+            Value::Integer(1 << 58),
+            dec("2.5"),
+            dec("-0.000000000000000001"),
+            dec("12345678901234567.5"),
+            dec("3"),
+        ];
+        for d in [
+            0.0,
+            -0.0,
+            2.5,
+            6887.3684,
+            0.1 + 0.2,
+            1e-7,
+            1e21,
+            1e300,
+            -123.456,
+            f64::NAN,
+            f64::INFINITY,
+            5e-324,
+        ] {
+            values.push(Value::Double(d));
+        }
+        for v in values {
+            let stored = literal(v).map(|l| snapshot.id_of(l.into()));
+            match inline_id(v) {
+                Some(id) => assert_eq!(Some(id), stored, "{v:?}"),
+                None => assert!(
+                    stored.is_none_or(|id| id.kind() == Kind::Ephemeral),
+                    "{v:?} is inline: {stored:?}"
+                ),
+            }
+        }
+    }
 
     #[test]
     fn decimal_products_are_exact() {

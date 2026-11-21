@@ -286,6 +286,11 @@ impl Eval<'_> {
                     }
                     match kernel(t.row(r))? {
                         Ok(v) => {
+                            // An inline number is its id: no lookup, no literal.
+                            if let Some(id) = crate::idvalue::inline_id(v) {
+                                column.push(id);
+                                continue;
+                            }
                             let key = value_key(v)?;
                             let id = match ids.get(&key) {
                                 Some(&id) => id,

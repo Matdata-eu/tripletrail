@@ -154,8 +154,8 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   other reader iterates the solutions as usual. `BIND` and `SELECT (expr AS ?v)` are a
   column of the table too (`idtree::Eval::extend`): a copy of a column, a constant, or a
   number the expression kernels above compute, as the literal the evaluator writes (decimals
-  in Jena's form, doubles as `oxsdatatypes` writes them), each distinct value given its id
-  once; an error leaves the cell unbound. A `FILTER` on such a value is evaluated on the
+  in Jena's form, doubles as `oxsdatatypes` writes them): a number the store inlines is made
+  straight into its id, and any other value is given its id once; an error leaves the cell unbound. A `FILTER` on such a value is evaluated on the
   expression itself, under the `BIND` (`BIND(?a * ?q AS ?g) FILTER(?g > 400000)` on 133k
   orders 222 → 49 ms; a select expression over a join 197 → 59 ms). A computed double that
   doesn't fit an inline id gets one made up for the query, which doesn't order, so an
