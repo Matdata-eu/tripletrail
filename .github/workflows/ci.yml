@@ -148,6 +148,9 @@ jobs:
       - name: JavaScript client
         working-directory: clients/js
         run: node --test
+      # The geometry of the Map page's tools: lengths, areas, bearings, WKT (#33).
+      - name: Map tools
+        run: node --test "crates/tripletrail-server/ui/test/*.test.js"
       - name: Upload the conformance reports
         if: always()
         uses: actions/upload-artifact@v4

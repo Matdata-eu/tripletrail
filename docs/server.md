@@ -3181,7 +3181,15 @@ The Map page draws this style with buttons of its own: an eye per layer to show 
 zooms in to its `minZoom`, and a funnel that opens its filters, with the number of filters
 on. On the map, under the zoom buttons: **Zoom to all the data** (the collections' extents
 from the OGC API), the **Base map** menu (the base maps above, the first also in grey, and
-none), and **Fullscreen**, which takes the layer list and the detail panel along. The feature
+none), **Tools** and **Fullscreen**, which takes the layer list and the detail panel along.
+**Tools** (`/$/ui/map-tools.js`, #33) draws an area every layer is filtered by (a rectangle
+or polygon as a `POLYGON`, a circle as its centre with `rel=dwithin` and its radius as
+`dist`, a corridor as a `LINESTRING` with `rel=dwithin`, or the geometry of the feature open
+in the detail panel by its IRI, with **Filter by it**), with a relation picked from those of
+`rel`; the area goes into the page's link and into the tiles', facets' and OGC API links'
+requests as `area`, `rel` and `dist` ([vector tiles](#vector-tiles)). It also
+measures lengths (each leg's length and bearing) and areas with perimeter, on the sphere, and
+shows or copies the coordinates under the pointer. The feature
 open in the detail panel is outlined: an area with a light fill and an edge, a line with a
 light band and an edge on both sides, a point with a ring. The base map picked goes in the
 page's link (`basemap={key}`, left out for the default) and is remembered in the browser for
