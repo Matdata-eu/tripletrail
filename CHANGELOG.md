@@ -7,6 +7,10 @@ versions may change the store format and the API; the release notes say how to u
 
 ## [Unreleased]
 
+### Added
+
+- Facade-X reads tar archives compressed with bzip2 (`.tar.bz2`, `.tbz2`, `application/x-bzip-compressed-tar`), as listings and with `from-archive`, as it already did gzip (#20). The decoder is the pure-Rust `bzip2-rs` crate (MIT or Apache-2.0). See [the guide](docs/guide/07-lifting.md#files-inside-an-archive).
+
 ### Fixed
 
 - Query page: MatGUI's **Explain** tab of the results showed no plan and said "No engine recognised for this endpoint", as it knows only QLever, GraphDB, Stardog, Blazegraph and Neptune. For this server's own endpoints it now asks `/{ds}/explain` (the Engine list reads "Detect (TripleTrail)") and draws the plan as a tree with the rows and time of each step. See [the guide](docs/guide/02-first-steps.md#see-how-a-query-ran).

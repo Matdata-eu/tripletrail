@@ -11,7 +11,8 @@ They are copied unchanged from the test resources of its modules:
 - `yaml/`: `sparql-anything-yaml/src/test/resources` (`Foo`, `Map`, `DuplicateKeys` `.yaml`
   with their `.ttl`, and `test.yaml`).
 - `archive/`: `sparql-anything-archive/src/test/resources` (`test.tar`, `test.tgz`,
-  `test.zip`, and the folder `test` as `folder`).
+  `test.zip`, and the folder `test` as `folder`). `test.tar.bz2` and `test.tbz2` are not
+  from SPARQL Anything: they are its `test.tar` compressed here with `bzip2 -9`.
 - `markdown/`: `sparql-anything-markdown/src/test/resources` (every `.md` with its `.ttl`).
 - `html/`: `sparql-anything-html/src/test/resources` (`HTML1`, `HTML2`, `DIRTY1`, `Base`
   `.html` with their `.ttl`, `BN.html` with `BN.nq`, and `XML.xml` with `XML.ttl`).
