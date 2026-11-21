@@ -442,6 +442,11 @@ curl -s http://localhost:7878/\$/sso
 "signedIn":null
 ```
 
+What to set up at the provider, step by step for Keycloak and for Microsoft Entra ID (the
+clients, the audience, and the claims that carry groups), is in the server reference:
+[setting up Keycloak](../server.md#setting-up-keycloak) and
+[setting up Entra ID](../server.md#setting-up-microsoft-entra-id).
+
 When someone gets other groups than you expect, a server admin sends their token to the
 access explain page in the header `X-TripleTrail-Explain-Token`: the answer is what that person
 may do, and `token.groupClaims` says which claim gave each group.
