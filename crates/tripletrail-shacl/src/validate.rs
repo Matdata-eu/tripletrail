@@ -46,6 +46,9 @@ type SparqlRow = (Option<Term>, Option<Path>, Vec<(String, Term)>);
 pub struct Validator<'a> {
     shapes: &'a Shapes,
     data: &'a dyn DataGraph,
+    /// Where targets find their focus nodes, when not the whole data graph (#91): the rest of
+    /// the data graph is read (`sh:class`, SPARQL constraints, paths) but gives no focus nodes.
+    focus_graph: Option<&'a dyn DataGraph>,
     evaluator: &'a dyn Evaluator,
     shapes_graph: Option<(&'a NamedNode, &'a dyn DataGraph)>,
     /// With rules: the data graph is the evaluator's data graph and these inferred triples
@@ -69,6 +72,7 @@ impl<'a> Validator<'a> {
         Self {
             shapes,
             data,
+            focus_graph: None,
             evaluator: &PLAIN,
             shapes_graph: None,
             inferred: None,
@@ -83,6 +87,17 @@ impl<'a> Validator<'a> {
     /// Runs SHACL-SPARQL queries with evaluators made by `evaluator` (with custom functions).
     pub fn with_evaluator(mut self, evaluator: &'a dyn Evaluator) -> Self {
         self.evaluator = evaluator;
+        self
+    }
+
+    /// Takes the focus nodes of the shapes' targets from `graph`, a part of the data graph,
+    /// instead of the whole data graph (#91), so that the rest (vocabularies, code lists read
+    /// by `sh:class` or SPARQL constraints) is read but not validated: class targets are the
+    /// instances `graph` types (with the subclasses of the whole data graph),
+    /// `sh:targetSubjectsOf` and `sh:targetObjectsOf` its triples, and SPARQL targets the
+    /// nodes it has triples about. `sh:targetNode` is kept as given.
+    pub fn with_focus_graph(mut self, graph: &'a dyn DataGraph) -> Self {
+        self.focus_graph = Some(graph);
         self
     }
 
@@ -372,13 +387,18 @@ impl<'a> Validator<'a> {
     /// per solution of a SELECT check (`?value`, or the focus node of a node shape; `?path`
     /// if it is an IRI, or else the shape's path), per failing value node of an ASK validator.
     /// They come from the query that checked the focus node; a focus node that failed
-    /// without any (a query error) gets one result.
+    /// without any (a query error) gets one result. Solutions that would give the same result
+    /// (the same value, path and message bindings) give it once (#91), as pySHACL does: a query
+    /// that joins through several paths returns a row per path.
     fn sparql_results(&self, k: u32, focus: &Term) -> Vec<SparqlRow> {
         if !self.sparql.borrow().contains_key(&(k, focus.clone())) {
             self.run_check(k, &[focus]);
         }
         match self.sparql_results.borrow().get(&(k, focus.clone())) {
-            Some(rows) if !rows.is_empty() => rows.clone(),
+            Some(rows) if !rows.is_empty() => {
+                let mut seen = FxHashSet::default();
+                rows.iter().filter(|r| seen.insert(*r)).cloned().collect()
+            }
             _ => {
                 let check = &self.shapes.checks[k as usize];
                 let shape = self.shapes.get(check.shape);
@@ -412,25 +432,44 @@ impl<'a> Validator<'a> {
     /// The focus nodes of a shape's targets in the data graph.
     pub fn focus_nodes(&self, shape: ShapeId) -> Vec<Term> {
         let mut out = Vec::new();
+        let g = self.focus_graph.unwrap_or(self.data);
         for t in &self.shapes.get(shape).targets {
             match t {
                 Target::Node(n) => out.push(n.clone()),
                 Target::Class(c) => {
                     for class in self.subclasses(c) {
-                        self.data.subjects(rdf::TYPE, &class, &mut out);
+                        g.subjects(rdf::TYPE, &class, &mut out);
                     }
                 }
                 Target::SubjectsOf(p) => {
                     let mut pairs = Vec::new();
-                    self.data.with_predicate(p.as_ref(), &mut pairs);
+                    g.with_predicate(p.as_ref(), &mut pairs);
                     out.extend(pairs.into_iter().map(|(s, _)| s));
                 }
                 Target::ObjectsOf(p) => {
                     let mut pairs = Vec::new();
-                    self.data.with_predicate(p.as_ref(), &mut pairs);
+                    g.with_predicate(p.as_ref(), &mut pairs);
                     out.extend(pairs.into_iter().map(|(_, o)| o));
                 }
-                Target::Sparql(i) => out.extend(self.sparql_targets(*i).iter().cloned()),
+                Target::Sparql(i) => {
+                    let found = self.sparql_targets(*i);
+                    match self.focus_graph {
+                        None => out.extend(found.iter().cloned()),
+                        Some(g) => {
+                            let mut about = Vec::new();
+                            out.extend(
+                                found
+                                    .iter()
+                                    .filter(|n| {
+                                        about.clear();
+                                        g.outgoing(n, &mut about);
+                                        !about.is_empty()
+                                    })
+                                    .cloned(),
+                            );
+                        }
+                    }
+                }
             }
         }
         dedup(&mut out);

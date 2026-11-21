@@ -194,16 +194,47 @@ impl Engine {
         counts: bool,
         emit: &mut dyn FnMut(ValidationResult<'_>),
     ) -> Result<Vec<ShapeCount>, Error> {
+        self.validate_counted_with(shapes, data, &[], counts, emit)
+    }
+
+    /// As [`Engine::validate_counted`], with lookup graphs (#91): the named graphs `lookups`
+    /// are read with `data` (by `sh:class`, paths and SPARQL constraints, as one data graph)
+    /// but give no focus nodes, so vocabularies and code lists the data refers to are not
+    /// validated themselves (see [`Validator::with_focus_graph`]).
+    pub fn validate_counted_with(
+        &self,
+        shapes: &NamedNode,
+        data: GraphNameRef<'_>,
+        lookups: &[NamedNode],
+        counts: bool,
+        emit: &mut dyn FnMut(ValidationResult<'_>),
+    ) -> Result<Vec<ShapeCount>, Error> {
         // The shapes read the store through its graphs, not through queries: the union default
         // graph is all graphs only in a copy.
         if data.is_default_graph() && self.union_default_graph() {
+            if !lookups.is_empty() {
+                return Err(Error::Request(
+                    "lookup graphs need a named data graph when the default graph is the \
+                     union of the graphs"
+                        .into(),
+                ));
+            }
             return self
                 .scratch_copy(shapes, data)?
                 .validate_counted(shapes, data, counts, emit);
         }
         let shapes_graph = StoreGraph::new(self.store(), shapes.as_ref().into());
         let engine = self.with_shape_functions(shapes)?;
-        engine.validate_on(shapes, &shapes_graph, self, data, counts, None, emit)
+        engine.validate_on(
+            shapes,
+            &shapes_graph,
+            self,
+            data,
+            lookups,
+            counts,
+            None,
+            emit,
+        )
     }
 
     /// Validates graph `data` of `store` (this engine, with the shapes' functions) against
@@ -216,6 +247,7 @@ impl Engine {
         shapes_graph: &dyn DataGraph,
         store: &Engine,
         data: GraphNameRef<'_>,
+        lookups: &[NamedNode],
         counts: bool,
         focus: Option<&oxigraph::model::Term>,
         emit: &mut dyn FnMut(ValidationResult<'_>),
@@ -226,7 +258,20 @@ impl Engine {
         // new terms go on meanwhile (#942), and the validation does not see them. On a large
         // production knowledge graph this costs about 5% of the run.
         let data = StoreGraph::new(store.store(), data);
-        let g: &dyn DataGraph = &data;
+        let lookups: Vec<StoreGraph> = lookups
+            .iter()
+            .map(|l| StoreGraph::new(store.store(), l.as_ref().into()))
+            .collect();
+        let with_lookups = Union(
+            std::iter::once(&data as &dyn DataGraph)
+                .chain(lookups.iter().map(|l| l as &dyn DataGraph))
+                .collect(),
+        );
+        let g: &dyn DataGraph = if lookups.is_empty() {
+            &data
+        } else {
+            &with_lookups
+        };
         let ev = Ev::new(self);
         let inferred = if compiled.has_rules() {
             Inference::new(&compiled, g)
@@ -246,6 +291,13 @@ impl Engine {
         let v = Validator::new(&compiled, g)
             .with_evaluator(&ev)
             .with_shapes_graph(shapes, shapes_graph);
+        // With lookups, focus nodes come from the data graph (and what rules infer).
+        let focus_graph = Union(vec![&data, &inferred]);
+        let v = match (lookups.is_empty(), inferred.is_empty()) {
+            (true, _) => v,
+            (false, true) => v.with_focus_graph(&data),
+            (false, false) => v.with_focus_graph(&focus_graph),
+        };
         match focus {
             None => v.report(emit),
             Some(node) => {
@@ -292,7 +344,7 @@ impl Engine {
             .with_functions_from(shapes.iter().map(|t| t.into_owned()))
             .map_err(|e| Error::Request(e.to_string()))?;
         let mut writer = ReportWriter::new();
-        engine.validate_on(&name, shapes, self, data, false, focus, &mut |r| {
+        engine.validate_on(&name, shapes, self, data, &[], false, focus, &mut |r| {
             writer.result(&r, sink)
         })?;
         Ok(writer.finish(sink))
@@ -660,9 +712,23 @@ impl Engine {
         statistics: bool,
         sink: &mut dyn FnMut(Triple),
     ) -> Result<bool, Error> {
+        self.validate_report_with(shapes, data, &[], statistics, sink)
+    }
+
+    /// As [`Engine::validate_report`], with lookup graphs (see
+    /// [`Engine::validate_counted_with`]).
+    pub fn validate_report_with(
+        &self,
+        shapes: &NamedNode,
+        data: GraphNameRef<'_>,
+        lookups: &[NamedNode],
+        statistics: bool,
+        sink: &mut dyn FnMut(Triple),
+    ) -> Result<bool, Error> {
         let mut writer = ReportWriter::new();
-        let counts =
-            self.validate_counted(shapes, data, statistics, &mut |r| writer.result(&r, sink))?;
+        let counts = self.validate_counted_with(shapes, data, lookups, statistics, &mut |r| {
+            writer.result(&r, sink)
+        })?;
         if statistics {
             writer.statistics(&counts, sink);
         }

@@ -394,6 +394,15 @@ enum Command {
         /// Shapes files.
         #[arg(long = "shapes")]
         shapes: Vec<PathBuf>,
+        /// Lookup files: read with the data (by `sh:class`, paths and SPARQL constraints) but
+        /// not validated, such as the vocabularies and code lists the data refers to. Loaded
+        /// into a graph of their own; focus nodes come from the `--data` files only.
+        #[arg(long = "lookup")]
+        lookup: Vec<PathBuf>,
+        /// Named graphs of the on-disk dataset to read as lookups (with `--location`), as
+        /// `--lookup` files are.
+        #[arg(long = "lookup-graph")]
+        lookup_graph: Vec<String>,
         /// Directory of an on-disk dataset to validate instead of files.
         #[arg(long)]
         location: Option<PathBuf>,
@@ -1567,10 +1576,15 @@ fn load_file_with(
 /// The graph shapes files are loaded into for `validate`.
 const SHAPES_GRAPH: &str = "urn:x-tripletrail:shapes";
 
+/// The graph `--lookup` files are loaded into for `validate`.
+const LOOKUP_GRAPH: &str = "urn:x-tripletrail:lookup";
+
 #[allow(clippy::too_many_arguments)]
 fn validate(
     data: &[PathBuf],
     shapes: &[PathBuf],
+    lookup: &[PathBuf],
+    lookup_graphs: &[String],
     location: Option<&Path>,
     store: StoreKind,
     dataset: &str,
@@ -1587,6 +1601,16 @@ fn validate(
     }
     for file in shapes {
         load_file(&engine, file, Some(shapes_graph.unwrap_or(SHAPES_GRAPH)))?;
+    }
+    for file in lookup {
+        load_file(&engine, file, Some(LOOKUP_GRAPH))?;
+    }
+    let mut lookups = lookup_graphs
+        .iter()
+        .map(|g| NamedNode::new(g.as_str()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if !lookup.is_empty() {
+        lookups.push(NamedNode::new_unchecked(LOOKUP_GRAPH));
     }
     let shapes = NamedNode::new(shapes_graph.unwrap_or(SHAPES_GRAPH))?;
     let data = data_graph.map(NamedNode::new).transpose()?;
@@ -1612,7 +1636,7 @@ fn validate(
     let mut error = None;
     let mut results = 0usize;
     let started = std::time::Instant::now();
-    let conforms = engine.validate_report(&shapes, data, stats, &mut |t| {
+    let conforms = engine.validate_report_with(&shapes, data, &lookups, stats, &mut |t| {
         if t.predicate.as_str() == "http://www.w3.org/ns/shacl#result" {
             results += 1;
         }
@@ -3337,6 +3361,8 @@ fn run() -> Result<()> {
         Command::Validate {
             data,
             shapes,
+            lookup,
+            lookup_graph,
             location,
             store,
             dataset,
@@ -3349,11 +3375,15 @@ fn run() -> Result<()> {
                 None if shapes.is_empty() => {
                     return Err("give --shapes files, or --location with --shapes-graph".into());
                 }
+                None if !lookup_graph.is_empty() => {
+                    return Err("--lookup-graph is for --location; give --lookup files".into());
+                }
                 // Files would be loaded into the dataset on disk.
-                Some(_) if !data.is_empty() || !shapes.is_empty() => {
+                Some(_) if !data.is_empty() || !shapes.is_empty() || !lookup.is_empty() => {
                     return Err(
-                        "--data and --shapes files are for validating without --location; \
-                         with --location, give --shapes-graph (and --data-graph)"
+                        "--data, --shapes and --lookup files are for validating without \
+                         --location; with --location, give --shapes-graph (and --data-graph, \
+                         --lookup-graph)"
                             .into(),
                     );
                 }
@@ -3365,6 +3395,8 @@ fn run() -> Result<()> {
             let conforms = validate(
                 &data,
                 &shapes,
+                &lookup,
+                &lookup_graph,
                 location.as_deref(),
                 store,
                 &dataset,
