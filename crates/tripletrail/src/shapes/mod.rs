@@ -116,10 +116,12 @@ pub enum Reader {
     RestApi,
     GraphQl,
     Ai,
+    /// Forms that show and edit one record (Records, #80).
+    Forms,
 }
 
 impl Reader {
-    pub const ALL: [Reader; 8] = [
+    pub const ALL: [Reader; 9] = [
         Reader::Validation,
         Reader::Map,
         Reader::Describe,
@@ -128,6 +130,7 @@ impl Reader {
         Reader::RestApi,
         Reader::GraphQl,
         Reader::Ai,
+        Reader::Forms,
     ];
 
     /// Its name in APIs (`reader=map`), its `skos:notation`.
@@ -141,6 +144,7 @@ impl Reader {
             Reader::RestApi => "rest-api",
             Reader::GraphQl => "graphql",
             Reader::Ai => "ai",
+            Reader::Forms => "forms",
         }
     }
 
@@ -159,6 +163,7 @@ impl Reader {
             Reader::RestApi => "Reader-RestApi",
             Reader::GraphQl => "Reader-GraphQL",
             Reader::Ai => "Reader-Ai",
+            Reader::Forms => "Reader-Forms",
         })
     }
 }

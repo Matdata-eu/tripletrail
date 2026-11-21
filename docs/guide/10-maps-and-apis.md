@@ -1256,6 +1256,32 @@ The shapes are not valid:
 <https://example.org/rail#WrongShape>: the facet "speedClass"'s tts:select binds no ?value
 ```
 
+### Keep a property from the record forms
+
+The forms that show and edit one record read the shapes as a reader of their own,
+`tts:Reader-Forms` (`forms`), so `tts:hiddenFrom` and `tts:onlyFor` work on them as on the map
+or describe pages. The speed class above is only for the map, so the forms leave it out, and a
+property hidden from the forms stays on the map:
+
+<!-- test: run -->
+```sh
+for reader in map forms; do
+  curl -s "http://localhost:7878/\$/datasets/ds/shapes?reader=$reader" | grep -q speedClass \
+    && echo "$reader: speed class" || echo "$reader: no speed class"
+done
+```
+
+<!-- test: output -->
+```text
+map: speed class
+forms: no speed class
+```
+
+The forms draw each field with the editor its shape names (`dash:editor`, such as
+`dash:TextAreaEditor` or `dash:EnumSelectEditor`), or the one that fits its values: a check
+box for a boolean, a list for `sh:in`, a date picker for a date. The web UI's pages share one
+renderer for this, `/$/ui/forms.js`; see [the reference](../server.md#shapes).
+
 ### Show data quality on the map
 
 A SHACL validation report of the data ([chapter 6](06-validation-and-reasoning.md)), stored in

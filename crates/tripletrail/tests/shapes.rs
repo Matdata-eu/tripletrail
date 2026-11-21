@@ -594,3 +594,44 @@ fn the_map_leaves_out_umbrella_classes_and_geometries() {
     assert!(off("Device").is_empty());
     assert!(off("Signal").is_empty());
 }
+
+/// #80: forms are a reader of their own, so `tts:hiddenFrom` and `tts:onlyFor` keep a shape or
+/// a property from the record forms and nowhere else.
+#[test]
+fn forms_are_a_reader() {
+    assert_eq!(Reader::from_name("forms"), Some(Reader::Forms));
+    assert_eq!(
+        Reader::Forms.iri().as_str(),
+        "http://w3id.org/tripletrail/shapes#Reader-Forms"
+    );
+    let set = parse(
+        "@prefix ex: <http://example.org/> .\n\
+         @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+         @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+         ex:SignalShape a sh:NodeShape ; sh:targetClass ex:Signal ;\n\
+           sh:property [ sh:path ex:km ] , [ sh:path ex:checksum ; tts:hiddenFrom tts:Reader-Forms ] ,\n\
+             [ sh:path ex:note ; tts:onlyFor tts:Reader-Forms ] .\n",
+    );
+    let signal = iri(&format!("{EX}SignalShape"));
+    let paths = |g: &Graph| -> Vec<String> {
+        let mut paths: Vec<String> = g
+            .objects_for_subject_predicate(&signal, &iri(&format!("{SH}property")))
+            .filter_map(|p| match p {
+                TermRef::NamedNode(n) => Some(NamedOrBlankNodeRef::from(n)),
+                TermRef::BlankNode(b) => Some(b.into()),
+                _ => None,
+            })
+            .filter_map(|p| g.object_for_subject_predicate(p, &iri(&format!("{SH}path"))))
+            .map(|p| match p {
+                TermRef::NamedNode(n) => n.as_str().trim_start_matches(EX).to_owned(),
+                _ => "(list)".to_owned(),
+            })
+            .collect();
+        paths.sort();
+        paths
+    };
+    let forms = shapes::project(&set, Some(Reader::Forms), &[]);
+    assert_eq!(paths(&forms), ["km", "note"]);
+    let describe = shapes::project(&set, Some(Reader::Describe), &[]);
+    assert_eq!(paths(&describe), ["checksum", "km"]);
+}
