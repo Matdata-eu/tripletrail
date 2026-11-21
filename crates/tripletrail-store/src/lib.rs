@@ -3285,6 +3285,51 @@ impl Snapshot {
         Some(found)
     }
 
+    /// What reading the RDF merge of `graphs` (the default graph is id 0) as the union of
+    /// all graphs hides: every quad of another graph, and the copies of a triple in those
+    /// graphs after the first that holds it, as [`Snapshot::union_copies`] does for all
+    /// graphs (#204). Made from the copies over all graphs: only a triple held by several
+    /// graphs can have copies within some of them. `None` as for [`Snapshot::union_copies`].
+    pub fn copies_within(
+        &self,
+        graphs: &[TermId],
+        scan: bool,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<Arc<RowFilter>> {
+        let all = self.union_copies(scan, cancelled)?;
+        let shown: rustc_hash::FxHashSet<u64> = graphs.iter().map(|g| g.0).collect();
+        let mut filter = RowFilter::new();
+        filter.show_only_graphs(shown.iter().copied());
+        if let Some(all) = all {
+            let mut triples: Vec<[u64; 3]> = all.quad_list().map(|q| [q[0], q[1], q[2]]).collect();
+            triples.sort_unstable();
+            triples.dedup();
+            for [s, p, o] in triples {
+                if cancelled() {
+                    return None;
+                }
+                // In SPOG order: the lowest graph first.
+                let mut first = true;
+                for q in self.quads.scan(Pattern::of_ids(
+                    Some(TermId(s)),
+                    Some(TermId(p)),
+                    Some(TermId(o)),
+                    GraphSelector::All,
+                )) {
+                    if !shown.contains(&q[3]) {
+                        continue;
+                    }
+                    if first {
+                        first = false;
+                    } else {
+                        filter.hide_quad(q);
+                    }
+                }
+            }
+        }
+        Some(Arc::new(filter))
+    }
+
     /// Hides in `filter` every quad of `scan` (in SPOG order) whose triple the quad before it
     /// has: the copies of a triple are next to each other, the lowest graph first.
     fn hide_copies(

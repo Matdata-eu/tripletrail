@@ -22,6 +22,9 @@ pub struct RowFilter {
     /// These quads are hidden: the copies of a triple in graphs after the first that holds
     /// it, for reading the union of all graphs as each triple once (#808).
     quads: FxHashSet<[u64; 4]>,
+    /// When set, quads in graphs outside these (the default graph is 0) are hidden: a caller
+    /// who reads some graphs only, as the union of all graphs (#204).
+    graphs: Option<FxHashSet<u64>>,
     /// [`RowFilter::fingerprint`], made once (#708): a filter is shared by every query on a
     /// store version, and each would otherwise sort and hash the whole hidden set again.
     /// Every change takes it.
@@ -35,6 +38,7 @@ impl PartialEq for RowFilter {
             && self.predicates == other.predicates
             && self.subject_predicates == other.subject_predicates
             && self.quads == other.quads
+            && self.graphs == other.graphs
     }
 }
 
@@ -73,6 +77,37 @@ impl RowFilter {
         self.quads.insert(quad);
     }
 
+    /// Hides every quad outside `graphs` (the default graph is 0), on top of what else this
+    /// hides. Asked again, only the graphs in both sets are shown.
+    pub fn show_only_graphs(&mut self, graphs: impl IntoIterator<Item = u64>) {
+        self.fingerprint.take();
+        let graphs: FxHashSet<u64> = graphs.into_iter().collect();
+        self.graphs = Some(match self.graphs.take() {
+            Some(before) => before.intersection(&graphs).copied().collect(),
+            None => graphs,
+        });
+    }
+
+    /// What this and `other` hide together.
+    pub fn merged(&self, other: &RowFilter) -> RowFilter {
+        let mut out = self.clone();
+        out.fingerprint.take();
+        out.subjects.extend(&other.subjects);
+        out.objects.extend(&other.objects);
+        out.predicates.extend(&other.predicates);
+        out.subject_predicates.extend(&other.subject_predicates);
+        out.quads.extend(&other.quads);
+        if let Some(graphs) = &other.graphs {
+            out.show_only_graphs(graphs.iter().copied());
+        }
+        out
+    }
+
+    /// The quads hidden one by one ([`RowFilter::hide_quad`]), in no order.
+    pub(crate) fn quad_list(&self) -> impl Iterator<Item = &[u64; 4]> {
+        self.quads.iter()
+    }
+
     /// Quads hidden one by one ([`RowFilter::hide_quad`]).
     pub fn hidden_quads(&self) -> usize {
         self.quads.len()
@@ -108,6 +143,7 @@ impl RowFilter {
             && self.predicates.is_empty()
             && self.subject_predicates.is_empty()
             && self.quads.is_empty()
+            && self.graphs.is_none()
     }
 
     /// Whether the quad `[s, p, o, g]` is hidden.
@@ -119,6 +155,7 @@ impl RowFilter {
             || (!self.subject_predicates.is_empty()
                 && self.subject_predicates.contains(&(q[0], q[1])))
             || (!self.quads.is_empty() && self.quads.contains(q))
+            || self.graphs.as_ref().is_some_and(|g| !g.contains(&q[3]))
     }
 
     /// Whether every quad with this subject, predicate or object (any of them `None`) is
@@ -154,6 +191,12 @@ impl RowFilter {
         let mut quads: Vec<[u64; 4]> = self.quads.iter().copied().collect();
         quads.sort_unstable();
         quads.hash(&mut h);
+        let mut graphs: Option<Vec<u64>> =
+            self.graphs.as_ref().map(|g| g.iter().copied().collect());
+        if let Some(g) = &mut graphs {
+            g.sort_unstable();
+        }
+        graphs.hash(&mut h);
         h.finish()
     }
 }
@@ -167,12 +210,14 @@ mod tests {
     /// made with the same changes and never asked before, and equal filters have equal ones.
     #[test]
     fn a_kept_fingerprint_follows_every_change() {
-        let changes: [&dyn Fn(&mut RowFilter); 5] = [
+        let changes: [&dyn Fn(&mut RowFilter); 7] = [
             &|f| f.hide_resource(TermId(1), false),
             &|f| f.hide_resource(TermId(2), true),
             &|f| f.hide_predicate(TermId(3)),
             &|f| f.hide_predicate_on(TermId(4), TermId(5)),
             &|f| f.forget(&[1]),
+            &|f| f.show_only_graphs([0, 6, 7]),
+            &|f| f.show_only_graphs([0, 7]),
         ];
         let mut asked = RowFilter::new();
         let mut fresh = RowFilter::new();
@@ -187,5 +232,31 @@ mod tests {
             seen.push(kept);
         }
         assert_eq!(asked, fresh);
+    }
+
+    /// A merged filter hides what either hides, and a graph restriction hides the quads of
+    /// the other graphs only.
+    #[test]
+    fn a_merged_filter_hides_what_either_hides() {
+        let mut a = RowFilter::new();
+        a.hide_resource(TermId(1), false);
+        a.hide_quad([2, 3, 4, 5]);
+        let mut b = RowFilter::new();
+        b.hide_predicate(TermId(9));
+        b.show_only_graphs([0, 5]);
+        let both = a.merged(&b);
+        assert!(both.hides(&[1, 3, 4, 0]));
+        assert!(both.hides(&[2, 3, 4, 5]));
+        assert!(both.hides(&[2, 9, 4, 0]));
+        assert!(both.hides(&[2, 3, 4, 6]), "graph 6 is not shown");
+        assert!(!both.hides(&[2, 3, 4, 0]));
+        assert!(!both.hides(&[2, 3, 8, 5]));
+        assert_eq!(both, b.merged(&a));
+        assert_eq!(both.fingerprint(), b.merged(&a).fingerprint());
+        assert!(
+            !RowFilter::new()
+                .merged(&RowFilter::new())
+                .hides(&[1, 2, 3, 4])
+        );
     }
 }

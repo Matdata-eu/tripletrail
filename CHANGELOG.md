@@ -21,6 +21,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Changed
 
+- A caller limited by graph grants or row rules keeps the count and id-row shortcuts the whole store has (tripletrail-enterprise#7): they read a view without the other graphs, the copies of a triple in several granted graphs and the hidden rows. On 200,000 offers in 10 graphs, a range count took 95 ms for a caller granted half of the graphs and 190 ms under a row rule, and now takes 8 and 13 ms (11 ms for a caller who sees everything); `COUNT(*)` of a class went from 10-16 ms to 2-4 ms. Answers are unchanged.
 - `FILTER(?v IN (…))` and `NOT IN` with a list of IRIs and literals look each row up in a hash set of the items' term ids (#63) instead of comparing it with every item: 1,000 IRIs over 133k rows took 933 ms and now take 16 ms, close to the 11 ms of the same list as `VALUES`. Answers are unchanged: numbers of different datatypes still compare by value.
 - Every answer carries `Server: TripleTrail/<version>` instead of `tiny-http (Rust)`, and `--cors` lets pages read it, so query tools can recognise the engine by it. The Explain plugin of MatGUI and YASGUI does not yet: its TripleTrail engine waits for a plugin release.
 

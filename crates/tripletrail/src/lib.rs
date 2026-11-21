@@ -504,6 +504,15 @@ fn union_ids(
     snapshot: tripletrail_store::Snapshot,
     cancelled: &dyn Fn() -> bool,
 ) -> Option<(tripletrail_store::Snapshot, GraphSelector)> {
+    let scan = union_scan(query, &snapshot)?;
+    let copies = snapshot.union_copies(scan, cancelled)?;
+    Some((snapshot.with_rows(copies), GraphSelector::All))
+}
+
+/// Whether the id rewrites take a part of `query` (`None` if not), and if so whether its
+/// triple patterns match enough of the store that finding the copies of triples in several
+/// graphs is one scan of all quads rather than a look at the subjects written since.
+fn union_scan(query: &spargebra::Query, snapshot: &tripletrail_store::Snapshot) -> Option<bool> {
     use spargebra::algebra::GraphPattern as P;
     let pattern = match query {
         spargebra::Query::Select { pattern, .. }
@@ -570,13 +579,31 @@ fn union_ids(
         }
     }
     let (mut taken, mut matches) = (false, 0);
-    walk(pattern, &snapshot, &mut taken, &mut matches);
+    walk(pattern, snapshot, &mut taken, &mut matches);
     if !taken {
         return None;
     }
-    let scan = matches >= snapshot.len() / 8;
-    let copies = snapshot.union_copies(scan, cancelled)?;
-    Some((snapshot.with_rows(copies), GraphSelector::All))
+    Some(matches >= snapshot.len() / 8)
+}
+
+/// The query's own dataset (`FROM`, `FROM NAMED`), taken out of it.
+fn take_dataset(query: &mut spargebra::Query) -> Option<spargebra::algebra::QueryDataset> {
+    match query {
+        spargebra::Query::Select { dataset, .. }
+        | spargebra::Query::Construct { dataset, .. }
+        | spargebra::Query::Describe { dataset, .. }
+        | spargebra::Query::Ask { dataset, .. } => dataset.take(),
+    }
+}
+
+/// Puts back the dataset [`take_dataset`] took.
+fn set_dataset(query: &mut spargebra::Query, own: Option<spargebra::algebra::QueryDataset>) {
+    match query {
+        spargebra::Query::Select { dataset, .. }
+        | spargebra::Query::Construct { dataset, .. }
+        | spargebra::Query::Describe { dataset, .. }
+        | spargebra::Query::Ask { dataset, .. } => *dataset = own,
+    }
 }
 
 /// The union of all graphs as a query's default graph.
@@ -858,6 +885,9 @@ pub struct Engine {
     vector_graph_min: Arc<std::sync::atomic::AtomicUsize>,
     /// How many queries ordered by `tt:cosine` the vector index answered.
     cosine_orders: Arc<AtomicU64>,
+    /// How many parts of queries by callers limited to some graphs or rows the count and
+    /// id-row shortcuts answered (#204).
+    view_shortcuts: Arc<AtomicU64>,
     /// User-defined functions (`sh:SPARQLFunction`, #235).
     udf: Arc<udf::Functions>,
     /// The dataset the sub-selects of the `st:` and window services read, for a caller who
@@ -1143,6 +1173,7 @@ impl Engine {
             vectors: Arc::default(),
             vector_graph_min: Arc::new(std::sync::atomic::AtomicUsize::new(vector::GRAPH_MIN)),
             cosine_orders: Arc::new(AtomicU64::new(0)),
+            view_shortcuts: Arc::new(AtomicU64::new(0)),
             udf: Arc::default(),
         }
     }
@@ -1761,7 +1792,20 @@ impl Engine {
                     } else {
                         query
                     };
-                    let query = self.scoped_spatial_rewrite(query, readable, dataset)?;
+                    let mut query = self.scoped_spatial_rewrite(query, readable, dataset)?;
+                    if options.substitutions.is_empty()
+                        && let Dataset::TripleTrail(store) = &self.store
+                    {
+                        // The marker set above is the query's own dataset: the shortcuts see
+                        // the query as one on the default graph, read as `dataset`.
+                        let marker = take_dataset(&mut query);
+                        let snapshot = store.snapshot();
+                        // Zero-length paths from terms the caller's graphs don't hold first,
+                        // as under row rules: the shortcuts follow paths from nodes only.
+                        query = zero_length::rewrite(query, &snapshot, Some(dataset));
+                        query = self.view_shortcuts(query, &snapshot, None, Some(dataset));
+                        set_dataset(&mut query, marker);
+                    }
                     self.run_query_scoped(query, Some(dataset), options.substitutions, false)
                 });
             }
@@ -2332,6 +2376,78 @@ impl Engine {
     /// A query on a view without the quads `rows` hides (#202): evaluated on that view, so
     /// every scan, and with it every join, `OPTIONAL`, `MINUS`, `EXISTS`, path and
     /// aggregate, sees only what the caller may see.
+    /// `query` with the count and id-row shortcuts (#204) a caller limited to some graphs or
+    /// rows can take: those `run_query_scoped` takes on the whole store, on a view of what
+    /// the caller sees. `rows` is what row rules hide; `dataset` the caller's (their graphs,
+    /// the union, or `None` for the default graph). The view hides the quads of other graphs,
+    /// the copies of a triple in several of the caller's graphs (each triple once, as their
+    /// merge reads it) and the rows: the shortcuts read scans of it, as they read the union
+    /// of all graphs. Unchanged for a query with a dataset of its own, and when nothing is
+    /// taken. To be called inside a table scope, with the evaluation.
+    fn view_shortcuts(
+        &self,
+        query: spargebra::Query,
+        base: &Snapshot,
+        rows: Option<&Arc<tripletrail_store::RowFilter>>,
+        dataset: Option<&QueryDataset>,
+    ) -> spargebra::Query {
+        use oxigraph::model::GraphName;
+        if has_own_dataset(&query) {
+            return query;
+        }
+        let cancelled = || self.is_cancelled();
+        let merge = |hidden: Option<Arc<tripletrail_store::RowFilter>>| match (hidden, rows) {
+            (Some(h), Some(r)) => Some(Arc::new(h.merged(r))),
+            (h, r) => h.or_else(|| r.cloned()),
+        };
+        let (filter, graph) = match dataset.map(QueryDataset::default_graph_graphs) {
+            None => (rows.cloned(), GraphSelector::Default),
+            Some(None) => {
+                let Some(scan) = union_scan(&query, base) else {
+                    return query;
+                };
+                let Some(copies) = base.union_copies(scan, &cancelled) else {
+                    return query;
+                };
+                (merge(copies), GraphSelector::All)
+            }
+            Some(Some(graphs)) => {
+                let mut ids: Vec<tripletrail_store::TermId> = graphs
+                    .iter()
+                    .filter_map(|g| match g {
+                        GraphName::DefaultGraph => Some(tripletrail_store::TermId::DEFAULT_GRAPH),
+                        GraphName::NamedNode(n) => base.term_id(n.as_ref().into()),
+                        GraphName::BlankNode(b) => base.term_id(b.as_ref().into()),
+                    })
+                    .collect();
+                ids.sort_unstable();
+                ids.dedup();
+                match ids.as_slice() {
+                    // One graph: read as it is.
+                    [g] if *g == tripletrail_store::TermId::DEFAULT_GRAPH => {
+                        (rows.cloned(), GraphSelector::Default)
+                    }
+                    [g] => (rows.cloned(), GraphSelector::Graph(*g)),
+                    _ => {
+                        let Some(scan) = union_scan(&query, base) else {
+                            return query;
+                        };
+                        let Some(within) = base.copies_within(&ids, scan, &cancelled) else {
+                            return query;
+                        };
+                        (merge(Some(within)), GraphSelector::All)
+                    }
+                }
+            }
+        };
+        let view = base.clone().with_rows(filter);
+        let (query, counted) = count::rewrite(query, &view, graph, &cancelled);
+        let (query, read) = rows::rewrite(query, &view, graph, &cancelled);
+        self.view_shortcuts
+            .fetch_add((counted + read) as u64, Ordering::Relaxed);
+        query
+    }
+
     fn run_query_rows(
         &self,
         query: spargebra::Query,
@@ -2391,6 +2507,13 @@ impl Engine {
                 *self.spatial.last.lock_unpoisoned() = stats;
                 self.check_cancelled()?;
                 rewritten
+            } else {
+                query
+            };
+            // Substituted variables are bound when evaluation starts: the shortcuts would not
+            // see them.
+            let query = if options.substitutions.is_empty() {
+                self.view_shortcuts(query, &base, Some(&rows), dataset.as_ref())
             } else {
                 query
             };
@@ -3533,6 +3656,13 @@ impl Engine {
             *prepared.dataset_mut() = d;
         }
         prepared
+    }
+
+    /// How many parts of queries by callers limited to some graphs or rows (graph grants, row
+    /// rules) the count and id-row shortcuts answered (#204), for tests.
+    #[doc(hidden)]
+    pub fn view_shortcuts_taken(&self) -> u64 {
+        self.view_shortcuts.load(Ordering::Relaxed)
     }
 
     /// How many queries ordered by `DESC(tt:cosine(…))` under a `LIMIT` the vector index
