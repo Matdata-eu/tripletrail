@@ -4,7 +4,7 @@ exclude = ["python", "vendor"]
 members = ["crates/tripletrail-routing", "crates/tripletrail-geo", "crates/tripletrail-pgr", "crates/tripletrail-shacl", "crates/tripletrail-spatial", "crates/tripletrail-store", "crates/tripletrail-fx", "crates/tripletrail-rml", "crates/tripletrail", "crates/tripletrail-server", "crates/tripletrail-testsuite", "crates/tripletrail-testdir"]
 
 [workspace.package]
-version = "0.1.0-rc.2"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 repository = "https://github.com/Matdata-eu/tripletrail"
@@ -43,15 +43,15 @@ thiserror = "2"
 # GraphQL (#144): parsing, validation, introspection and a dynamic schema (MIT OR Apache-2.0).
 async-graphql = { version = "7.2", default-features = false, features = ["dynamic-schema"] }
 pollster = "1"
-tripletrail-geo = { path = "crates/tripletrail-geo", version = "0.1.0-rc.2" }
-tripletrail-routing = { path = "crates/tripletrail-routing", version = "0.1.0-rc.2" }
-tripletrail-pgr = { path = "crates/tripletrail-pgr", version = "0.1.0-rc.2" }
-tripletrail-shacl = { path = "crates/tripletrail-shacl", version = "0.1.0-rc.2" }
-tripletrail-spatial = { path = "crates/tripletrail-spatial", version = "0.1.0-rc.2" }
-tripletrail-store = { path = "crates/tripletrail-store", version = "0.1.0-rc.2" }
-tripletrail-fx = { path = "crates/tripletrail-fx", version = "0.1.0-rc.2" }
-tripletrail-rml = { path = "crates/tripletrail-rml", version = "0.1.0-rc.2" }
-tripletrail = { path = "crates/tripletrail", version = "0.1.0-rc.2" }
+tripletrail-geo = { path = "crates/tripletrail-geo", version = "0.1.0" }
+tripletrail-routing = { path = "crates/tripletrail-routing", version = "0.1.0" }
+tripletrail-pgr = { path = "crates/tripletrail-pgr", version = "0.1.0" }
+tripletrail-shacl = { path = "crates/tripletrail-shacl", version = "0.1.0" }
+tripletrail-spatial = { path = "crates/tripletrail-spatial", version = "0.1.0" }
+tripletrail-store = { path = "crates/tripletrail-store", version = "0.1.0" }
+tripletrail-fx = { path = "crates/tripletrail-fx", version = "0.1.0" }
+tripletrail-rml = { path = "crates/tripletrail-rml", version = "0.1.0" }
+tripletrail = { path = "crates/tripletrail", version = "0.1.0" }
 tripletrail-testdir = { path = "crates/tripletrail-testdir" }
 
 [profile.release]

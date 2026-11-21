@@ -4,7 +4,8 @@ name: Release
 # aarch64), macOS (x86_64, arm64) and Windows (x86_64), with SHA256SUMS, published as a GitHub
 # release with notes from CHANGELOG.md and the Conventional Commits since the last tag.
 #
-# Pushing a tag `v1.2.3` runs all of it and creates the release. Before tagging: set the
+# Pushing a tag `v1.2.3` runs all of it and creates the release; a release made on GitHub's
+# Releases page with a new tag pushes that tag too, and gets the files and notes. Before tagging: set the
 # workspace version in Cargo.toml, rename "## [Unreleased]" in CHANGELOG.md to "## 1.2.3" and
 # add the release's entry at the top of crates/tripletrail-server/ui/whats-new.json; the check
 # job refuses the release otherwise (.github/scripts/release-notes.sh --check).
@@ -215,9 +216,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.check.outputs.version }}
+        # A release made on GitHub's Releases page (which also pushes the tag) is filled in:
+        # the files are added, and the notes are set unless it already has some.
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-            --title "TripleTrail $VERSION" --notes-file notes.md --verify-tag
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            body=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+            if [ -z "$(printf %s "$body" | tr -d '[:space:]')" ]; then
+              gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+            fi
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+              --title "TripleTrail $VERSION" --notes-file notes.md --verify-tag
+          fi
       - name: Keep the dry run
         if: github.event_name != 'push'
         uses: actions/upload-artifact@v4

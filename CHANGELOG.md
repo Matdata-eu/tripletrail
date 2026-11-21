@@ -7,6 +7,10 @@ versions may change the store format and the API; the release notes say how to u
 
 ## [Unreleased]
 
+## 0.1.0 - 2026-11-21
+
+The first release: an Import page, a faster and richer map, SHACL messages and lookup graphs, the id executor behind `--executor ids`, and a Docker image published with each version tag.
+
 ### Added
 
 - A spatial filter for the map's tiles and facets and the OGC API's items (#33): `area` (WKT, or the IRI of a resource with a geometry), `rel` (`intersects`, `within`, `contains`, `touches`, `crosses`, `overlaps`, `disjoint`, `dwithin`) and `dist` (metres, for `dwithin`). Candidates come from the spatial index. See [the guide](docs/guide/10-maps-and-apis.md#filter-by-a-spatial-relation-to-an-area).
