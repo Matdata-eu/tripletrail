@@ -129,45 +129,45 @@ fn attach_query_swap_and_detach() {
     // Fuseki's form body works too, here for an alias.
     let r = s
         .admin("POST", "/$/datasets")
-        .send_form(&[("dbName", "dim"), ("alias-of", "dim_v1")])
+        .send_form(&[("dbName", "assets"), ("alias-of", "dim_v1")])
         .unwrap();
     assert_eq!(r.status(), 200);
-    assert_eq!(s.count("dim"), 5);
+    assert_eq!(s.count("assets"), 5);
     assert_eq!(s.count("dim_v2"), 6);
 
     // Read-only: updates and uploads answer 405.
     assert_eq!(
-        s.update("dim", "INSERT DATA { <http://x> <http://y> 1 }"),
+        s.update("assets", "INSERT DATA { <http://x> <http://y> 1 }"),
         405
     );
-    let r = ureq::post(&format!("{}/dim/data?default", s.base))
+    let r = ureq::post(&format!("{}/assets/data?default", s.base))
         .set("Content-Type", "text/turtle")
         .send_string(TTL);
     assert_eq!(status(r), 405);
 
-    let d = s.get_json("/$/datasets/dim");
+    let d = s.get_json("/$/datasets/assets");
     assert_eq!(d["target"], "dim_v1");
     assert_eq!(d["mode"], "read-only");
 
     // Swap: new requests see the new version, and the previous one is remembered.
     let r = s
-        .admin("POST", "/$/datasets/dim/swap")
+        .admin("POST", "/$/datasets/assets/swap")
         .query("to", "dim_v2")
         .call()
         .unwrap();
     assert_eq!(r.status(), 200);
-    assert_eq!(s.count("dim"), 6);
-    let d = s.get_json("/$/datasets/dim");
+    assert_eq!(s.count("assets"), 6);
+    let d = s.get_json("/$/datasets/assets");
     assert_eq!(d["target"], "dim_v2");
     assert_eq!(d["previous"], "dim_v1");
     // An aliased dataset is not detached by accident.
     assert_eq!(status(s.admin("DELETE", "/$/datasets/dim_v2").call()), 409);
     // Rollback is a swap back.
-    s.admin("POST", "/$/datasets/dim/swap")
+    s.admin("POST", "/$/datasets/assets/swap")
         .query("to", "dim_v1")
         .call()
         .unwrap();
-    assert_eq!(s.count("dim"), 5);
+    assert_eq!(s.count("assets"), 5);
 
     // Detach dim_v2 and delete its files.
     let r = s
@@ -188,7 +188,7 @@ fn attach_query_swap_and_detach() {
         .iter()
         .map(|d| d["ds.name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["/dim_v1", "/dim"]);
+    assert_eq!(names, ["/dim_v1", "/assets"]);
 }
 
 #[test]

@@ -425,7 +425,7 @@ mod tests {
 @prefix sg: <https://matdata.eu/ns/sparql-guard#> .
 @prefix ex: <https://example.org/policies/> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-PREFIX g: <urn:dim:>
+PREFIX g: <urn:assets:>
 
 # Everyone signed in reads the release. (The dot here. is not the end.)
 ex:Readers a sg:Policy ; sg:agent sg:AuthenticatedAgent ;
@@ -433,14 +433,14 @@ ex:Readers a sg:Policy ; sg:agent sg:AuthenticatedAgent ;
 
 ex:Writers a sg:Policy ;
     rdfs:label \"Asset team; writes. \\\"all\\\"\"@en ;
-    sg:group \"dim-assets\" ; sg:writeAllGraphs true .
+    sg:group \"asset-team\" ; sg:writeAllGraphs true .
 ";
 
     fn spec(id: &str) -> PolicySpec {
         PolicySpec {
             id: id.to_owned(),
             groups: vec!["contractors".to_owned()],
-            read_graphs: vec!["urn:dim:release".to_owned()],
+            read_graphs: vec!["urn:assets:release".to_owned()],
             ..Default::default()
         }
     }
@@ -473,13 +473,13 @@ ex:Writers a sg:Policy ;
         );
         // A changed one is replaced where it was; its label stays, comments elsewhere too.
         let mut writers = spec("https://example.org/policies/Writers");
-        writers.groups = vec!["dim-assets".to_owned()];
+        writers.groups = vec!["asset-team".to_owned()];
         writers.read_graphs.clear();
-        writers.write_graphs = vec!["urn:dim:wip".to_owned()];
+        writers.write_graphs = vec!["urn:assets:wip".to_owned()];
         let changed = write(&added, &writers).unwrap();
         assert!(changed.contains("# trailing comment"));
         assert!(changed.contains(
-            "ex:Writers a sg:Policy ;\n    sg:group \"dim-assets\" ;\n    sg:writeGraph g:wip ;\n    rdfs:label \"Asset team; writes. \\\"all\\\"\"@en .\n\nex:Contractors"
+            "ex:Writers a sg:Policy ;\n    sg:group \"asset-team\" ;\n    sg:writeGraph g:wip ;\n    rdfs:label \"Asset team; writes. \\\"all\\\"\"@en .\n\nex:Contractors"
         ), "{changed}");
         let policies = crate::policy::read_text(&changed, RdfFormat::Turtle).unwrap();
         assert_eq!(policies.len(), 3);
@@ -504,7 +504,7 @@ ex:Writers a sg:Policy ;
         let written = write("", &spec("urn:p:one")).unwrap();
         assert_eq!(
             written,
-            "@prefix sg: <https://matdata.eu/ns/sparql-guard#> .\n\n<urn:p:one> a sg:Policy ;\n    sg:group \"contractors\" ;\n    sg:readGraph <urn:dim:release> .\n"
+            "@prefix sg: <https://matdata.eu/ns/sparql-guard#> .\n\n<urn:p:one> a sg:Policy ;\n    sg:group \"contractors\" ;\n    sg:readGraph <urn:assets:release> .\n"
         );
         assert!(
             write(

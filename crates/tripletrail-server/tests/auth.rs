@@ -547,8 +547,8 @@ fn policy_server(dir: &Path) -> String {
     std::fs::write(
         dir.join("kg.ttl"),
         format!(
-            "{SG} ex:DimReaders a sg:Policy ; sg:agent sg:AuthenticatedAgent ; sg:readAllGraphs true .
-             ex:DimWriters a sg:Policy ; sg:group \"dim-assets\" ; sg:writeAllGraphs true ."
+            "{SG} ex:AssetReaders a sg:Policy ; sg:agent sg:AuthenticatedAgent ; sg:readAllGraphs true .
+             ex:AssetWriters a sg:Policy ; sg:group \"asset-team\" ; sg:writeAllGraphs true ."
         ),
     )
     .unwrap();
@@ -565,7 +565,7 @@ fn policy_server(dir: &Path) -> String {
                 "kg": {{"policies": "kg.ttl", "admins": ["kg-admins"]}}
             }}}}"#,
         key("reader", ""),
-        key("assets", r#""dim-assets""#),
+        key("assets", r#""asset-team""#),
         key("kgadmin", r#""kg-admins""#),
         key("monitor", r#""tripletrail:monitor""#),
     );
@@ -598,7 +598,7 @@ fn policy_server(dir: &Path) -> String {
 }
 
 #[test]
-fn policies_open_rinf_to_anyone_and_dim_to_keys() {
+fn policies_open_rinf_to_anyone_and_assets_to_keys() {
     let dir = tripletrail_testdir::tempdir("auth-policies");
     let base = policy_server(&dir);
     let with = |r: ureq::Request, key: &str| r.set("X-API-Key", key);
@@ -700,12 +700,12 @@ fn policy_files_reload_and_unenforceable_rules_are_refused() {
     }
 }
 
-/// Contractors may read the release graph of "dim" (#201), the team every graph.
+/// Contractors may read the release graph of "assets" (#201), the team every graph.
 #[test]
 fn a_graph_grant_shows_only_its_graphs() {
     let dir = tripletrail_testdir::tempdir("auth-graph-grants");
     std::fs::write(
-        dir.join("dim.ttl"),
+        dir.join("assets.ttl"),
         format!(
             "{SG} ex:Contractors a sg:Policy ; sg:group \"contractor-x\" ; sg:readGraph <urn:release> .
              ex:Team a sg:Policy ; sg:group \"team\" ; sg:readAllGraphs true ."
@@ -721,7 +721,7 @@ fn a_graph_grant_shows_only_its_graphs() {
     std::fs::write(
         dir.join("guard.json"),
         format!(
-            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"dim": {{"policies": ["dim.ttl"]}}}}}}"#,
+            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"assets": {{"policies": ["assets.ttl"]}}}}}}"#,
             key("contractor", "contractor-x"),
             key("team", "team"),
         ),
@@ -739,7 +739,7 @@ fn a_graph_grant_shows_only_its_graphs() {
     let writer = engine.clone();
     let server = Server::bind(
         "127.0.0.1:0",
-        [("dim".to_owned(), engine)],
+        [("assets".to_owned(), engine)],
         Options {
             threads: 2,
             auth_config: Some(dir.join("guard.json")),
@@ -766,7 +766,7 @@ fn a_graph_grant_shows_only_its_graphs() {
     };
     let select = |query: &str, key: &str| {
         let path = format!(
-            "/dim/query?query={}",
+            "/assets/query?query={}",
             form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
         );
         let json: serde_json::Value = serde_json::from_str(&get(&path, key).unwrap()).unwrap();
@@ -792,39 +792,42 @@ fn a_graph_grant_shows_only_its_graphs() {
     assert_eq!(select(both, "contractor"), ["release"]);
     // The protocol's dataset narrows too.
     let path = format!(
-        "/dim/query?default-graph-uri=urn:wip&query={}",
+        "/assets/query?default-graph-uri=urn:wip&query={}",
         form_urlencoded::byte_serialize(b"SELECT ?v { ?s <urn:in> ?v }").collect::<String>()
     );
     assert!(!get(&path, "contractor").unwrap().contains("wip"));
 
     // The Graph Store Protocol: other named graphs do not exist, the default graph is empty.
     assert!(
-        get("/dim/data?graph=urn:release", "contractor")
+        get("/assets/data?graph=urn:release", "contractor")
             .unwrap()
             .contains("release")
     );
-    assert_eq!(get("/dim/data?graph=urn:wip", "contractor"), Err(404));
-    assert_eq!(get("/dim/data?graph=urn:nothing", "contractor"), Err(404));
+    assert_eq!(get("/assets/data?graph=urn:wip", "contractor"), Err(404));
+    assert_eq!(
+        get("/assets/data?graph=urn:nothing", "contractor"),
+        Err(404)
+    );
     assert!(
-        !get("/dim/data?default", "contractor")
+        !get("/assets/data?default", "contractor")
             .unwrap()
             .contains("default")
     );
-    let dump = get("/dim/data", "contractor").unwrap();
+    let dump = get("/assets/data", "contractor").unwrap();
     assert!(dump.contains("release") && !dump.contains("wip") && !dump.contains("default"));
 
     // Describe keeps to the grant (#203): a resource only in other graphs is not found, and
     // callers with other grants get other validators.
-    let doc = get("/dim/describe?iri=urn:a", "contractor").unwrap();
+    let doc = get("/assets/describe?iri=urn:a", "contractor").unwrap();
     assert!(doc.contains("release") && !doc.contains("wip") && !doc.contains("default"));
     assert!(
-        get("/dim/describe?iri=urn:w", "team")
+        get("/assets/describe?iri=urn:w", "team")
             .unwrap()
             .contains("wip")
     );
-    assert_eq!(get("/dim/describe?iri=urn:w", "contractor"), Err(404));
+    assert_eq!(get("/assets/describe?iri=urn:w", "contractor"), Err(404));
     let etag = |key: &str| {
-        ureq::get(&format!("{base}/dim/describe?iri=urn:a"))
+        ureq::get(&format!("{base}/assets/describe?iri=urn:a"))
             .set("X-API-Key", key)
             .call()
             .unwrap()
@@ -836,7 +839,7 @@ fn a_graph_grant_shows_only_its_graphs() {
 
     // The service description lists only the granted graphs, and no size for the default
     // graph (the union of those).
-    for path in ["/dim/sparql", "/dim/query"] {
+    for path in ["/assets/sparql", "/assets/query"] {
         let sd = get(path, "contractor").unwrap();
         assert!(
             sd.contains("urn:release") && !sd.contains("urn:wip"),
@@ -849,7 +852,7 @@ fn a_graph_grant_shows_only_its_graphs() {
     // Explain runs on the readable graphs, and VoID describes only them (#203).
     let explain = |key: &str| {
         let path = format!(
-            "/dim/explain?query={}",
+            "/assets/explain?query={}",
             form_urlencoded::byte_serialize(b"SELECT * { GRAPH ?g { ?s ?p ?o } }")
                 .collect::<String>()
         );
@@ -858,29 +861,29 @@ fn a_graph_grant_shows_only_its_graphs() {
     };
     assert_eq!(explain("contractor"), 1);
     assert_eq!(explain("team"), 3);
-    let plan = get("/dim/explain?query=ASK%7B%7D", "contractor").unwrap();
+    let plan = get("/assets/explain?query=ASK%7B%7D", "contractor").unwrap();
     assert!(
         !plan.contains("plan") && !plan.contains("spatial"),
         "{plan}"
     );
-    let void = get("/dim/void", "contractor").unwrap();
+    let void = get("/assets/void", "contractor").unwrap();
     assert!(void.contains("urn:release"), "{void}");
     assert!(
         !void.contains("urn:wip") && !void.contains("classes"),
         "{void}"
     );
-    assert!(get("/dim/void", "team").unwrap().contains("urn:wip"));
+    assert!(get("/assets/void", "team").unwrap().contains("urn:wip"));
     let service = "SELECT * { SERVICE <http://w3id.org/tripletrail/st> { ?s ?p ?o } }";
     let path = format!(
-        "/dim/query?query={}",
+        "/assets/query?query={}",
         form_urlencoded::byte_serialize(service.as_bytes()).collect::<String>()
     );
     assert_eq!(get(&path, "contractor"), Err(400));
-    let insert = ureq::post(&format!("{base}/dim/update")).set("X-API-Key", "contractor");
+    let insert = ureq::post(&format!("{base}/assets/update")).set("X-API-Key", "contractor");
     assert_eq!(status(insert, Some(INSERT)).0, 403);
 
     // The RDF4J API reads the granted graphs only, and writes nothing (#203).
-    let repo = "/repositories/dim";
+    let repo = "/repositories/assets";
     let statements = get(&format!("{repo}/statements"), "contractor").unwrap();
     assert!(
         statements.contains("release") && !statements.contains("wip"),
@@ -925,15 +928,19 @@ fn a_graph_grant_shows_only_its_graphs() {
     assert_eq!(status(begin, None).0, 403);
     // The listings name the dataset, read-only and without its counts.
     let repositories = get("/repositories", "contractor").unwrap();
-    assert!(repositories.contains("dim"), "{repositories}");
+    assert!(repositories.contains("assets"), "{repositories}");
     let listed = get("/$/datasets", "contractor").unwrap();
-    assert!(listed.contains("/dim"), "{listed}");
-    let one = get("/$/datasets/dim", "contractor").unwrap();
+    assert!(listed.contains("/assets"), "{listed}");
+    let one = get("/$/datasets/assets", "contractor").unwrap();
     assert!(
         !one.contains("triples") && !one.contains("location"),
         "{one}"
     );
-    assert!(get("/$/datasets/dim", "team").unwrap().contains("triples"));
+    assert!(
+        get("/$/datasets/assets", "team")
+            .unwrap()
+            .contains("triples")
+    );
     let void = get("/.well-known/void", "contractor").unwrap();
     assert!(
         void.contains("urn:release") && !void.contains("urn:wip"),
@@ -954,7 +961,7 @@ fn a_graph_grant_shows_only_its_graphs() {
     // Nor does the result cache tell it (`X-Cache`).
     let cached = |key: &str| {
         ureq::get(&format!(
-            "{base}/dim/query?query=ASK%7B%3Fs%20%3Fp%20%3Fo%7D"
+            "{base}/assets/query?query=ASK%7B%3Fs%20%3Fp%20%3Fo%7D"
         ))
         .set("X-API-Key", key)
         .call()
@@ -966,13 +973,13 @@ fn a_graph_grant_shows_only_its_graphs() {
     assert!(cached("team").is_some());
 }
 
-/// Editors may write the work-in-progress graph of "dim" and read it with the release graph
+/// Editors may write the work-in-progress graph of "assets" and read it with the release graph
 /// (#201); the team reads everything and writes only the release graph.
 #[test]
 fn a_graph_write_grant_writes_only_its_graphs() {
     let dir = tripletrail_testdir::tempdir("auth-graph-writes");
     std::fs::write(
-        dir.join("dim.ttl"),
+        dir.join("assets.ttl"),
         format!(
             "{SG} ex:Editors a sg:Policy ; sg:group \"editors\" ;
                sg:readGraph <urn:release> ; sg:writeGraph <urn:wip> .
@@ -990,7 +997,7 @@ fn a_graph_write_grant_writes_only_its_graphs() {
     std::fs::write(
         dir.join("guard.json"),
         format!(
-            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"dim": {{"policies": ["dim.ttl"]}}}}}}"#,
+            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"assets": {{"policies": ["assets.ttl"]}}}}}}"#,
             key("editor", "editors"),
             key("team", "team"),
         ),
@@ -1007,7 +1014,7 @@ fn a_graph_write_grant_writes_only_its_graphs() {
         .unwrap();
     let server = Server::bind(
         "127.0.0.1:0",
-        [("dim".to_owned(), engine)],
+        [("assets".to_owned(), engine)],
         Options {
             threads: 2,
             auth_config: Some(dir.join("guard.json")),
@@ -1019,10 +1026,10 @@ fn a_graph_write_grant_writes_only_its_graphs() {
     server.spawn();
 
     let update = |key: &str, text: &str| {
-        let r = ureq::post(&format!("{base}/dim/update")).set("X-API-Key", key);
+        let r = ureq::post(&format!("{base}/assets/update")).set("X-API-Key", key);
         status(r, Some(text)).0
     };
-    let put = |key: &str, target: &str| match ureq::put(&format!("{base}/dim/data{target}"))
+    let put = |key: &str, target: &str| match ureq::put(&format!("{base}/assets/data{target}"))
         .set("X-API-Key", key)
         .set("Content-Type", "application/n-triples")
         .send_string("<urn:b> <urn:in> \"put\" .\n")
@@ -1032,7 +1039,7 @@ fn a_graph_write_grant_writes_only_its_graphs() {
         Err(e) => panic!("{e}"),
     };
     let ask = |query: &str| {
-        let r = ureq::get(&format!("{base}/dim/query"))
+        let r = ureq::get(&format!("{base}/assets/query"))
             .set("X-API-Key", "team")
             .set("Accept", "application/sparql-results+json")
             .query("query", query)
@@ -1079,7 +1086,7 @@ fn a_graph_write_grant_writes_only_its_graphs() {
     assert_eq!(put("editor", ""), 403);
     // A quad body sent to a writable graph may not name another graph.
     let send = |post: bool, media: &str, body: &str| {
-        let url = format!("{base}/dim/data?graph=urn:wip");
+        let url = format!("{base}/assets/data?graph=urn:wip");
         let r = if post {
             ureq::post(&url)
         } else {
@@ -1266,7 +1273,7 @@ fn updates_during_a_policy_swap_are_applied_whole_or_not_at_all() {
 fn ogc_api_and_tiles_keep_to_a_graph_grant() {
     let dir = tripletrail_testdir::tempdir("auth-ogc-grants");
     std::fs::write(
-        dir.join("dim.ttl"),
+        dir.join("assets.ttl"),
         format!(
             "{SG} ex:Contractors a sg:Policy ; sg:group \"contractor-x\" ; sg:readGraph <urn:release> .
              ex:Team a sg:Policy ; sg:group \"team\" ; sg:readAllGraphs true ."
@@ -1282,7 +1289,7 @@ fn ogc_api_and_tiles_keep_to_a_graph_grant() {
     std::fs::write(
         dir.join("guard.json"),
         format!(
-            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"dim": {{"policies": ["dim.ttl"]}}}}}}"#,
+            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"assets": {{"policies": ["assets.ttl"]}}}}}}"#,
             key("contractor", "contractor-x"),
             key("team", "team"),
         ),
@@ -1303,7 +1310,7 @@ fn ogc_api_and_tiles_keep_to_a_graph_grant() {
     engine.set_union_default_graph(true);
     let server = Server::bind(
         "127.0.0.1:0",
-        [("dim".to_owned(), engine)],
+        [("assets".to_owned(), engine)],
         Options {
             threads: 2,
             auth_config: Some(dir.join("guard.json")),
@@ -1338,37 +1345,37 @@ fn ogc_api_and_tiles_keep_to_a_graph_grant() {
     let holds = |body: &[u8], s: &str| body.windows(s.len()).any(|w| w == s.as_bytes());
 
     // The team sees both classes; the contractor only the stations, and only its own.
-    let all = text("/dim/ogc/collections", "team");
+    let all = text("/assets/ogc/collections", "team");
     assert!(all.contains("Station") && all.contains("Line"), "{all}");
-    let some = text("/dim/ogc/collections", "contractor");
+    let some = text("/assets/ogc/collections", "contractor");
     assert!(some.contains("Station") && !some.contains("Line"), "{some}");
-    assert!(!text("/dim/ogc/api", "contractor").contains("Line"));
-    assert_eq!(get("/dim/ogc/collections/Line", "contractor"), Err(404));
+    assert!(!text("/assets/ogc/api", "contractor").contains("Line"));
+    assert_eq!(get("/assets/ogc/collections/Line", "contractor"), Err(404));
     assert_eq!(
-        get("/dim/ogc/collections/Line/items", "contractor"),
+        get("/assets/ogc/collections/Line/items", "contractor"),
         Err(404)
     );
-    let items = text("/dim/ogc/collections/Station/items", "contractor");
+    let items = text("/assets/ogc/collections/Station/items", "contractor");
     assert!(items.contains("example.com/s1") && !items.contains("example.com/s2"));
-    assert!(text("/dim/ogc/collections/Station/items", "team").contains("example.com/s2"));
-    let s2 = "/dim/ogc/collections/Station/items/http%3A%2F%2Fexample.com%2Fs2";
+    assert!(text("/assets/ogc/collections/Station/items", "team").contains("example.com/s2"));
+    let s2 = "/assets/ogc/collections/Station/items/http%3A%2F%2Fexample.com%2Fs2";
     assert_eq!(get(s2, "contractor"), Err(404));
     assert!(get(s2, "team").is_ok());
 
     // A property only in the hidden graph is no queryable, filter or API parameter of the
     // contractor's: its shapes come from its own graph (#203).
-    let queryables = "/dim/ogc/collections/Station/queryables";
+    let queryables = "/assets/ogc/collections/Station/queryables";
     assert!(text(queryables, "team").contains("secretCode"));
     assert!(!text(queryables, "contractor").contains("secretCode"));
-    assert!(!text("/dim/ogc/api", "contractor").contains("secretCode"));
-    assert!(!text("/dim/ogc/collections/Station", "contractor").contains("secretCode"));
+    assert!(!text("/assets/ogc/api", "contractor").contains("secretCode"));
+    assert!(!text("/assets/ogc/collections/Station", "contractor").contains("secretCode"));
     assert_eq!(
         get(
-            "/dim/ogc/collections/Station/items?secretCode=X",
+            "/assets/ogc/collections/Station/items?secretCode=X",
             "contractor"
         ),
         get(
-            "/dim/ogc/collections/Station/items?unheardOf=X",
+            "/assets/ogc/collections/Station/items?unheardOf=X",
             "contractor"
         ),
     );
@@ -1394,13 +1401,13 @@ fn ogc_api_and_tiles_keep_to_a_graph_grant() {
         .to_owned();
     let (code, sampled) = post(
         &format!("/$/workspaces/{id}/sample"),
-        r#"{"dataset": "dim", "classes": ["http://example.com/Station"]}"#,
+        r#"{"dataset": "assets", "classes": ["http://example.com/Station"]}"#,
     );
     assert_eq!(code, 200, "{sampled}");
     let sampled: serde_json::Value = serde_json::from_str(&sampled).unwrap();
     assert_eq!(sampled["instances"], 1, "{sampled}");
     let file = text(
-        &format!("/$/workspaces/{id}/files/data/sample-dim.nt"),
+        &format!("/$/workspaces/{id}/files/data/sample-assets.nt"),
         "contractor",
     );
     assert!(
@@ -1413,13 +1420,13 @@ fn ogc_api_and_tiles_keep_to_a_graph_grant() {
     );
     let (code, refused) = post(
         &format!("/$/workspaces/{id}/overlay"),
-        r#"{"dataset": "dim"}"#,
+        r#"{"dataset": "assets"}"#,
     );
     assert_eq!(code, 403);
     assert!(refused.contains("sample"), "{refused}");
 
     // Tiles: the contractor's world tile has its station only, and is not the team's.
-    let world = "/dim/tiles/all/0/0/0.mvt";
+    let world = "/assets/tiles/all/0/0/0.mvt";
     let team = get(world, "team").unwrap();
     assert!(holds(&team, "http://example.com/s2") && holds(&team, "Line"));
     let mine = get(world, "contractor").unwrap();
@@ -1427,7 +1434,7 @@ fn ogc_api_and_tiles_keep_to_a_graph_grant() {
     assert!(!holds(&mine, "http://example.com/s2") && !holds(&mine, "Line"));
     // Asked again (from the cache), the same.
     assert_eq!(get(world, "contractor").unwrap(), mine);
-    assert_eq!(get("/dim/tiles/Line/0/0/0.mvt", "contractor"), Err(404));
+    assert_eq!(get("/assets/tiles/Line/0/0/0.mvt", "contractor"), Err(404));
 }
 
 /// Row rules (#202): contractors see only the projects of their own area, without phone
@@ -1438,7 +1445,7 @@ fn ogc_api_and_tiles_keep_to_a_graph_grant() {
 fn row_rules_hide_rows_from_queries() {
     let dir = tripletrail_testdir::tempdir("auth-row-rules");
     std::fs::write(
-        dir.join("dim.ttl"),
+        dir.join("assets.ttl"),
         format!(
             "{SG}@prefix sh: <http://www.w3.org/ns/shacl#> .
              ex:Contractors a sg:Policy ; sg:group \"contractor\" ; sg:readAllGraphs true ;
@@ -1459,7 +1466,7 @@ fn row_rules_hide_rows_from_queries() {
     std::fs::write(
         dir.join("guard.json"),
         format!(
-            r#"{{"auth": {{"apiKeys": [{}, {}, {}, {}]}}, "datasets": {{"dim": {{"policies": ["dim.ttl"], "admins": ["admins"]}}}}}}"#,
+            r#"{{"auth": {{"apiKeys": [{}, {}, {}, {}]}}, "datasets": {{"assets": {{"policies": ["assets.ttl"], "admins": ["admins"]}}}}}}"#,
             key("north", "contractor"),
             key("team", "team"),
             key("boss", "admins"),
@@ -1480,7 +1487,7 @@ fn row_rules_hide_rows_from_queries() {
     let writer = engine.clone();
     let server = Server::bind(
         "127.0.0.1:0",
-        [("dim".to_owned(), engine)],
+        [("assets".to_owned(), engine)],
         Options {
             threads: 2,
             auth_config: Some(dir.join("guard.json")),
@@ -1505,7 +1512,7 @@ fn row_rules_hide_rows_from_queries() {
     let encode = |q: &str| form_urlencoded::byte_serialize(q.as_bytes()).collect::<String>();
     let select = |query: &str, key: &str| {
         let json: serde_json::Value = serde_json::from_str(
-            &get(&format!("/dim/query?query={}", encode(query)), key).unwrap(),
+            &get(&format!("/assets/query?query={}", encode(query)), key).unwrap(),
         )
         .unwrap();
         let mut values: Vec<String> = json["results"]["bindings"]
@@ -1539,7 +1546,7 @@ fn row_rules_hide_rows_from_queries() {
     // Descriptions keep to what the rules show: a hidden resource is not found, a visible
     // one comes without its hidden properties and links (#202).
     let triples = |iri: &str, key: &str, accept: &str| -> Result<String, u16> {
-        match ureq::get(&format!("{base}/dim/describe"))
+        match ureq::get(&format!("{base}/assets/describe"))
             .query("iri", &format!("http://example.org/{iri}"))
             .set("X-API-Key", key)
             .set("Accept", accept)
@@ -1560,7 +1567,7 @@ fn row_rules_hide_rows_from_queries() {
     assert!(triples("p1", "team", nt).unwrap().contains("phone"));
     // The Graph Store Protocol reads the same view.
     let dump = |key: &str, query: &str, accept: &str| -> String {
-        ureq::get(&format!("{base}/dim/data{query}"))
+        ureq::get(&format!("{base}/assets/data{query}"))
             .set("X-API-Key", key)
             .set("Accept", accept)
             .call()
@@ -1575,7 +1582,7 @@ fn row_rules_hide_rows_from_queries() {
     // So does the RDF4J API: statements, size, contexts and queries, and its writes are
     // refused.
     let rdf4j = |key: &str, path: &str, accept: &str| -> Result<String, u16> {
-        match ureq::get(&format!("{base}/repositories/dim{path}"))
+        match ureq::get(&format!("{base}/repositories/assets{path}"))
             .set("X-API-Key", key)
             .set("Accept", accept)
             .call()
@@ -1602,7 +1609,7 @@ fn row_rules_hide_rows_from_queries() {
         rdf4j_names.contains("\"p1\"") && !rdf4j_names.contains("\"p2\""),
         "{rdf4j_names}"
     );
-    let removed = ureq::delete(&format!("{base}/repositories/dim/statements"))
+    let removed = ureq::delete(&format!("{base}/repositories/assets/statements"))
         .set("X-API-Key", "north")
         .call();
     assert!(matches!(removed, Err(ureq::Error::Status(403, _))));
@@ -1648,7 +1655,7 @@ fn row_rules_hide_rows_from_queries() {
             .contains("example.org/p2")
     );
     assert!(triples("p1", "team", html).unwrap().contains("phone"));
-    let model = ureq::get(&format!("{base}/dim/describe"))
+    let model = ureq::get(&format!("{base}/assets/describe"))
         .query("iri", "http://example.org/p1")
         .query("format", "view")
         .set("X-API-Key", "north")
@@ -1658,16 +1665,16 @@ fn row_rules_hide_rows_from_queries() {
         .unwrap();
     assert!(model.contains("p1") && !model.contains("phone"), "{model}");
     // The service description is refused under row rules.
-    assert_eq!(get("/dim/query", "north"), Err(403));
+    assert_eq!(get("/assets/query", "north"), Err(403));
     // Explain gives the row count alone, of the query as the caller would run it.
-    let explained = |key: &str| get(&format!("/dim/explain?query={}", encode(names)), key);
+    let explained = |key: &str| get(&format!("/assets/explain?query={}", encode(names)), key);
     assert_eq!(
         explained("north").unwrap(),
         r#"{"rows":2,"restricted":true}"#
     );
     assert!(!explained("team").unwrap().contains("restricted"));
     let post = |key: &str| {
-        ureq::post(&format!("{base}/dim/update"))
+        ureq::post(&format!("{base}/assets/update"))
             .set("X-API-Key", key)
             .set("Content-Type", "application/sparql-update")
             .send_string("INSERT DATA { <urn:a> <urn:b> <urn:c> }")
@@ -1684,7 +1691,7 @@ fn row_rules_hide_rows_from_queries() {
 
     // The access explain page tells a server admin what a caller sees and why.
     let explain = |key: &str, query: &str| -> Result<serde_json::Value, u16> {
-        match ureq::get(&format!("{base}/$/access/datasets/dim/explain?{query}"))
+        match ureq::get(&format!("{base}/$/access/datasets/assets/explain?{query}"))
             .set("X-API-Key", key)
             .call()
         {
@@ -1770,7 +1777,7 @@ fn row_rules_hide_rows_from_queries() {
     for (round, area) in ["south", "north", "south", "north"].iter().enumerate() {
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(
-            dir.join("dim.ttl"),
+            dir.join("assets.ttl"),
             format!(
                 "{SG}@prefix sh: <http://www.w3.org/ns/shacl#> .
                  ex:Contractors a sg:Policy ; sg:group \"contractor\" ; sg:readAllGraphs true ;
@@ -1805,7 +1812,7 @@ fn row_rules_hide_rows_from_queries() {
 fn ogc_api_and_tiles_keep_to_row_rules() {
     let dir = tripletrail_testdir::tempdir("auth-ogc-rows");
     std::fs::write(
-        dir.join("dim.ttl"),
+        dir.join("assets.ttl"),
         format!(
             "{SG}@prefix sh: <http://www.w3.org/ns/shacl#> .
              ex:Contractors a sg:Policy ; sg:group \"contractor\" ; sg:readAllGraphs true ;
@@ -1826,7 +1833,7 @@ fn ogc_api_and_tiles_keep_to_row_rules() {
     std::fs::write(
         dir.join("guard.json"),
         format!(
-            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"dim": {{"policies": ["dim.ttl"]}}}}}}"#,
+            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"assets": {{"policies": ["assets.ttl"]}}}}}}"#,
             key("north", "contractor"),
             key("team", "team"),
         ),
@@ -1846,7 +1853,7 @@ fn ogc_api_and_tiles_keep_to_row_rules() {
         engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
         let server = Server::bind(
             "127.0.0.1:0",
-            [("dim".to_owned(), engine)],
+            [("assets".to_owned(), engine)],
             Options {
                 threads: 2,
                 auth_config: auth.then(|| dir.join("guard.json")),
@@ -1879,35 +1886,35 @@ fn ogc_api_and_tiles_keep_to_row_rules() {
     let holds = |body: &[u8], s: &str| body.windows(s.len()).any(|w| w == s.as_bytes());
 
     // The team sees both classes and the codes; the contractor its own station only.
-    let (_, all) = get(&full, "/dim/ogc/collections", "team");
+    let (_, all) = get(&full, "/assets/ogc/collections", "team");
     assert!(holds(&all, "Station") && holds(&all, "Line"));
     assert!(holds(
-        &get(&full, "/dim/ogc/collections/Station/queryables", "team").1,
+        &get(&full, "/assets/ogc/collections/Station/queryables", "team").1,
         "code"
     ));
     assert!(holds(
-        &get(&full, "/dim/tiles/all/0/0/0.mvt", "team").1,
+        &get(&full, "/assets/tiles/all/0/0/0.mvt", "team").1,
         "http://example.org/l1"
     ));
     let paths = [
-        "/dim/ogc",
-        "/dim/ogc/api",
-        "/dim/ogc/collections",
-        "/dim/ogc/collections/Station",
-        "/dim/ogc/collections/Line",
-        "/dim/ogc/collections/Station/queryables",
-        "/dim/ogc/collections/Station/items?limit=100",
-        "/dim/ogc/collections/Station/items?bbox=-80,-40,10,60",
-        "/dim/ogc/collections/Station/items?code=X",
-        "/dim/ogc/collections/Station/items?name=s2",
-        "/dim/ogc/collections/Station/items?filter=name%3D's2'",
-        "/dim/ogc/collections/Station/items/http%3A%2F%2Fexample.org%2Fs1",
-        "/dim/ogc/collections/Station/items/http%3A%2F%2Fexample.org%2Fs2",
-        "/dim/ogc/collections/Line/items",
-        "/dim/tiles/all/0/0/0.mvt",
-        "/dim/tiles/Station/0/0/0.mvt",
-        "/dim/tiles/Line/0/0/0.mvt",
-        "/dim/tiles/all/5/16/10.mvt",
+        "/assets/ogc",
+        "/assets/ogc/api",
+        "/assets/ogc/collections",
+        "/assets/ogc/collections/Station",
+        "/assets/ogc/collections/Line",
+        "/assets/ogc/collections/Station/queryables",
+        "/assets/ogc/collections/Station/items?limit=100",
+        "/assets/ogc/collections/Station/items?bbox=-80,-40,10,60",
+        "/assets/ogc/collections/Station/items?code=X",
+        "/assets/ogc/collections/Station/items?name=s2",
+        "/assets/ogc/collections/Station/items?filter=name%3D's2'",
+        "/assets/ogc/collections/Station/items/http%3A%2F%2Fexample.org%2Fs1",
+        "/assets/ogc/collections/Station/items/http%3A%2F%2Fexample.org%2Fs2",
+        "/assets/ogc/collections/Line/items",
+        "/assets/tiles/all/0/0/0.mvt",
+        "/assets/tiles/Station/0/0/0.mvt",
+        "/assets/tiles/Line/0/0/0.mvt",
+        "/assets/tiles/all/5/16/10.mvt",
     ];
     // The port, and the item lists' `timeStamp`, which may fall in different seconds.
     let normal = |base: &str, body: &[u8]| {
@@ -1932,12 +1939,12 @@ fn ogc_api_and_tiles_keep_to_row_rules() {
     }
     let (_, mine) = get(
         &full,
-        "/dim/ogc/collections/Station/items?limit=100",
+        "/assets/ogc/collections/Station/items?limit=100",
         "north",
     );
     assert!(holds(&mine, "http://example.org/s1") && !holds(&mine, "\"X\""));
     // Writes are not taken.
-    let post = ureq::post(&format!("{full}/dim/ogc/collections"))
+    let post = ureq::post(&format!("{full}/assets/ogc/collections"))
         .set("X-API-Key", "north")
         .call();
     assert!(matches!(post, Err(ureq::Error::Status(405 | 403, _))));
@@ -1951,7 +1958,7 @@ fn ogc_api_and_tiles_keep_to_row_rules() {
 fn describe_pages_and_explain_keep_to_row_rules() {
     let dir = tripletrail_testdir::tempdir("auth-describe-rows");
     std::fs::write(
-        dir.join("dim.ttl"),
+        dir.join("assets.ttl"),
         format!(
             "{SG}@prefix sh: <http://www.w3.org/ns/shacl#> .
              ex:Contractors a sg:Policy ; sg:group \"contractor\" ; sg:readAllGraphs true ;
@@ -1965,7 +1972,7 @@ fn describe_pages_and_explain_keep_to_row_rules() {
     std::fs::write(
         dir.join("guard.json"),
         format!(
-            r#"{{"auth": {{"apiKeys": [{{"sha256": "{}", "agent": "http://example.org/north", "groups": ["contractor"]}}]}}, "datasets": {{"dim": {{"policies": ["dim.ttl"]}}}}}}"#,
+            r#"{{"auth": {{"apiKeys": [{{"sha256": "{}", "agent": "http://example.org/north", "groups": ["contractor"]}}]}}, "datasets": {{"assets": {{"policies": ["assets.ttl"]}}}}}}"#,
             hash("north")
         ),
     )
@@ -1985,7 +1992,7 @@ fn describe_pages_and_explain_keep_to_row_rules() {
         engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
         let server = Server::bind(
             "127.0.0.1:0",
-            [("dim".to_owned(), engine)],
+            [("assets".to_owned(), engine)],
             Options {
                 threads: 2,
                 auth_config: auth.then(|| dir.join("guard.json")),
@@ -2014,8 +2021,8 @@ fn describe_pages_and_explain_keep_to_row_rules() {
     let mut paths = Vec::new();
     for iri in ["p1", "p2", "ann", "bob", "t1", "Project", "north", "south"] {
         let iri = encode(&format!("http://example.org/{iri}"));
-        paths.push((format!("/dim/describe?iri={iri}"), "text/html"));
-        paths.push((format!("/dim/describe?iri={iri}&format=view"), "*/*"));
+        paths.push((format!("/assets/describe?iri={iri}"), "text/html"));
+        paths.push((format!("/assets/describe?iri={iri}&format=view"), "*/*"));
     }
     for q in [
         "SELECT * { ?s ?p ?o }",
@@ -2023,7 +2030,7 @@ fn describe_pages_and_explain_keep_to_row_rules() {
         "ASK { ?s <http://example.org/phone> ?o }",
         "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p <http://example.org/ann> }",
     ] {
-        paths.push((format!("/dim/explain?query={}", encode(q)), "*/*"));
+        paths.push((format!("/assets/explain?query={}", encode(q)), "*/*"));
     }
     // The resources nearest a vector, also with the parameters as a form (the Search page's
     // way): only the rows the caller may see. On servers of their own, with the same dataset
@@ -2041,7 +2048,7 @@ fn describe_pages_and_explain_keep_to_row_rules() {
         format!("property={emb}&vector=%5B1,0.1%5D"),
         format!("property={emb}&iri={}", encode("http://example.org/p2")),
     ] {
-        let post = |base: &str| match ureq::post(&format!("{base}/dim/search/similar"))
+        let post = |base: &str| match ureq::post(&format!("{base}/assets/search/similar"))
             .set("X-API-Key", "north")
             .set("Content-Type", "application/x-www-form-urlencoded")
             .send_string(&form)
@@ -2057,7 +2064,7 @@ fn describe_pages_and_explain_keep_to_row_rules() {
             b.1.replace(host(&only_v), "HOST"),
             "{form}"
         );
-        let get = |base: &str| get(base, &format!("/dim/search/similar?{form}"), "*/*");
+        let get = |base: &str| get(base, &format!("/assets/search/similar?{form}"), "*/*");
         assert_eq!(get(&full_v), a, "{form}");
     }
     for base in [&full, &only] {
@@ -2067,7 +2074,7 @@ fn describe_pages_and_explain_keep_to_row_rules() {
     for (path, accept) in &paths {
         let (a, b) = (get(&full, path, accept), get(&only, path, accept));
         assert_eq!(a.0, b.0, "{path}");
-        if path.starts_with("/dim/explain") {
+        if path.starts_with("/assets/explain") {
             // The restricted explain gives the row count alone; the other one, the plan too.
             let rows =
                 |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap()["rows"].clone();
@@ -2093,7 +2100,7 @@ fn describe_pages_and_explain_keep_to_row_rules() {
 fn row_rules_compile_within_the_query_timeout() {
     let dir = tripletrail_testdir::tempdir("auth-row-rules-timeout");
     std::fs::write(
-        dir.join("dim.ttl"),
+        dir.join("assets.ttl"),
         format!(
             "{SG}@prefix sh: <http://www.w3.org/ns/shacl#> .
              ex:Contractors a sg:Policy ; sg:group \"contractor\" ; sg:readAllGraphs true ;
@@ -2106,7 +2113,7 @@ fn row_rules_compile_within_the_query_timeout() {
     std::fs::write(
         dir.join("guard.json"),
         format!(
-            r#"{{"auth": {{"apiKeys": [{{"sha256": "{}", "agent": "http://example.org/north", "groups": ["contractor"]}}]}}, "datasets": {{"dim": {{"policies": ["dim.ttl"]}}}}}}"#,
+            r#"{{"auth": {{"apiKeys": [{{"sha256": "{}", "agent": "http://example.org/north", "groups": ["contractor"]}}]}}, "datasets": {{"assets": {{"policies": ["assets.ttl"]}}}}}}"#,
             hash("north")
         ),
     )
@@ -2122,7 +2129,7 @@ fn row_rules_compile_within_the_query_timeout() {
     let start = |timeout: Option<std::time::Duration>| {
         let server = Server::bind(
             "127.0.0.1:0",
-            [("dim".to_owned(), engine.clone())],
+            [("assets".to_owned(), engine.clone())],
             Options {
                 threads: 2,
                 auth_config: Some(dir.join("guard.json")),
@@ -2144,7 +2151,7 @@ fn row_rules_compile_within_the_query_timeout() {
         Err(ureq::Error::Status(code, _)) => code,
         Err(e) => panic!("{e}"),
     };
-    let describe = "/dim/describe?iri=http%3A%2F%2Fexample.org%2Fp1";
+    let describe = "/assets/describe?iri=http%3A%2F%2Fexample.org%2Fp1";
     let open = start(None);
     assert_eq!(status(&open, describe), 200);
     // A timeout far shorter than the compile: neither read waits for it to finish.
@@ -2153,7 +2160,7 @@ fn row_rules_compile_within_the_query_timeout() {
         .unwrap();
     let short = start(Some(std::time::Duration::from_micros(1)));
     assert_ne!(status(&short, describe), 200);
-    assert_ne!(status(&short, "/dim/data?default"), 200);
+    assert_ne!(status(&short, "/assets/data?default"), 200);
 }
 
 /// Writes under row rules (#202): a caller who may write and has row rules writes only into
@@ -2164,7 +2171,7 @@ fn row_rules_compile_within_the_query_timeout() {
 fn row_rules_bound_updates() {
     let dir = tripletrail_testdir::tempdir("auth-row-writes");
     std::fs::write(
-        dir.join("dim.ttl"),
+        dir.join("assets.ttl"),
         format!(
             "{SG}@prefix sh: <http://www.w3.org/ns/shacl#> .
              ex:Contractors a sg:Policy ; sg:group \"contractor\" ; sg:readAllGraphs true ;
@@ -2177,7 +2184,7 @@ fn row_rules_bound_updates() {
     std::fs::write(
         dir.join("guard.json"),
         format!(
-            r#"{{"auth": {{"apiKeys": [{{"sha256": "{}", "agent": "http://example.org/north", "groups": ["contractor"]}}]}}, "datasets": {{"dim": {{"policies": ["dim.ttl"]}}}}}}"#,
+            r#"{{"auth": {{"apiKeys": [{{"sha256": "{}", "agent": "http://example.org/north", "groups": ["contractor"]}}]}}, "datasets": {{"assets": {{"policies": ["assets.ttl"]}}}}}}"#,
             hash("north")
         ),
     )
@@ -2194,7 +2201,7 @@ fn row_rules_bound_updates() {
     let reader = engine.clone();
     let server = Server::bind(
         "127.0.0.1:0",
-        [("dim".to_owned(), engine)],
+        [("assets".to_owned(), engine)],
         Options {
             threads: 2,
             auth_config: Some(dir.join("guard.json")),
@@ -2205,7 +2212,7 @@ fn row_rules_bound_updates() {
     let base = format!("http://{}", server.address());
     server.spawn();
     let post = |update: &str| {
-        ureq::post(&format!("{base}/dim/update"))
+        ureq::post(&format!("{base}/assets/update"))
             .set("X-API-Key", "north")
             .set("Content-Type", "application/sparql-update")
             .send_string(&format!("PREFIX ex: <http://example.org/> {update}"))
@@ -2240,7 +2247,7 @@ fn row_rules_bound_updates() {
 
     // The Graph Store Protocol writes the same way: one graph, only what the caller sees.
     let gsp = |method: &str, query: &str, body: &str| {
-        ureq::request(method, &format!("{base}/dim/data{query}"))
+        ureq::request(method, &format!("{base}/assets/data{query}"))
             .set("X-API-Key", "north")
             .set("Content-Type", "text/turtle")
             .send_string(&format!("@prefix ex: <http://example.org/> . {body}"))
@@ -2297,7 +2304,7 @@ fn row_rules_bound_updates() {
         let url = if path.starts_with("http") {
             path.to_owned()
         } else {
-            format!("{base}/repositories/dim{path}")
+            format!("{base}/repositories/assets{path}")
         };
         ureq::request(method, &url)
             .set("X-API-Key", "north")
