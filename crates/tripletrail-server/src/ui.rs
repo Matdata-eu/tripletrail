@@ -26,6 +26,7 @@ const SHAPES_JS: &str = include_str!("../ui/shapes.js");
 const EXPLORE_JS: &str = include_str!("../ui/explore.js");
 const AI_JS: &str = include_str!("../ui/ai.js");
 const BUILDER_JS: &str = include_str!("../ui/builder.js");
+const IMPORT_JS: &str = include_str!("../ui/import.js");
 /// Release notes for the What's new dialog, newest first.
 pub(crate) const WHATS_NEW: &str = include_str!("../ui/whats-new.json");
 const ICON: &str = include_str!("../ui/icon.svg");
@@ -212,7 +213,7 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
         | ["index.html"]
         | [
             "datasets" | "query" | "map" | "search" | "explore" | "tasks" | "server" | "workbench"
-            | "access" | "shapes",
+            | "access" | "shapes" | "import",
             ..,
         ] => {
             let base = state
@@ -292,6 +293,7 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
             tripletrail::shapes::VOCABULARY,
         )),
         ["builder.js"] => Ok(page("text/javascript; charset=utf-8", BUILDER_JS)),
+        ["import.js"] => Ok(page("text/javascript; charset=utf-8", IMPORT_JS)),
         ["describe-map.js"] => Ok(page("text/javascript; charset=utf-8", DESCRIBE_MAP_JS)),
         ["describe.js"] => Ok(page("text/javascript; charset=utf-8", DESCRIBE_JS)),
         ["whats-new.json"] => Ok(page("application/json", WHATS_NEW)),
@@ -360,6 +362,7 @@ mod tests {
             ("explore.js", super::EXPLORE_JS),
             ("ai.js", super::AI_JS),
             ("builder.js", super::BUILDER_JS),
+            ("import.js", super::IMPORT_JS),
             ("whats-new.json", super::WHATS_NEW),
         ] {
             for marker in ["<<<<<<< ", "=======\n", ">>>>>>> "] {

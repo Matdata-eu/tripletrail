@@ -738,7 +738,7 @@
   function route() {
     const [p = "datasets", arg] = location.pathname.slice(UI.length).split("/").filter(Boolean);
     const name = arg ? decodeURIComponent(arg) : null;
-    page = ["datasets", "query", "map", "search", "explore", "tasks", "server", "workbench", "access", "shapes"].includes(p) ? p : "datasets";
+    page = ["datasets", "query", "map", "search", "explore", "tasks", "server", "workbench", "access", "shapes", "import"].includes(p) ? p : "datasets";
     if (page !== "workbench" && document.body.dataset.page === "workbench" && window.TripleTrailWorkbench) window.TripleTrailWorkbench.leave();
     if (page !== "map" && window.TripleTrailMap) window.TripleTrailMap.leave();
     if (page !== "explore" && window.TripleTrailExplore) window.TripleTrailExplore.leave();
@@ -761,6 +761,10 @@
     else if (page === "explore") {
       if (window.TripleTrailExplore) window.TripleTrailExplore.render(shared, name ? [encodeURIComponent(name)] : []);
       else $("#page-explore").replaceChildren(el("p", { class: "error loading" }, "The Explore page could not be loaded."));
+    }
+    else if (page === "import") {
+      if (window.TripleTrailImport) window.TripleTrailImport.render(shared, name ? [encodeURIComponent(name)] : []);
+      else $("#page-import").replaceChildren(el("p", { class: "error loading" }, "The Import page could not be loaded."));
     }
     else if (page === "tasks") renderTasks();
     else if (page === "workbench") {

@@ -62,6 +62,9 @@ first). URLs are read only under the prefixes `remote` allows (`--allow-url`, se
 
 ## Sources and options
 
+On the server's [Import page](server.md#importing-files), `location=upload:NAME` reads a file
+sent to the server, kept in its memory; nothing else can be read there.
+
 | Format | Chosen by | Graph |
 |---|---|---|
 | JSON | `.json`, `.geojson`, `application/json` | objects and arrays are containers; members are `xyz:<key>`, items `rdf:_n`; strings `xsd:string`, numbers `xsd:decimal` (`xsd:double` with an exponent) with the numeral as written, as in SPARQL Anything, booleans `xsd:boolean`; nulls give no triple (`xyz:null` with `json.include-null-values=true`) |
