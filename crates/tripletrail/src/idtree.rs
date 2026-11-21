@@ -230,6 +230,26 @@ impl Eval<'_> {
                     ones: bindings.len(),
                 }
             }
+            // A sub-select's projection (the groups a count pass reads back from a table of
+            // ids, #185), while the id executor answers whole queries (#11): its columns,
+            // a variable it doesn't bind unbound in every row.
+            // A sub-select with `DISTINCT`, `REDUCED`, an order or a slice (#11).
+            GraphPattern::Slice { .. }
+            | GraphPattern::Distinct { .. }
+            | GraphPattern::Reduced { .. }
+                if crate::executor_ids() =>
+            {
+                crate::direct::sub_select(p, self)?
+            }
+            GraphPattern::Project { inner, .. }
+                if crate::executor_ids() && matches!(**inner, GraphPattern::OrderBy { .. }) =>
+            {
+                crate::direct::sub_select(p, self)?
+            }
+            GraphPattern::Project { inner, variables } if crate::executor_ids() => {
+                let t = self.eval(inner)?;
+                project(t, variables)
+            }
             // `BIND`, while the id executor answers whole queries (#11).
             GraphPattern::Extend {
                 inner,
@@ -388,6 +408,15 @@ impl Eval<'_> {
         };
         if zero && starts.is_none() {
             // A zero-length path between two free variables: every term of the graph.
+            return None;
+        }
+        // A start only this query knows (a `VALUES` term the store doesn't hold) is no node
+        // of the graph; whether a zero-length path matches it is the evaluator's to say.
+        if zero
+            && starts
+                .as_ref()
+                .is_some_and(|s| s.iter().any(|id| id.kind() == Kind::Ephemeral))
+        {
             return None;
         }
         let ids = match starts {
@@ -3095,6 +3124,27 @@ impl<'a> Pick<'a> {
 
 /// A key that tells computed values apart exactly (the type and the value), for the ids of
 /// `BIND`'s values; `None` for dates.
+/// The columns `variables` of `t`, in that order; one `t` doesn't have is unbound.
+fn project(t: Table, variables: &[Variable]) -> Table {
+    let cols: Vec<Option<usize>> = variables.iter().map(|v| t.col(v)).collect();
+    let width = t.width();
+    let rows = t.len();
+    let mut ids = Vec::with_capacity(rows * cols.len());
+    for r in 0..rows {
+        let row = &t.ids[r * width..(r + 1) * width];
+        ids.extend(cols.iter().map(|c| c.map_or(TermId(0), |c| row[c])));
+    }
+    Table {
+        vars: variables.to_vec(),
+        ids,
+        maybe: cols
+            .iter()
+            .map(|c| c.is_none_or(|c| t.maybe[c]) && rows > 0)
+            .collect(),
+        ones: rows,
+    }
+}
+
 fn value_key(v: crate::idvalue::Value) -> Option<(u8, i128)> {
     use crate::idvalue::Value as V;
     Some(match v {

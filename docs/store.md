@@ -160,7 +160,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   orders 222 → 49 ms; a select expression over a join 197 → 59 ms). A computed double that
   doesn't fit an inline id gets one made up for the query, which doesn't order, so an
   `ORDER BY` of a computed value is left to the evaluator. `VALUES` is a table of the ids of
-  its terms (`UNDEF` an unbound cell). A term the store doesn't hold (`2.5e0` when it holds
+  its terms (`UNDEF` an unbound cell), and a sub-select's projection the columns it keeps, so
+  the groups a count pass reads back from a table of ids are answered from that table. A
+  sub-select's `DISTINCT`, `REDUCED`, order of variables and slice (under an order; a slice
+  without one keeps the rows the evaluator chooses) are applied to its table as at the top
+  of a query (`direct::sub_select`). A term the store doesn't hold (`2.5e0` when it holds
   `2.5`) gets an id made up for the query, which joins only itself; a filter that would have
   to compare it by value (`=`, `IN`, `isLiteral`, `DATATYPE`) leaves the query to the
   evaluator. Before any work, the plan checks that each `BIND` expression is one the kernels

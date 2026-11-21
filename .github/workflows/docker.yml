@@ -8,6 +8,7 @@ name: Docker image
 # A version tag (`v*`) publishes `1.2.3`, `1.2` and `latest` by itself, so each release has an
 # image other images can copy the command from (#93). Otherwise manual, to save runner time:
 # start it from the Actions tab; run on main it publishes tag `main`. A short-sha tag either way.
+# A pre-release tag (`v0.1.0-rc.3`) publishes only `0.1.0-rc.3`: `1.2` and `latest` move on releases.
 # Untick "publish" to only build and smoke-test (e.g. to try an image change on a branch).
 #
 # Signing is off until the repository is public (#150): keyless signing writes the

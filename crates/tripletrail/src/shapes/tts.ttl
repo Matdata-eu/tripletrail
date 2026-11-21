@@ -67,6 +67,11 @@ tts:hidesGenerated a rdf:Property ;
     rdfs:domain tts:ShapeSet ;
     rdfs:range tts:Reader .
 
+tts:qualityReport a rdf:Property ;
+    rdfs:label "quality report"@en ;
+    rdfs:comment "The named graph holding a stored SHACL validation report of the data: each node shape gets a data-quality facet (key \"quality\") on the map, the worst severity of the report's results about the feature."@en ;
+    rdfs:domain tts:ShapeSet .
+
 tts:refines a rdf:Property ;
     rdfs:label "refines"@en ;
     rdfs:comment "true on a node shape of a higher layer: it changes the node shape of the same IRI below instead of replacing it. The settings it gives replace those below, its property shapes replace those below with the same path, and the rest of the shape below stays."@en ;

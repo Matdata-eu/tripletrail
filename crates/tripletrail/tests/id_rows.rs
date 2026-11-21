@@ -448,6 +448,113 @@ fn binds_on_ids_are_the_evaluators() {
     }
 }
 
+/// Groups a count pass reads back from a table of ids (1,024 or more): the id executor answers
+/// the query from that table (#11), with the evaluator's answers.
+const GROUPS: &[(&str, bool)] = &[
+    (
+        "SELECT ?c (COUNT(*) AS ?n) WHERE { ?o ex:by ?c } GROUP BY ?c",
+        true,
+    ),
+    (
+        "SELECT ?c ?name (COUNT(*) AS ?n) WHERE { ?o ex:by ?c . ?c ex:name ?name } GROUP BY ?c ?name",
+        true,
+    ),
+    (
+        "SELECT ?c (SUM(?q) AS ?t) WHERE { ?o ex:by ?c ; ex:q ?q } GROUP BY ?c ORDER BY DESC(?t) ?c LIMIT 7",
+        true,
+    ),
+    (
+        "SELECT ?c (MAX(?q) AS ?m) (MIN(?q) AS ?l) WHERE { ?o ex:by ?c ; ex:q ?q } GROUP BY ?c",
+        true,
+    ),
+    (
+        "SELECT ?c ?n WHERE { { SELECT ?c (COUNT(*) AS ?n) WHERE { ?o ex:by ?c } GROUP BY ?c } FILTER(?n > 2) }",
+        false,
+    ),
+    (
+        "SELECT ?c ?k WHERE { { SELECT ?c (COUNT(*) AS ?n) WHERE { ?o ex:by ?c } GROUP BY ?c } BIND(?n + 1 AS ?k) } ORDER BY ?c LIMIT 9",
+        false,
+    ),
+    (
+        "SELECT ?c ?n ?name WHERE { { SELECT ?c (COUNT(*) AS ?n) WHERE { ?o ex:by ?c } GROUP BY ?c } OPTIONAL { ?c ex:name ?name } }",
+        false,
+    ),
+    (
+        "SELECT ?c ?x WHERE { { SELECT ?c WHERE { ?o ex:by ?c } } BIND(?o AS ?x) }",
+        false,
+    ),
+    // Sub-selects with `DISTINCT`, an order and a slice inside.
+    (
+        "SELECT ?c ?q WHERE { { SELECT DISTINCT ?c WHERE { ?o ex:by ?c } } ?o2 ex:by ?c ; ex:q ?q }",
+        true,
+    ),
+    (
+        "SELECT ?c ?n WHERE { { SELECT ?c WHERE { ?o ex:by ?c } ORDER BY DESC(?c) LIMIT 5 } ?c ex:name ?n }",
+        true,
+    ),
+    (
+        "SELECT * WHERE { { SELECT ?o ?q WHERE { ?o ex:q ?q } ORDER BY ?q ?o LIMIT 3 OFFSET 2 } }",
+        true,
+    ),
+    (
+        "SELECT * WHERE { { SELECT ?o ?q WHERE { ?o ex:q ?q } ORDER BY DESC(?q) ?o } } ORDER BY ?o LIMIT 4",
+        true,
+    ),
+    (
+        "SELECT ?q (COUNT(*) AS ?n) WHERE { { SELECT DISTINCT ?c ?q WHERE { ?o ex:by ?c ; ex:q ?q } } } GROUP BY ?q",
+        false,
+    ),
+    (
+        "SELECT * WHERE { { SELECT ?o WHERE { ?o ex:q ?q } LIMIT 3 } }",
+        false,
+    ),
+    (
+        "SELECT * WHERE { { SELECT REDUCED ?q WHERE { ?o ex:q ?q } } }",
+        true,
+    ),
+    // A zero-length path from a `VALUES` term the store doesn't hold: no node, no match.
+    (
+        "SELECT * WHERE { VALUES ?v { ex:nope ex:o1 } ?v ex:by* ?c }",
+        false,
+    ),
+    (
+        "SELECT * WHERE { VALUES ?v { ex:nope ex:o1 } ?v ex:by? ?c }",
+        false,
+    ),
+];
+
+#[test]
+fn groups_read_back_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..9000_u32 {
+        let c = i % 2500;
+        data.push_str(&format!("ex:o{i} ex:by ex:c{c} ; ex:q {} .\n", i % 17));
+        if i < 2500 && i % 3 != 0 {
+            data.push_str(&format!("ex:c{i} ex:name \"c{}\" .\n", i % 400));
+        }
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for &(q, on_ids) in GROUPS {
+        let run = |executor: &str| {
+            let q = format!("#pragma tt.executor {executor}\n{prefix} {q}");
+            if q.contains("ORDER BY") {
+                ordered(&engine, &q)
+            } else {
+                rows(&engine, &q)
+            }
+        };
+        assert_eq!(run("ids"), run("spareval"), "{q}");
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        if on_ids {
+            assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+        }
+    }
+}
+
 #[test]
 fn the_id_executor_answers_as_the_evaluator() {
     let engine = Engine::new_tripletrail();

@@ -180,6 +180,12 @@ impl RowShapes {
     pub fn graph(&self) -> &Graph {
         &self.graph
     }
+
+    /// A number unique to these shapes in this process: a reload gives a new one. Anything
+    /// cached from them can take it as its key.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 impl PartialEq for RowShapes {

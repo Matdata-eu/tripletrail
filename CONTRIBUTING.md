@@ -70,7 +70,8 @@ texts it ships, written by `.github/scripts/third-party-licenses.py` (run it loc
 the notes are the CHANGELOG section followed by the commits since the last tag, grouped by
 type. Starting the workflow by hand does a dry run that keeps everything as a workflow
 artifact. The tag also starts "Docker image", which publishes the image as `1.2.3`, `1.2` and
-`latest`, and "Helm chart" with "publish" ticked publishes the chart.
+`latest` (a pre-release tag such as `v0.1.0-rc.3` publishes only `0.1.0-rc.3`, so `latest` stays
+on the last release), and "Helm chart" with "publish" ticked publishes the chart.
 
 ## Security issues
 

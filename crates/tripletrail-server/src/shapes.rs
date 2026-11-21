@@ -888,6 +888,8 @@ fn active(
     // A higher set may keep the generated shapes it does not take over from some readers.
     let uppers: Vec<&Graph> = pack.iter().map(|(_, g)| g).chain(own.as_ref()).collect();
     let all = shapes::hide_generated(&all, &generated, &uppers);
+    // A stored validation report as every class's data-quality facet (#92).
+    let all = shapes::add_quality(&all, &uppers);
     let source = match (&pack, own.is_some()) {
         (Some((label, _)), true) => format!("pack {label}; {source}"),
         (Some((label, _)), false) => format!("pack {label}"),

@@ -1195,6 +1195,40 @@ The shapes are not valid:
 <https://example.org/rail#WrongShape>: the facet "speedClass"'s tts:select binds no ?value
 ```
 
+### Show data quality on the map
+
+A SHACL validation report of the data ([chapter 6](06-validation-and-reasoning.md)), stored in
+a named graph, can be a facet of every layer: the worst severity of the report's results about
+each feature, `violation`, `warning` or `info`, else `ok`. The map counts it, filters on it and
+colours by it like any other facet, and a panel of several layers shares it. Store the report,
+then name its graph in the shapes with `tts:qualityReport`:
+
+<!-- test: file report.ttl -->
+```turtle
+@prefix ex: <https://example.org/rail#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+[] a sh:ValidationReport ; sh:conforms false ;
+  sh:result [ sh:focusNode ex:S01 ; sh:resultSeverity sh:Violation ] ,
+    [ sh:focusNode ex:S02 ; sh:resultSeverity sh:Warning ] .
+```
+
+<!-- test: run -->
+```sh
+curl -s -X PUT 'http://localhost:7878/ds/data?graph=urn:report' -H 'Content-Type: text/turtle' --data-binary @report.ttl -o /dev/null
+echo '@prefix tts: <http://w3id.org/tripletrail/shapes#> . <urn:my:set> a tts:ShapeSet ; tts:qualityReport <urn:report> .' > quality.ttl
+curl -s -X PUT 'http://localhost:7878/$/datasets/ds/shapes/files/_set.ttl' --data-binary @quality.ttl -o /dev/null
+curl -s 'http://localhost:7878/ds/tiles/facets/Section' | grep -o '"key":"quality"[^]]*]'
+```
+
+<!-- test: output -->
+```text
+"key":"quality","more":false,"title":"Data quality","values":[{"count":10,"label":null,"value":"ok"},{"count":1,"label":null,"value":"violation"},{"count":1,"label":null,"value":"warning"}]
+```
+
+It is computed on the map only, as a `tts:select` facet: the OGC API and the other readers
+have no such property. A class whose shape has a facet of key `quality` keeps its own.
+
 ### Start a pack from RINF Atlas shapes
 
 If you draw your data with [RINF Atlas](https://rinf-atlas.matdata.eu), its shapes (SHACL with
