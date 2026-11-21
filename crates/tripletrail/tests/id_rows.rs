@@ -110,6 +110,17 @@ const PATTERNS: &[&str] = &[
     "?s ex:val ?x . FILTER(?x IN (3, ex:o1, \"x\"^^ex:dt))",
     "?s ex:val ?x . FILTER(?x IN ())",
     "?s ex:val ?x . FILTER(!(?x IN (true)))",
+    // IN over a hash set of ids (#63): numbers equal across datatypes, ill-typed and derived
+    // integers, language tags, IRIs not in the store, NOT IN and unbound values.
+    "?s ex:val ?x . FILTER(?x IN (3.0, ex:missing, \"3\", true))",
+    "?s ex:val ?x . FILTER(?x NOT IN (3e0, ex:o1, -7))",
+    "?s ex:val ?x . FILTER(?x IN (\"12\"^^xsd:integer, \"abc\"^^xsd:integer, false, 300))",
+    "?s ex:val ?x . FILTER(?x IN (\"x\"^^ex:dt, \"y\"^^ex:dt, \"3\"^^xsd:string))",
+    "?s ex:label ?l . FILTER(?l IN (\"l5\"@en, \"plain3\", \"l70\"@EN, \"plain4\"@en, \"l10\"))",
+    "?s ex:label ?l . FILTER(?l NOT IN (\"plain3\", \"l5\"@en-gb))",
+    "?s ex:p ?o . FILTER(?o IN (ex:o1, ex:o2, ex:o3, ex:missing, ex:o650, ex:o699, ex:o700))",
+    "?s ex:p ?o . OPTIONAL { ?s ex:r ?b } FILTER(?b IN (ex:o1, ex:o2) || !BOUND(?b))",
+    "?s ex:p ?o . OPTIONAL { ?o ex:q ?v } FILTER(?v NOT IN (\"v1\", \"v2\", ex:o1))",
     "?s ex:p ?o . OPTIONAL { ?s ex:r ?b } FILTER(!BOUND(?b))",
     "?s ex:p ?o . OPTIONAL { ?s ex:r ?b } FILTER(BOUND(?b) || ?o = ex:o3)",
     "?s ex:p ?o . OPTIONAL { ?s ex:label ?l } FILTER(!(LANG(?l) = \"nl\"))",
@@ -167,4 +178,53 @@ fn rows_evaluated_on_ids_are_the_evaluators() {
         )
         .unwrap();
     check(&engine);
+}
+
+/// A long `IN` list of IRIs is one hash lookup per row (#63), not one comparison per item: it
+/// keeps the same rows as a `VALUES` join and stays within a few times its time.
+#[test]
+fn long_in_lists_are_hash_sets() {
+    let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..60_000 {
+        ttl.push_str(&format!("ex:s{i} ex:by ex:c{} .\n", i * 7 % 5000));
+    }
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    // 1,000 customers, some not in the store.
+    let list: Vec<String> = (0..1000)
+        .map(|i| format!("<http://example.org/c{}>", i * 6))
+        .collect();
+    let count = |q: &str| {
+        let QueryResults::Solutions(mut s) = engine.query(q).unwrap() else {
+            panic!()
+        };
+        s.next().unwrap().unwrap().get("n").unwrap().to_string()
+    };
+    let values = format!(
+        "SELECT (COUNT(*) AS ?n) WHERE {{ VALUES ?c {{ {} }} ?s <http://example.org/by> ?c }}",
+        list.join(" ")
+    );
+    let within = format!(
+        "SELECT (COUNT(*) AS ?n) WHERE {{ ?s <http://example.org/by> ?c FILTER(?c IN ({})) }}",
+        list.join(", ")
+    );
+    let outside = within.replace(" IN (", " NOT IN (");
+    let all = count("SELECT (COUNT(*) AS ?n) WHERE { ?s <http://example.org/by> ?c }");
+    let (expected, got) = (count(&values), count(&within));
+    assert_eq!(expected, got);
+    let number = |n: &str| n.split('"').nth(1).unwrap().parse::<u64>().unwrap();
+    assert_eq!(number(&all) - number(&expected), number(&count(&outside)));
+    let time = |q: &str| {
+        let start = std::time::Instant::now();
+        for _ in 0..3 {
+            count(q);
+        }
+        start.elapsed()
+    };
+    let (join, filter) = (time(&values), time(&within));
+    // One comparison per item took about 85 times the join.
+    assert!(
+        filter < join * 10 + std::time::Duration::from_millis(50),
+        "IN {filter:?}, VALUES {join:?}"
+    );
 }

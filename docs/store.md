@@ -65,7 +65,10 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `&&`, `||` (with SPARQL's error rules), `sameTerm`, `=` and `!=` between variables, IRIs and
   literals (values of different literals are compared by the evaluator), `isIRI` /
   `isBlank` / `isLiteral` / `isNumeric`, `LANG(?v) = "x"`, `langMatches(LANG(?v), "x")` and
-  `DATATYPE(?v) = <iri>`; the last three decode each distinct literal once. BSBM 1M:
+  `DATATYPE(?v) = <iri>`; the last three decode each distinct literal once. `?v IN (…)` and
+  `?v NOT IN (…)` over IRIs and literals look each row up in a hash set of the items' ids, and
+  compare a literal by value only with the literal items of another kind (`1` and `1.0`):
+  1,000 IRIs over 133k rows 933 → 16 ms, against 11 ms for the same list as `VALUES`. BSBM 1M:
   `filter-many-results` (`?s != ?o`) 26 → 5.5 ms, `filter-language-en` 7.8 → 2.0 ms. `GROUP BY` with counts is grouped on
   ids too and becomes a `VALUES` block of the keys and counts (at most 2^20 groups, IRI or
   literal keys). `MIN`, `MAX` and `SAMPLE` of a variable are taken per group on ids too, also

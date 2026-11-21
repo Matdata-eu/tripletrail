@@ -754,31 +754,78 @@ impl Eval<'_> {
                     return Some(k);
                 }
                 let (a, b) = (self.operand(a, t)?, self.operand(b, t)?);
-                Box::new(move |row| {
-                    let (x, y) = match (a.get(row), b.get(row)) {
-                        (Some(x), Some(y)) => (x, y),
-                        _ => return Some(None),
+                Box::new(move |row| match (a.get(row), b.get(row)) {
+                    (Some(x), Some(y)) => equal_ids(x, y),
+                    _ => Some(None),
+                })
+            }
+            // A list of constants (#63): their ids in a hash set, so a row costs one lookup
+            // and not one comparison per item. What the set doesn't decide is `=` as above: a
+            // term that is no literal only equals itself, and a literal is compared with the
+            // literal items whose values may equal it under another id (`1` and `1.0`).
+            E::In(a, list)
+                if matches!(**a, E::Variable(_))
+                    && !list.is_empty()
+                    && list
+                        .iter()
+                        .all(|b| matches!(b, E::NamedNode(_) | E::Literal(_))) =>
+            {
+                let E::Variable(v) = &**a else { unreachable!() };
+                let c = t.col(v);
+                let mix = |id: TermId| id.0.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let mut set: PreMap<()> = PreMap::default();
+                let mut literals = Vec::new();
+                for b in list {
+                    // An IRI not in the store equals no value of it; a literal without an id
+                    // leaves the filter to the evaluator, as `=` does.
+                    let Operand::Const(id) = self.operand(b, t)? else {
+                        return None;
                     };
-                    if x == y {
+                    if id == ABSENT {
+                        continue;
+                    }
+                    set.insert(mix(id), ());
+                    if is_literal(id) && !literals.contains(&id) {
+                        literals.push(id);
+                    }
+                }
+                // Per kind whose values are its ids, the literal items of the other kinds: an
+                // item of the same kind and another id is another value.
+                let others = |k: Kind| -> Vec<TermId> {
+                    literals.iter().copied().filter(|y| y.kind() != k).collect()
+                };
+                let (strings, integers, booleans) = (
+                    others(Kind::String),
+                    others(Kind::Integer),
+                    others(Kind::Boolean),
+                );
+                Box::new(move |row| {
+                    let Some(x) = c.map(|c| row[c]).filter(|id| *id != UNBOUND) else {
+                        return Some(None);
+                    };
+                    if set.contains_key(&mix(x)) {
                         return Some(Some(true));
                     }
-                    // Two different triple terms are equal when their parts are, and a
-                    // literal part compares by value (`<<( :a :b 1 )>> = <<( :a :b 1.0 )>>`):
-                    // the ids don't decide it.
-                    if x.kind() == Kind::Triple && y.kind() == Kind::Triple {
-                        return None;
+                    if !is_literal(x) {
+                        // Items are IRIs and literals, never triple terms.
+                        return Some(Some(false));
                     }
-                    match (is_literal(x), is_literal(y)) {
-                        // Different literals may be equal values (1 and 1.0): not on ids,
-                        // except for kinds whose values are their ids, and inline numbers
-                        // and dates, compared by value.
-                        (true, true) if same_value_kind(x, y) => Some(Some(false)),
-                        (true, true) => {
-                            let (x, y) = (crate::idvalue::of_id(x)?, crate::idvalue::of_id(y)?);
-                            Some(crate::idvalue::compare(x, y)?.map(|o| o.is_eq()))
+                    let rest = match x.kind() {
+                        Kind::String => &strings,
+                        Kind::Integer => &integers,
+                        Kind::Boolean => &booleans,
+                        _ => &literals,
+                    };
+                    // `a = b || a = c`: true wins over an error, an error over false.
+                    let mut error = false;
+                    for &y in rest {
+                        match equal_ids(x, y)? {
+                            Some(true) => return Some(Some(true)),
+                            Some(false) => {}
+                            None => error = true,
                         }
-                        _ => Some(Some(false)),
                     }
+                    Some((!error).then_some(false))
                 })
             }
             // `a IN (b, c)` is `a = b || a = c` (and false for an empty list).
@@ -1206,6 +1253,29 @@ pub(crate) fn is_numeric_datatype(d: oxigraph::model::NamedNodeRef<'_>) -> bool 
 }
 
 /// Literals of these kinds are equal values only when their ids are equal.
+/// `x = y` on two bound ids: `Some(Some(b))` a value, `Some(None)` an error, `None` when the
+/// ids don't decide it.
+fn equal_ids(x: TermId, y: TermId) -> Option<Option<bool>> {
+    if x == y {
+        return Some(Some(true));
+    }
+    // Two different triple terms are equal when their parts are, and a literal part compares
+    // by value (`<<( :a :b 1 )>> = <<( :a :b 1.0 )>>`): the ids don't decide it.
+    if x.kind() == Kind::Triple && y.kind() == Kind::Triple {
+        return None;
+    }
+    match (is_literal(x), is_literal(y)) {
+        // Different literals may be equal values (1 and 1.0): not on ids, except for kinds
+        // whose values are their ids, and inline numbers and dates, compared by value.
+        (true, true) if same_value_kind(x, y) => Some(Some(false)),
+        (true, true) => {
+            let (x, y) = (crate::idvalue::of_id(x)?, crate::idvalue::of_id(y)?);
+            Some(crate::idvalue::compare(x, y)?.map(|o| o.is_eq()))
+        }
+        _ => Some(Some(false)),
+    }
+}
+
 fn same_value_kind(x: TermId, y: TermId) -> bool {
     x.kind() == y.kind() && matches!(x.kind(), Kind::String | Kind::Integer | Kind::Boolean)
 }
