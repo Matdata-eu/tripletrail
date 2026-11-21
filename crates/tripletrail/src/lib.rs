@@ -888,12 +888,26 @@ pub struct Engine {
     /// How many parts of queries by callers limited to some graphs or rows the count and
     /// id-row shortcuts answered (#204).
     view_shortcuts: Arc<AtomicU64>,
+    /// The filters of the views [`Engine::view_shortcuts`] read, by [`ViewKey`], the latest
+    /// used last: finding the copies within some graphs and merging them with row rules is
+    /// done once per store version, not for each query.
+    view_filters: Arc<Mutex<Vec<(ViewKey, ViewFilter)>>>,
     /// User-defined functions (`sh:SPARQLFunction`, #235).
     udf: Arc<udf::Functions>,
     /// The dataset the sub-selects of the `st:` and window services read, for a caller who
     /// reads only some graphs (#203): the calling query's, narrowed to those graphs.
     service_dataset: Option<QueryDataset>,
 }
+
+/// What a view of [`Engine::view_shortcuts`] shows: the store version, the graphs (`None` for
+/// all of them) and the fingerprint of the rows row rules hide (0 for none).
+type ViewKey = (u64, Option<Vec<u64>>, u64);
+
+/// The filter of such a view; `None` when it hides nothing.
+type ViewFilter = Option<Arc<tripletrail_store::RowFilter>>;
+
+/// How many view filters [`Engine::view_shortcuts`] keeps.
+const VIEW_FILTERS: usize = 8;
 
 /// The full-text index of what some callers see (#203), by [`Engine::text_view`]'s key: a
 /// slot of its own, so the searches of one view wait for its one build or patch.
@@ -1174,6 +1188,7 @@ impl Engine {
             vector_graph_min: Arc::new(std::sync::atomic::AtomicUsize::new(vector::GRAPH_MIN)),
             cosine_orders: Arc::new(AtomicU64::new(0)),
             view_shortcuts: Arc::new(AtomicU64::new(0)),
+            view_filters: Arc::new(Mutex::new(Vec::new())),
             udf: Arc::default(),
         }
     }
@@ -2406,10 +2421,12 @@ impl Engine {
                 let Some(scan) = union_scan(&query, base) else {
                     return query;
                 };
-                let Some(copies) = base.union_copies(scan, &cancelled) else {
+                let Some(filter) = self.view_filter(base, None, rows, || {
+                    base.union_copies(scan, &cancelled).map(merge)
+                }) else {
                     return query;
                 };
-                (merge(copies), GraphSelector::All)
+                (filter, GraphSelector::All)
             }
             Some(Some(graphs)) => {
                 let mut ids: Vec<tripletrail_store::TermId> = graphs
@@ -2432,10 +2449,14 @@ impl Engine {
                         let Some(scan) = union_scan(&query, base) else {
                             return query;
                         };
-                        let Some(within) = base.copies_within(&ids, scan, &cancelled) else {
+                        let key = ids.iter().map(|g| g.0).collect();
+                        let Some(filter) = self.view_filter(base, Some(key), rows, || {
+                            base.copies_within(&ids, scan, &cancelled)
+                                .map(|within| merge(Some(within)))
+                        }) else {
                             return query;
                         };
-                        (merge(Some(within)), GraphSelector::All)
+                        (filter, GraphSelector::All)
                     }
                 }
             }
@@ -2446,6 +2467,39 @@ impl Engine {
         self.view_shortcuts
             .fetch_add((counted + read) as u64, Ordering::Relaxed);
         query
+    }
+
+    /// The filter of a view of [`Engine::view_shortcuts`] showing `graphs` (`None` for all)
+    /// under `rows`, as `make` gives it, kept per store version. `None` when `make` gives none.
+    fn view_filter(
+        &self,
+        base: &Snapshot,
+        graphs: Option<Vec<u64>>,
+        rows: Option<&Arc<tripletrail_store::RowFilter>>,
+        make: impl FnOnce() -> Option<Option<Arc<tripletrail_store::RowFilter>>>,
+    ) -> Option<Option<Arc<tripletrail_store::RowFilter>>> {
+        let Some(generation) = base.generation() else {
+            return make();
+        };
+        let key: ViewKey = (generation, graphs, rows.map_or(0, |r| r.fingerprint()));
+        {
+            let mut kept = self.view_filters.lock_unpoisoned();
+            if let Some(i) = kept.iter().position(|(k, _)| *k == key) {
+                let entry = kept.remove(i);
+                let filter = entry.1.clone();
+                kept.push(entry);
+                return Some(filter);
+            }
+        }
+        let filter = make()?;
+        let mut kept = self.view_filters.lock_unpoisoned();
+        // Those of older versions are of no more use.
+        kept.retain(|(k, _)| k.0 >= generation);
+        if kept.len() >= VIEW_FILTERS {
+            kept.remove(0);
+        }
+        kept.push((key, filter.clone()));
+        Some(filter)
     }
 
     fn run_query_rows(

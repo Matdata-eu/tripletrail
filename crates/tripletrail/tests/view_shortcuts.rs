@@ -203,3 +203,41 @@ fn copies_in_several_granted_graphs_count_once() {
     assert_eq!(count(&[2]), n(520));
     assert_eq!(count(&[1, 2]), n(1_000));
 }
+
+/// The view filters are kept per store version: after a write, a caller's counts follow it,
+/// copies within the granted graphs included.
+#[test]
+fn kept_view_filters_follow_writes() {
+    let e = engine();
+    e.set_union_default_graph(true);
+    let options = QueryOptions {
+        readable: Some(readable(true, &[1, 2])),
+        ..Default::default()
+    };
+    let count = || {
+        rows(
+            &e,
+            "SELECT (COUNT(*) AS ?n) WHERE { ?o a ex:Offer }",
+            options.clone(),
+        )
+    };
+    let n = |v: usize| {
+        vec![format!(
+            "?n=\"{v}\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        )]
+    };
+    assert_eq!(count(), n(1_000));
+    assert_eq!(count(), n(1_000), "the kept filter");
+    e.update(&format!(
+        "PREFIX ex: <{EX}> INSERT DATA {{ GRAPH ex:graph1 {{ ex:new a ex:Offer }} \
+         GRAPH ex:graph2 {{ ex:new a ex:Offer }} GRAPH ex:graph3 {{ ex:offer2 a ex:Offer }} }}"
+    ))
+    .unwrap();
+    assert_eq!(count(), n(1_001));
+    e.update(&format!(
+        "PREFIX ex: <{EX}> DELETE DATA {{ GRAPH ex:graph1 {{ ex:offer0 a ex:Offer }} }}"
+    ))
+    .unwrap();
+    // Offer 0 is still in graph 2.
+    assert_eq!(count(), n(1_001));
+}
