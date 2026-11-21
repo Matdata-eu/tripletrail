@@ -12,6 +12,7 @@ use crate::id::{Kind, TermId};
 use oxigraph::model::NamedNode;
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 const PREFIX: &str = "urn:tripletrail:table:";
 /// Rows per table, as row ids carry the row in 40 bits.
@@ -25,9 +26,14 @@ pub(crate) type ColumnQuads = rayon::iter::Either<
 
 thread_local! {
     static PENDING: RefCell<Vec<(u32, Arc<IdRows>)>> = const { RefCell::new(Vec::new()) };
-    static NEXT: Cell<u32> = const { Cell::new(1) };
     static DEPTH: Cell<usize> = const { Cell::new(0) };
 }
+
+/// The number of the next table, over all threads (#7): two queries evaluated at the same
+/// time never name the same table, so a view holding another query's tables can't answer a
+/// column of its own query from them. Numbered per thread before, every thread's first table
+/// was table 1. Wraps after 2^32 tables, skipping 0.
+static NEXT: AtomicU32 = AtomicU32::new(1);
 
 /// Runs `f` (a query's rewrite and evaluation); the tables registered in it are dropped when
 /// the outermost scope on this thread ends (snapshots taken in it keep theirs).
@@ -62,11 +68,10 @@ pub fn register_table(rows: IdRows) -> Option<Vec<NamedNode>> {
     if DEPTH.with(Cell::get) == 0 || rows.len() as u64 >= 1 << ROW_BITS || rows.width > 0xffff {
         return None;
     }
-    let n = NEXT.with(|c| {
-        let n = c.get();
-        c.set(n.wrapping_add(1).max(1));
-        n
-    });
+    let mut n = NEXT.fetch_add(1, Ordering::Relaxed);
+    if n == 0 {
+        n = NEXT.fetch_add(1, Ordering::Relaxed);
+    }
     let width = rows.width;
     PENDING.with_borrow_mut(|p| p.push((n, Arc::new(rows))));
     Some(
@@ -221,4 +226,42 @@ pub(crate) fn estimate(tables: &Tables, predicate: TermId, subject_bound: bool) 
         return 1;
     }
     table(tables, (predicate.payload() >> 16) as u32).map_or(0, |t| t.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows() -> IdRows {
+        IdRows {
+            width: 1,
+            ids: vec![TermId::integer(7).expect("small")],
+        }
+    }
+
+    /// Two queries on two threads at the same time (two map facets, #7) get tables of their
+    /// own numbers, and one's view reads no column of the other's.
+    #[test]
+    fn concurrent_queries_never_share_a_table_number() {
+        let barrier = std::sync::Barrier::new(2);
+        let names: Vec<(String, Tables)> = std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        table_scope(|| {
+                            barrier.wait();
+                            let p = register_table(rows()).expect("in a scope");
+                            barrier.wait();
+                            (p[0].as_str().to_owned(), pending())
+                        })
+                    })
+                })
+                .collect();
+            threads.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        let (a, b) = (&names[0], &names[1]);
+        assert_ne!(a.0, b.0);
+        assert!(column(&a.1, &a.0).is_some() && column(&b.1, &b.0).is_some());
+        assert!(column(&a.1, &b.0).is_none() && column(&b.1, &a.0).is_none());
+    }
 }
