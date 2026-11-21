@@ -301,6 +301,52 @@ pub(crate) fn route(
         reply.headers.push(("Cache-Control", "no-cache".to_owned()));
         return Ok(reply);
     }
+    if rest == ["facets"] {
+        // Several collections in one request (#92): each one's counts, and the facets they
+        // share summed over them.
+        let (collections, made_for) = shown()?;
+        let version = made_for.filter(|v| Some(*v) == data_version(state, entry));
+        let mut chosen: Vec<&Collection> = Vec::new();
+        for (k, id) in &params.0 {
+            if k != "collection" {
+                continue;
+            }
+            let c = collections
+                .iter()
+                .find(|c| c.id == *id)
+                .ok_or_else(|| HttpError(404, format!("No collection {id}")))?;
+            if !chosen.iter().any(|x| x.id == c.id) {
+                chosen.push(c);
+            }
+        }
+        if chosen.is_empty() {
+            return Err(HttpError::bad_request(
+                "Name the collections: collection=ID, repeated",
+            ));
+        }
+        if chosen.len() > MAX_FACET_COLLECTIONS {
+            return Err(HttpError::bad_request(format!(
+                "More than {MAX_FACET_COLLECTIONS} collections"
+            )));
+        }
+        // One deadline for the whole request, not a timeout per collection.
+        let deadline = timeout.map(|t| std::time::Instant::now() + t);
+        let mut each = Vec::with_capacity(chosen.len());
+        for c in &chosen {
+            let left = match deadline {
+                Some(d) => match d.checked_duration_since(std::time::Instant::now()) {
+                    Some(left) if !left.is_zero() => Some(left),
+                    _ => return Err(HttpError(503, crate::TIMED_OUT.to_owned())),
+                },
+                None => None,
+            };
+            each.push(facet_counts(entry, c, params, left, view, version)?);
+        }
+        let counts = combine_facets(each);
+        let mut reply = Reply::bytes(200, "application/json", counts.to_string().into_bytes());
+        reply.headers.push(("Cache-Control", "no-cache".to_owned()));
+        return Ok(reply);
+    }
     if let ["facets", id] = rest {
         let (collections, _) = shown()?;
         let collection = collections
@@ -1117,6 +1163,134 @@ fn facet_counts(
     Ok(
         json!({ "collection": collection.id, "features": features, "facets": facets, "query": query }),
     )
+}
+
+/// Collections one request for facets takes at most.
+const MAX_FACET_COLLECTIONS: usize = 64;
+
+/// The facets of several collections, as `/{ds}/tiles/facets?collection=…` answers them:
+/// `collections`, each one's own answer; `features`, their sum; and `shared`, the facets whose
+/// key more than one of them has, summed over those: a value's counts added up (the 50 most
+/// frequent kept, `more` when any collection had more: then the sums are lower bounds, as each
+/// collection lists only its own 50 most frequent values), a range's lowest `min`, highest
+/// `max` and its counts added up (when all its bounds are numbers, or all text such as dates,
+/// and it has one unit). A feature of two of the classes is counted in each.
+fn combine_facets(each: Vec<serde_json::Value>) -> serde_json::Value {
+    use serde_json::{Value, json};
+    let total: u64 = each.iter().filter_map(|c| c["features"].as_u64()).sum();
+    // Facets by key, in the order they first come.
+    let mut keys: Vec<String> = Vec::new();
+    let mut by_key: HashMap<String, Vec<(&str, &Value)>> = HashMap::new();
+    for c in &each {
+        let collection = c["collection"].as_str().unwrap_or_default();
+        for f in c["facets"].as_array().into_iter().flatten() {
+            let Some(key) = f["key"].as_str() else {
+                continue;
+            };
+            if !by_key.contains_key(key) {
+                keys.push(key.to_owned());
+            }
+            by_key
+                .entry(key.to_owned())
+                .or_default()
+                .push((collection, f));
+        }
+    }
+    let mut shared = Vec::new();
+    for key in keys {
+        let facets = &by_key[&key];
+        if facets.len() < 2 {
+            continue;
+        }
+        let first = facets[0].1;
+        let mut out = json!({
+            "key": key,
+            "title": first["title"],
+            "collections": facets.iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+        });
+        if facets.iter().any(|(_, f)| f["error"].is_string()) {
+            out["error"] = facets
+                .iter()
+                .find_map(|(_, f)| f["error"].as_str())
+                .unwrap_or_default()
+                .into();
+        }
+        if facets.iter().all(|(_, f)| f["text"] == true) {
+            out["text"] = true.into();
+        } else if facets.iter().all(|(_, f)| f["range"] == true) {
+            // One unit, or none: a span over metres and kilometres means nothing.
+            let mut units: Vec<&Value> = facets.iter().map(|(_, f)| &f["unit"]).collect();
+            units.dedup();
+            if units.len() > 1 {
+                continue;
+            }
+            // Bounds are numbers, or the text of dates and times (ISO, so they sort as text);
+            // a collection without values has none. Of both kinds: not shared.
+            let bounds: Vec<&Value> = facets
+                .iter()
+                .flat_map(|(_, f)| [&f["min"], &f["max"]])
+                .filter(|v| !v.is_null())
+                .collect();
+            let (min, max) = if bounds.iter().all(|v| v.is_number()) {
+                let numbers =
+                    |key: &'static str| facets.iter().filter_map(move |(_, f)| f[key].as_f64());
+                (
+                    numbers("min").reduce(f64::min).map(Value::from),
+                    numbers("max").reduce(f64::max).map(Value::from),
+                )
+            } else if bounds.iter().all(|v| v.is_string()) {
+                let texts =
+                    |key: &'static str| facets.iter().filter_map(move |(_, f)| f[key].as_str());
+                (
+                    texts("min").min().map(Value::from),
+                    texts("max").max().map(Value::from),
+                )
+            } else {
+                continue;
+            };
+            out["range"] = true.into();
+            out["min"] = min.unwrap_or(Value::Null);
+            out["max"] = max.unwrap_or(Value::Null);
+            out["count"] = facets
+                .iter()
+                .filter_map(|(_, f)| f["count"].as_u64())
+                .sum::<u64>()
+                .into();
+            if let Some(unit) = units.first().and_then(|u| u.as_str()) {
+                out["unit"] = unit.into();
+            }
+        } else if facets.iter().all(|(_, f)| f["values"].is_array()) {
+            let mut values: Vec<(String, Value, u64)> = Vec::new();
+            for (_, f) in facets {
+                for v in f["values"].as_array().into_iter().flatten() {
+                    let value = v["value"].as_str().unwrap_or_default().to_owned();
+                    let n = v["count"].as_u64().unwrap_or(0);
+                    match values.iter_mut().find(|(x, _, _)| *x == value) {
+                        Some(found) => {
+                            found.2 += n;
+                            if found.1.is_null() {
+                                found.1 = v["label"].clone();
+                            }
+                        }
+                        None => values.push((value, v["label"].clone(), n)),
+                    }
+                }
+            }
+            values.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+            let more = values.len() > FACET_VALUES || facets.iter().any(|(_, f)| f["more"] == true);
+            values.truncate(FACET_VALUES);
+            out["values"] = values
+                .into_iter()
+                .map(|(value, label, count)| json!({ "value": value, "label": label, "count": count }))
+                .collect();
+            out["more"] = more.into();
+        } else {
+            // Of different kinds in different collections: not summed.
+            continue;
+        }
+        shared.push(out);
+    }
+    json!({ "collections": each, "features": total, "shared": shared })
 }
 
 /// The longest a computed facet's values are counted: on a large dataset its pattern can run
