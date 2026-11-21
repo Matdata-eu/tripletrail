@@ -1112,15 +1112,15 @@ fn readable(entry: &Entry, view: &View, collections: Vec<Collection>) -> Vec<Col
         .collect()
 }
 
-/// What the collections of a dataset depend on: its store generation and the version of its
-/// own shapes. `None` when the store has no generation (then nothing is cached).
+/// What the collections of a dataset depend on: its store generation and a stamp of its own
+/// shapes' version and installed pack ([`crate::shapes::shapes_stamp`]). `None` when the store has no generation (then nothing is cached).
 pub(crate) fn data_version(state: &State, entry: &Entry) -> Option<DataVersion> {
     let generation = match entry.engine.store() {
         tripletrail::store::Dataset::TripleTrail(store) => store.generation(),
         _ => return None,
     };
     let shapes = crate::shapes::folder_of(state, entry)
-        .and_then(|folder| crate::shapes::current_version(&folder));
+        .and_then(|folder| crate::shapes::shapes_stamp(&folder));
     Some((generation, shapes))
 }
 

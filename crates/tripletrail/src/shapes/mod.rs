@@ -28,8 +28,8 @@ mod turtle;
 
 pub use atlas::{ATLAS, from_atlas};
 pub use layers::{
-    Override, SetFile, Upgrade, check, check_select, files_of, inline_select, load, overlay,
-    upgrade,
+    Override, SetFile, Upgrade, check, check_select, files_of, hide_generated, inline_select, load,
+    overlay, upgrade,
 };
 pub use turtle::to_turtle;
 

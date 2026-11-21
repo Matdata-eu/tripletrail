@@ -675,12 +675,14 @@ tripletrail load --location db --dataset ds network.ttl
 tripletrail serve --location db --dataset ds
 ```
 
-A pack has a name, a version and its Turtle files. This one draws stations in red:
+A pack has a name, a version and its Turtle files. This one draws stations in red. Its shape
+`tts:refines` the generated one for stations, which keeps the geometry and facets it found;
+without that, it would replace it:
 
 <!-- test: file pack.json -->
 ```json
 {"name": "rail", "version": "1.0",
- "files": {"Station.ttl": "@prefix sh: <http://www.w3.org/ns/shacl#> . @prefix tts: <http://w3id.org/tripletrail/shapes#> . <https://example.org/pack/rail#Station> a sh:NodeShape ; sh:targetClass <https://example.org/rail#Station> ; tts:color \"#d62728\" ."}}
+ "files": {"Station.ttl": "@prefix sh: <http://www.w3.org/ns/shacl#> . @prefix tts: <http://w3id.org/tripletrail/shapes#> . <https://example.org/pack/rail#Station> a sh:NodeShape ; sh:targetClass <https://example.org/rail#Station> ; tts:refines true ; tts:color \"#d62728\" ."}}
 ```
 
 <!-- test: run -->
@@ -699,6 +701,41 @@ TripleTrail-Shapes: pack rail@1.0
 The Map page now draws stations in red. Installing version `1.1` later replaces the pack and
 keeps the dataset's own shapes, and `DELETE` on the same address removes it.
 
+A pack can keep the generated layers off the map. The generated shapes add one for every
+other class with a geometry: in RINF, the references and coordinates between the features. A
+set that names `tts:Reader-Map` with `tts:hidesGenerated`, about itself (a `tts:ShapeSet`),
+shows only its own classes on the map, and the OGC API and describe pages still have the
+others. A generated shape that the set (or the dataset's own set) overrides or refines stays.
+Version 1.1 of the pack, with that one more file, draws the stations alone, while the OGC API still serves
+the sections:
+
+<!-- test: file only-pack.json -->
+```json
+{"name": "rail", "version": "1.1",
+ "files": {"_set.ttl": "@prefix tts: <http://w3id.org/tripletrail/shapes#> . <https://example.org/pack/rail> a tts:ShapeSet ; tts:hidesGenerated tts:Reader-Map .",
+           "Station.ttl": "@prefix sh: <http://www.w3.org/ns/shacl#> . @prefix tts: <http://w3id.org/tripletrail/shapes#> . <https://example.org/pack/rail#Station> a sh:NodeShape ; sh:targetClass <https://example.org/rail#Station> ; tts:refines true ; tts:color \"#d62728\" ."}}
+```
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/tiles/style.json' | grep -o '"tripletrail:collections":.*' | grep -o '"id":"[^"]*"'
+curl -s -X PUT 'http://localhost:7878/$/datasets/ds/shapes/pack' --data-binary @only-pack.json > /dev/null
+echo after:
+curl -s 'http://localhost:7878/ds/tiles/style.json' | grep -o '"tripletrail:collections":.*' | grep -o '"id":"[^"]*"'
+echo OGC API:
+curl -s 'http://localhost:7878/ds/ogc/collections' | grep -o '"id":"Section"' | head -1
+```
+
+<!-- test: output -->
+```text
+"id":"Section"
+"id":"Station"
+after:
+"id":"Station"
+OGC API:
+"id":"Section"
+```
+
 A pack usually lives in a git repository, released with tags. Give the repository and the tag
 instead of the files: the pack is named after the repository and versioned by the tag (or
 give `name` and `version`). Here the repository is a local folder; an `https://` URL works
@@ -714,6 +751,7 @@ in black:
 
 <https://example.org/pack/rail#Station> a sh:NodeShape ;
   sh:targetClass <https://example.org/rail#Station> ;
+  tts:refines true ;
   tts:color "#000000" .
 ```
 
@@ -729,7 +767,7 @@ curl -s -X PUT 'http://localhost:7878/$/datasets/ds/shapes/pack' \
 
 <!-- test: output -->
 ```text
-{"files":1,"name":"rail-pack","replaced":"rail@1.0","version":"v2.0"}
+{"files":1,"name":"rail-pack","replaced":"rail@1.1","version":"v2.0"}
 ```
 
 ### The Shapes page
