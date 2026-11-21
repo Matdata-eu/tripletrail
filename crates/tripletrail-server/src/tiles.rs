@@ -352,6 +352,15 @@ pub(crate) fn route(
             state.options.map_attribution.as_deref(),
             &state.options.map_basemaps,
         );
+        // The data the map shows, for citing it (#37): the store's write generation, and the
+        // version of the dataset's own shapes when it has some.
+        if let Some((generation, shapes)) = data_version(state, entry) {
+            style["metadata"]["tripletrail:dataVersion"] = match shapes {
+                Some(shapes) => format!("{generation}-{shapes}"),
+                None => generation.to_string(),
+            }
+            .into();
+        }
         let mut reply = Reply::bytes(200, "application/json", style.to_string().into_bytes());
         reply.headers.push(("Cache-Control", "no-cache".to_owned()));
         return Ok(reply);
@@ -762,7 +771,7 @@ struct Scope {
 
 /// The parameters of [`scope_filter`], which a facet of the same key takes only as
 /// `{collection}.{key}`.
-const SCOPE_KEYS: [&str; 6] = ["bbox", "graph", "q", "area", "rel", "dist"];
+const SCOPE_KEYS: [&str; 7] = ["bbox", "graph", "q", "area", "rel", "dist", "datetime"];
 /// Words of `q` a text filter takes at most.
 const SCOPE_WORDS: usize = 8;
 /// Graphs a `graph` filter takes at most.
@@ -776,6 +785,9 @@ const SCOPE_GRAPHS: usize = 100;
 ///   map's search box: case and Latin accents aside, the last word as a prefix);
 /// - `area`, `rel` and `dist`: the features with a geometry in a relation to an area (#33,
 ///   [`crate::area`]).
+/// - `datetime=instant` or `start/end` (`..` for an open end): the features whose `tts:time`
+///   meets it, as `datetime` of the OGC API's items (#37); a collection without `tts:time`
+///   keeps all of its features.
 ///
 /// `many`: for counts over the whole collection rather than a tile's features.
 fn scope_filter(
@@ -833,6 +845,14 @@ fn scope_filter(
             iris.join(" ")
         ));
         sign(format!("graph={}", iris.join(",")));
+    }
+    if let Some(datetime) = params.get("datetime").filter(|d| !d.is_empty()) {
+        // Checked even for a collection without a time, so a wrong value is always a 400.
+        let time = collection.time_filter(datetime)?;
+        if !time.is_empty() {
+            sparql.push_str(&format!(" FILTER EXISTS {{{time} }}"));
+            sign(format!("datetime={datetime}"));
+        }
     }
     if let Some(q) = params.get("q") {
         // Words only, as the search box takes them: the index's own syntax stays out.
@@ -1596,6 +1616,9 @@ fn style(
             "color": color,
             "minZoom": min,
         });
+        if c.has_time() {
+            entry["time"] = true.into();
+        }
         if let Some(description) = &c.description {
             entry["description"] = description.clone().into();
         }

@@ -53,6 +53,7 @@ window.TripleTrailMap = (function () {
   let map = null;
   let shown = null; // the dataset on the map
   let tools = null; // the map's tools (map-tools.js): the area drawn, measuring
+  let when = ""; // the time shown (`datetime`, map-share.js), or "" for every time
   let preview = null; // the id of proposed shapes it is drawn with (/{ds}/tiles/preview/{id}), or null
   /** A path under the dataset's tiles, or under the preview's. */
   const tilesPath = (rest) => (preview ? "tiles/preview/" + preview + "/" : "tiles/") + rest;
@@ -145,6 +146,7 @@ window.TripleTrailMap = (function () {
     drawn = collections;
     // The link's hidden layers and filters, drawn from the start.
     const state = readState(collections);
+    when = new URLSearchParams(location.search).get("datetime") || "";
     // The base maps to switch between, and the one the link, or this browser last, picked.
     const basemaps = basemapChoices(style);
     const stored = (() => { try { return localStorage.getItem(BASEMAP_KEY); } catch (e) { return null; } })();
@@ -179,6 +181,16 @@ window.TripleTrailMap = (function () {
     map.addControl(new lib.NavigationControl(), "top-right");
     map.addControl(mapButtons(name, basemaps, state), "top-right");
     if (tools) map.addControl(tools.control, "top-right");
+    // The time shown, the PNG export and the citation (map-share.js, #37).
+    const share = window.TripleTrailMapShare ? window.TripleTrailMapShare.controls({
+      map, ui, ds: name, collections, version: style.metadata && style.metadata["tripletrail:dataVersion"],
+      getTime: () => when,
+      setTime: (datetime) => { when = datetime; apply({}); },
+      extents: () => timeExtents(name, collections),
+      shown: () => collections.filter((c) => !state.hidden.has(c.id)),
+      layer: (c) => layerQuery(name, c, state),
+    }) : null;
+    if (share) map.addControl(share.control, "top-right");
     // Fullscreen takes the layer list and the detail panel along.
     map.addControl(new lib.FullscreenControl({ container: canvas.parentElement }), "top-right");
     map.addControl(new lib.ScaleControl(), "bottom-left");
@@ -419,6 +431,7 @@ window.TripleTrailMap = (function () {
     for (const [id, keys] of Object.entries(chosen)) for (const [key, choice] of Object.entries(keys)) appendChoice(q, id + ".", key, choice);
     for (const [id, key] of Object.entries(colors || {})) q.append("color." + id, key);
     appendArea(q, area);
+    if (when) q.set("datetime", when);
     return q.toString();
   }
 
@@ -524,7 +537,32 @@ window.TripleTrailMap = (function () {
     const filter = cql(keys);
     if (filter) q.set("filter", filter);
     appendArea(q, area);
+    if (when) q.set("datetime", when);
     return new URL(service(ds, "ogc/collections/" + encodeURIComponent(c.id) + "/items?" + q), location.href).href;
+  }
+
+  /** The temporal extents of the collections with a time (#37), from the OGC API. */
+  async function timeExtents(ds, collections) {
+    const out = [];
+    for (const c of collections.filter((x) => x.time)) {
+      try {
+        const d = await getJson(service(ds, "ogc/collections/" + encodeURIComponent(c.id)));
+        for (const i of (d.extent && d.extent.temporal && d.extent.temporal.interval) || []) out.push(i);
+      } catch (e) { /* a collection without its extent yet */ }
+    }
+    return out;
+  }
+
+  /** A layer as the map shows it, for a citation (#37): the SPARQL that picks its features
+   *  under the filters (from its counts) and its OGC API items. */
+  async function layerQuery(ds, c, state) {
+    const params = new URLSearchParams();
+    for (const [key, choice] of Object.entries(state.chosen[c.id] || {})) appendChoice(params, "", key, choice);
+    appendArea(params, state.area);
+    if (when) params.set("datetime", when);
+    const out = await getJson(service(ds, tilesPath("facets/" + encodeURIComponent(c.id) + (params.toString() ? "?" + params : ""))));
+    // Its counts take a sample of the features; the citation names them all.
+    return { sparql: (out.query || "").replace(/\s*LIMIT \d+\s*$/, ""), items: ogcItems(ds, c, state.chosen[c.id], "json", state.area) };
   }
 
   /** The layer list: a checkbox, colour and count per collection, greyed below its zoom, and
@@ -617,6 +655,7 @@ window.TripleTrailMap = (function () {
         // The colouring, for the counts of its legend.
         if (colors[c.id]) params.set("color", colors[c.id]);
         appendArea(params, state.area);
+        if (when) params.set("datetime", when);
         panel.replaceChildren(el("p", { class: "muted small" }, "Counting…"));
         let out;
         try {

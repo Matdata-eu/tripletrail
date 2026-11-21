@@ -3163,7 +3163,11 @@ dataset, the one the web UI's Map page draws:
   The legend lists them by their node shape's `sh:order`, then by title, and last those whose
   class the profile did not find in the data.
 - `metadata."tripletrail:collections"` lists the collections for a legend: `id`, `title`,
-  `description`, `class`, `color`, `minZoom` and `instances` (from the profile).
+  `description`, `class`, `color`, `minZoom`, `instances` (from the profile) and `time`
+  (`true` when its shapes mark a `tts:time`, which `datetime` filters on).
+- `metadata."tripletrail:dataVersion"` is the data version the map shows, for citing it: the
+  store's write generation, and with the dataset's own shapes `-` and their version. A write or
+  a shapes change gives a new one. Stores that keep no generation leave it out.
 - `metadata."tripletrail:views"`, when the shapes have map views (`tts:MapView` not
   `sh:deactivated`), lists them by `sh:order`, then by title: `key`, `title`, `description`,
   the `collections` each shows, and the `filters` (`{id: {key: [values] | {"min", "max"}}}`)
@@ -3183,7 +3187,16 @@ The Map page draws this style with buttons of its own: an eye per layer to show 
 zooms in to its `minZoom`, and a funnel that opens its filters, with the number of filters
 on. On the map, under the zoom buttons: **Zoom to all the data** (the collections' extents
 from the OGC API), the **Base map** menu (the base maps above, the first also in grey, and
-none), **Tools** and **Fullscreen**, which takes the layer list and the detail panel along.
+none), **Tools**, **Time**, **Export**, **Cite this map** and **Fullscreen**, which takes the
+layer list and the detail panel along. **Time** (`/$/ui/map-share.js`, #37), shown when a
+collection has a `tts:time`, sets `datetime` from two sliders over the span of the
+collections' temporal extents (an open end up to today), or from dates typed; it goes into the
+page's link and the tiles', facets' and OGC API links' requests. **Export** downloads the map as
+a PNG with a title, a scale bar, a north arrow, the legend of the layers shown and a credit line
+(the base map's attribution, the dataset, its data version, the time and the day). **Cite this
+map** gives a text with the dataset, its data version, the day, the page's link, the time, and
+per layer shown its OGC API items and the SPARQL of its features under the filters (`query` of
+its facet counts).
 **Tools** (`/$/ui/map-tools.js`, #33) draws an area every layer is filtered by (a rectangle
 or polygon as a `POLYGON`, a circle as its centre with `rel=dwithin` and its radius as
 `dist`, a corridor as a `LINESTRING` with `rel=dwithin`, or the geometry of the feature open
@@ -3284,6 +3297,10 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   last as a prefix; case and Latin accents aside), as `/{ds}/tiles/search` matches them. A
   bad box or graph IRI is `400`. A facet named `bbox`, `graph` or `q` is no longer filtered by
   that bare name: use `{collection}.{key}`.
+- `datetime` (#37) applies the same way: an instant or `start/end` (`..` for an open end),
+  read as the [OGC API's `datetime`](#ogc-api--features), keeps the features whose `tts:time`
+  meets it. A collection whose shapes mark no time keeps all of its features; a bad value is
+  `400` on every collection. A facet named `datetime` is filtered as `{collection}.datetime`.
 - A spatial filter (#33) applies the same way, and to the [OGC API's items](#ogc-api--features):
   - `area` is a geometry. It is WKT, in CRS84 unless it names its CRS first as a
     `geo:wktLiteral` does, of at most 200,000 bytes. It can also be the IRI of a resource whose

@@ -479,6 +479,19 @@ impl Time {
     }
 }
 
+impl Collection {
+    /// Whether the shapes mark a time of the features (`tts:time`), which `datetime` filters on.
+    pub(crate) fn has_time(&self) -> bool {
+        !self.time.is_empty()
+    }
+
+    /// The SPARQL over `?f` that keeps the features whose time meets `datetime`, as the
+    /// items' `datetime` (#37): empty when the collection has no `tts:time`.
+    pub(crate) fn time_filter(&self, datetime: &str) -> Result<String, HttpError> {
+        time_filter(&self.time, datetime)
+    }
+}
+
 /// Answers `GET /{ds}/ogc/{rest}`; `base` is the absolute URL of `/{ds}/ogc`. The page is
 /// HTML for `f=html`, or without `f` when `html_first` (the client's `Accept` names HTML
 /// before JSON); JSON otherwise.

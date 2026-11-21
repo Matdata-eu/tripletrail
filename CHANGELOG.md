@@ -10,6 +10,7 @@ versions may change the store format and the API; the release notes say how to u
 ### Added
 
 - The Map page's **Tools** (#33): draw an area to filter every layer by (rectangle, polygon, circle, corridor along a line, or a feature's geometry with **Filter by it**) with a spatial relation, measure lengths with bearings and areas with perimeter on the sphere, and read or copy the coordinates under the pointer. The area goes into the page's link as `area`, `rel` and `dist`. See [the guide](docs/guide/10-maps-and-apis.md#draw-an-area-measure-and-read-coordinates).
+- The Map page's **Time**, **Export** and **Cite this map** (#37): a time slider over the layers' `tts:time` (the tiles and facet counts take `datetime`, as the OGC API's items do), a PNG of the map with a scale bar, a north arrow, the legend and the sources' credit, and a citation with the map's link, the data version (`metadata."tripletrail:dataVersion"` of the style) and each layer's SPARQL. See [the guide](docs/guide/10-maps-and-apis.md#show-the-features-of-a-time) and [vector tiles](docs/server.md#vector-tiles).
 
 ### Fixed
 
