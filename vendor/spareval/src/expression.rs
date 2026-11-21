@@ -2126,6 +2126,77 @@ fn partial_cmp(a: &ExpressionTerm, b: &ExpressionTerm) -> Option<Ordering> {
     partial_cmp_literals(a, b)
 }
 
+/// tripletrail (#78): [`partial_cmp_literals`] for sorting (`ORDER BY`, `MIN`, `MAX`), where
+/// an order must be total or the sort panics. Two values XSD leaves undetermined compare as
+/// F&O compares them, with an implicit timezone of UTC (Jena's `compareDateTimeFO`): a
+/// date, time or dateTime without a timezone is read as UTC; values then at the same instant,
+/// such as `2020-01-01T00:00:00` and `2020-01-01T00:00:00Z`, are ordered by their lexical
+/// forms, as Jena orders terms of equal value. `NaN` sorts
+/// after every other number. Everything else as [`partial_cmp_literals`].
+pub fn order_cmp_literals(a: &ExpressionTerm, b: &ExpressionTerm) -> Option<Ordering> {
+    let (va, vb) = (a.value_ref(), b.value_ref());
+    let lexical = || {
+        let (Term::Literal(x), Term::Literal(y)) = (Term::from(a.clone()), Term::from(b.clone()))
+        else {
+            return Ordering::Equal;
+        };
+        x.value().cmp(y.value())
+    };
+    macro_rules! implicit_utc {
+        ($t:ty, $x:expr, $y:expr) => {{
+            // A value without a timezone, read as UTC.
+            let utc = |v: &$t| -> Option<$t> {
+                if v.timezone_offset().is_none() {
+                    v.adjust(Some(oxsdatatypes::TimezoneOffset::UTC))
+                } else {
+                    Some(*v)
+                }
+            };
+            match (utc($x), utc($y)) {
+                (Some(x), Some(y)) => x.partial_cmp(&y).map(|o| o.then_with(lexical)),
+                _ => Some(lexical()),
+            }
+        }};
+    }
+    let nan = |t: &ExpressionTerm| match t {
+        ExpressionTerm::FloatLiteral(f) => Some(f.is_nan()),
+        ExpressionTerm::DoubleLiteral(d) => Some(d.is_nan()),
+        ExpressionTerm::IntegerLiteral(_) | ExpressionTerm::DecimalLiteral(_) => Some(false),
+        _ => None,
+    };
+    match (va.as_ref(), vb.as_ref()) {
+        (ExpressionTerm::DateTimeLiteral(x), ExpressionTerm::DateTimeLiteral(y)) => {
+            implicit_utc!(DateTime, x, y)
+        }
+        #[cfg(feature = "sep-0002")]
+        (ExpressionTerm::DateLiteral(x), ExpressionTerm::DateLiteral(y)) => implicit_utc!(Date, x, y),
+        #[cfg(feature = "sep-0002")]
+        (ExpressionTerm::TimeLiteral(x), ExpressionTerm::TimeLiteral(y)) => implicit_utc!(Time, x, y),
+        #[cfg(feature = "calendar-ext")]
+        (ExpressionTerm::GYearLiteral(x), ExpressionTerm::GYearLiteral(y)) => implicit_utc!(oxsdatatypes::GYear, x, y),
+        #[cfg(feature = "calendar-ext")]
+        (ExpressionTerm::GYearMonthLiteral(x), ExpressionTerm::GYearMonthLiteral(y)) => {
+            implicit_utc!(oxsdatatypes::GYearMonth, x, y)
+        }
+        #[cfg(feature = "calendar-ext")]
+        (ExpressionTerm::GMonthLiteral(x), ExpressionTerm::GMonthLiteral(y)) => {
+            implicit_utc!(oxsdatatypes::GMonth, x, y)
+        }
+        #[cfg(feature = "calendar-ext")]
+        (ExpressionTerm::GMonthDayLiteral(x), ExpressionTerm::GMonthDayLiteral(y)) => {
+            implicit_utc!(oxsdatatypes::GMonthDay, x, y)
+        }
+        #[cfg(feature = "calendar-ext")]
+        (ExpressionTerm::GDayLiteral(x), ExpressionTerm::GDayLiteral(y)) => implicit_utc!(oxsdatatypes::GDay, x, y),
+        (x, y) => match (nan(x), nan(y)) {
+            (Some(true), Some(true)) => Some(Ordering::Equal),
+            (Some(true), Some(false)) => Some(Ordering::Greater),
+            (Some(false), Some(true)) => Some(Ordering::Less),
+            _ => partial_cmp_literals(x, y),
+        },
+    }
+}
+
 pub fn partial_cmp_literals(a: &ExpressionTerm, b: &ExpressionTerm) -> Option<Ordering> {
     // tripletrail: literals kept as written compare by value.
     let (a, b) = (a.value_ref(), b.value_ref());
