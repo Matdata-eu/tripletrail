@@ -2733,8 +2733,10 @@ impl Engine {
                 query = count::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
                 // The id executor (#11): the whole query from tables of ids, if they cover it.
                 if executor_ids() && !Hints::current().id_rewrites_off {
+                    // With the tables the count pass just registered (groups read back, #185).
+                    let tabled = snapshot.clone().with_pending_tables();
                     let eval = idtree::Eval {
-                        snapshot: &snapshot,
+                        snapshot: &tabled,
                         cancelled: &|| self.is_cancelled(),
                         graph,
                     };
@@ -2929,8 +2931,9 @@ impl Engine {
                 query = count::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
                 // Which executor answers it (#11), as run_query_scoped decides.
                 if executor_ids() && !Hints::current().id_rewrites_off {
+                    let tabled = snapshot.clone().with_pending_tables();
                     let eval = idtree::Eval {
-                        snapshot: &snapshot,
+                        snapshot: &tabled,
                         cancelled: &|| self.is_cancelled(),
                         graph,
                     };

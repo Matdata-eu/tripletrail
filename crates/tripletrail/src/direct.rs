@@ -124,7 +124,7 @@ fn computed(p: &GraphPattern, v: &Variable) -> bool {
         | G::Minus { left, right }
         | G::Union { left, right }
         | G::LeftJoin { left, right, .. } => computed(left, v) || computed(right, v),
-        G::Filter { inner, .. } => computed(inner, v),
+        G::Filter { inner, .. } | G::Project { inner, .. } => computed(inner, v),
         _ => false,
     }
 }
@@ -175,6 +175,7 @@ fn covered(p: &GraphPattern) -> bool {
         G::Extend {
             inner, expression, ..
         } => computable(expression, true) && covered(inner),
+        G::Project { inner, .. } => covered(inner),
         G::Values { bindings, .. } => bindings
             .iter()
             .flatten()
