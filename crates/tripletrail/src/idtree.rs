@@ -784,8 +784,8 @@ impl Eval<'_> {
                     if id == ABSENT {
                         continue;
                     }
-                    set.insert(mix(id), ());
-                    if is_literal(id) && !literals.contains(&id) {
+                    // Each literal once: the set says whether it was there already.
+                    if set.insert(mix(id), ()).is_none() && is_literal(id) {
                         literals.push(id);
                     }
                 }

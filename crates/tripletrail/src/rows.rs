@@ -324,7 +324,7 @@ fn first_rows(
             if id == TermId(0) {
                 continue;
             }
-            match pick.order_class(id)? {
+            match sort_class(&pick, id)? {
                 0 => {}
                 k if literal.is_none_or(|l| l == k) => literal = Some(k),
                 _ => return None,
@@ -336,7 +336,7 @@ fn first_rows(
         for &(c, descending) in &columns {
             let Some(c) = c else { continue };
             let (x, y) = (t.row(*a)[c], t.row(*b)[c]);
-            match pick.order(x, y) {
+            match sort_order(&mut pick, x, y) {
                 Some(Ordering::Equal) => {}
                 Some(o) => return if descending { o.reverse() } else { o },
                 None => {
@@ -345,7 +345,8 @@ fn first_rows(
                 }
             }
         }
-        Ordering::Equal
+        // Ties in the order of the rows, as the evaluator's stable sort leaves them.
+        a.cmp(b)
     };
     let mut rows: Vec<usize> = (0..t.len()).collect();
     let rows = match distinct {
@@ -391,6 +392,57 @@ fn first_rows(
         }
     };
     (!failed).then_some(rows)
+}
+
+/// The class of values `id` is sorted with: [`crate::idtree::Pick::order_class`], and the
+/// inline numbers and dates (#64): doubles, decimals, and dates and date-times with or without
+/// a time zone, each a class of its own. Within one, the evaluator orders by value, which
+/// [`TermId::order_key`] does (ties, equal values written differently, in any order).
+/// Different classes are compared by value or by lexical form there: not on ids.
+fn sort_class(pick: &crate::idtree::Pick, id: TermId) -> Option<u8> {
+    use tripletrail_store::Kind;
+    match id.kind() {
+        Kind::Double => Some(10),
+        Kind::Decimal => Some(11),
+        Kind::DateTime => {
+            let v = id.date_time_value()?;
+            Some(12 + 2 * u8::from(v.date) + u8::from(v.tz.is_some()))
+        }
+        _ => pick.order_class(id),
+    }
+}
+
+/// The order key of an inline number or date without what tells equal values apart (the
+/// number of fraction digits, the time zone): equal values are equal to the evaluator.
+fn value_key(id: TermId) -> u64 {
+    use tripletrail_store::{Kind, Numeric};
+    if id.kind() == Kind::DateTime {
+        return id.order_key() >> 11;
+    }
+    // `-0` and `0` are one value; the sign bit would put every `-0` first.
+    if matches!(
+        id.numeric(),
+        Some(Numeric::Decimal { digits: 0, .. } | Numeric::Double(0.0))
+    ) {
+        return 1 << 59;
+    }
+    id.order_key() >> 4
+}
+
+/// `a` and `b` in the evaluator's order of terms, when they are of the same
+/// [`sort_class`] (or one is an IRI, which comes first).
+fn sort_order(pick: &mut crate::idtree::Pick, a: TermId, b: TermId) -> Option<std::cmp::Ordering> {
+    if a != TermId(0) && b != TermId(0) && a != b {
+        let (x, y) = (sort_class(pick, a)?, sort_class(pick, b)?);
+        if x >= 10 || y >= 10 {
+            return match (x, y) {
+                (0, _) | (_, 0) => Some(x.cmp(&y)),
+                _ if x == y => Some(value_key(a).cmp(&value_key(b))),
+                _ => None,
+            };
+        }
+    }
+    pick.order(a, b)
 }
 
 /// Whether [`Eval::eval`] handles every operator of `p` (it may still give up on the data).

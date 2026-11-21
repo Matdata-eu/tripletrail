@@ -73,6 +73,27 @@ fn data() -> String {
         if i % 5 == 0 {
             ttl.push_str(&format!("{s} ex:maybe {} .\n", i % 17));
         }
+        // Signed zeros, equal to the evaluator (#64).
+        if i % 50 == 7 {
+            let zero = ["0.0", "-0.0", "0", "-0", "1.5", "-1.5"][i as usize / 50 % 6];
+            ttl.push_str(&format!("{s} ex:zdec \"{zero}\"^^xsd:decimal .\n"));
+            ttl.push_str(&format!("{s} ex:zdbl \"{zero}\"^^xsd:double .\n"));
+        }
+        // Doubles whose sums are exact in any order, so the evaluator's sum is the exact one
+        // (#62); in ex:num, mixed with integers and decimals.
+        let dbl = format!(
+            "\"{}{}{}\"^^xsd:double",
+            if i % 4 == 1 { "-" } else { "" },
+            (i * 29) % 1013,
+            [".25", "", ".5", ".125", ".0", ".75"][i as usize % 6]
+        );
+        ttl.push_str(&format!("{s} ex:dbl {dbl} .\n"));
+        let num = match i % 3 {
+            0 => dbl,
+            1 => format!("{}", i % 41),
+            _ => format!("{}.5", i % 23),
+        };
+        ttl.push_str(&format!("{s} ex:num {num} .\n"));
     }
     ttl
 }
@@ -150,10 +171,14 @@ fn sums_match_the_evaluator() {
         "HOURS(?v)",
     ];
     for p in [
-        "ex:int", "ex:dec", "ex:date", "ex:when", "ex:mixed", "ex:maybe",
+        "ex:int", "ex:dec", "ex:date", "ex:when", "ex:mixed", "ex:maybe", "ex:dbl", "ex:num",
     ] {
         for e in sums {
             for q in [
+                format!(
+                    "{P}SELECT ?c (AVG({e}) AS ?avg) (SUM({e}) AS ?sum) WHERE {{ ?s {p} ?v ; a ?c }} GROUP BY ?c"
+                ),
+                format!("{P}SELECT (AVG({e}) AS ?avg) WHERE {{ ?s {p} ?v FILTER(false) }}"),
                 format!("{P}SELECT (SUM({e}) AS ?sum) WHERE {{ ?s {p} ?v }}"),
                 format!(
                     "{P}SELECT ?c (SUM({e}) AS ?sum) (COUNT(*) AS ?n) WHERE {{ ?s {p} ?v ; a ?c }} GROUP BY ?c"
@@ -167,4 +192,110 @@ fn sums_match_the_evaluator() {
             }
         }
     }
+}
+
+/// Doubles are summed exactly and rounded once (#62), where the evaluator rounds after each
+/// addition: ten times 0.1 is 1, not 0.9999999999999999, whatever the order of the rows.
+#[test]
+fn double_sums_are_rounded_once() {
+    let ours = Engine::new_tripletrail();
+    let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..10 {
+        ttl.push_str(&format!(
+            "ex:s{i} ex:v \"0.1\"^^<http://www.w3.org/2001/XMLSchema#double> ; ex:g ex:g{} .\n",
+            i % 2
+        ));
+    }
+    ours.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let double = |v: &str| format!("\"{v}\"^^<http://www.w3.org/2001/XMLSchema#double>");
+    assert_eq!(
+        rows(
+            &ours,
+            &format!("{P}SELECT (SUM(?v) AS ?sum) (AVG(?v) AS ?avg) WHERE {{ ?s ex:v ?v }}")
+        ),
+        [format!("?avg={} ?sum={}", double("0.1"), double("1"))]
+    );
+    assert_eq!(
+        rows(
+            &ours,
+            &format!("{P}SELECT ?g (SUM(?v) AS ?sum) WHERE {{ ?s ex:v ?v ; ex:g ?g }} GROUP BY ?g")
+        ),
+        [
+            format!("?g=<http://example.org/g0> ?sum={}", double("0.5")),
+            format!("?g=<http://example.org/g1> ?sum={}", double("0.5")),
+        ]
+    );
+}
+
+/// The solutions of `query` in their order, decimals and doubles by value (Oxigraph's store
+/// keeps them in canonical form).
+fn ordered(engine: &Engine, query: &str) -> Vec<String> {
+    let QueryResults::Solutions(solutions) = engine.query(query).unwrap() else {
+        panic!("not a SELECT")
+    };
+    solutions
+        .map(|s| {
+            let s = s.unwrap();
+            s.iter()
+                .map(|(v, t)| match t {
+                    oxigraph::model::Term::Literal(l)
+                        if l.datatype() == oxigraph::model::vocab::xsd::DECIMAL
+                            || l.datatype() == oxigraph::model::vocab::xsd::DOUBLE =>
+                    {
+                        // Oxigraph's store writes a decimal `-0` as `0`.
+                        let value = l.value().parse::<f64>().unwrap() + 0.0;
+                        format!("{v}={value}^^{}", l.datatype())
+                    }
+                    t => format!("{v}={t}"),
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect()
+}
+
+/// `ORDER BY` of inline numbers and dates under a `LIMIT` is ordered on ids (#64): the same
+/// rows in the same order as the evaluator, also with `OFFSET`, `DESC`, a second key, unbound
+/// values, and columns that mix kinds (left to the evaluator).
+#[test]
+fn top_rows_of_numbers_and_dates_match_the_evaluator() {
+    let (ours, reference) = engines();
+    for p in [
+        "ex:int", "ex:dec", "ex:dbl", "ex:num", "ex:date", "ex:when", "ex:mixed", "ex:zdec",
+        "ex:zdbl",
+    ] {
+        for (order, slice) in [
+            ("DESC(?v) ?s", "LIMIT 7"),
+            ("?v ?s", "LIMIT 5 OFFSET 3"),
+            ("DESC(?v) DESC(?s)", "LIMIT 40"),
+            ("?c DESC(?v) ?s", "LIMIT 12"),
+        ] {
+            for q in [
+                format!("{P}SELECT ?s ?v WHERE {{ ?s {p} ?v ; a ?c }} ORDER BY {order} {slice}"),
+                format!(
+                    "{P}SELECT ?s ?v WHERE {{ ?s a ?c OPTIONAL {{ ?s {p} ?v FILTER(?v != 0) }} }} ORDER BY {order} {slice}"
+                ),
+                // Equal values of different kinds (`7` and `"7"^^xsd:int`) tie in any order.
+                if ["ex:mixed", "ex:num", "ex:zdec", "ex:zdbl"].contains(&p) {
+                    String::new()
+                } else {
+                    format!(
+                        "{P}SELECT DISTINCT ?v WHERE {{ ?s {p} ?v ; a ?c }} ORDER BY DESC(?v) {slice}"
+                    )
+                },
+            ] {
+                if q.is_empty() {
+                    continue;
+                }
+                assert_eq!(ordered(&ours, &q), ordered(&reference, &q), "{q}");
+            }
+        }
+    }
+    // Doubles are ordered on ids: the plan reads the first rows from a result table.
+    let plan = ours
+        .explain(&format!(
+            "{P}SELECT ?s ?v WHERE {{ ?s ex:dbl ?v }} ORDER BY DESC(?v) LIMIT 5"
+        ))
+        .unwrap();
+    assert!(plan.contains("urn:tripletrail:table:"), "{plan}");
 }
