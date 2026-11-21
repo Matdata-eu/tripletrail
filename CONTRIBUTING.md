@@ -33,6 +33,11 @@ Matdata. Please open an issue instead, and we'll pick it up.
   (after `cargo build -p tripletrail-server`; needs Node.js): Spectral's OpenAPI rules on the
   definitions it makes, with no warning.
 
+  A change to the web UI also passes its browser tests, which open Search, Map, Explore,
+  Describe and Query in Chromium on the guide's sample network: see
+  [crates/tripletrail-server/ui-tests](crates/tripletrail-server/ui-tests/README.md) (needs
+  Node.js; Playwright is a dev dependency only, never shipped).
+
 - Add a test that fails without your change.
 - A test or bench that needs a folder on disk makes it with
   `tripletrail_testdir::tempdir("name")` (crate `tripletrail-testdir`, a dev-dependency), not
