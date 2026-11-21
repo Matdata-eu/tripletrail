@@ -922,3 +922,104 @@ fn messages_name_the_variables_they_need() {
         ["this", "value"]
     );
 }
+
+/// #91: solutions that make the same result (focus node, value, path and message) give it
+/// once, as pySHACL does; solutions whose message differs give a result each.
+#[test]
+fn repeated_solutions_give_one_result() {
+    let data = r#"
+    ex:r1 a ex:Road ; ex:passesUnder ex:b1 , ex:b2 .
+    ex:r2 a ex:Road ; ex:passesUnder ex:b1 .
+    "#;
+    let count = |shapes: &str| {
+        let shapes = Shapes::compile(&graph(shapes)).unwrap();
+        let data = graph(data);
+        let v = Validator::new(&shapes, &data);
+        let mut out = Vec::new();
+        v.report(&mut |r| {
+            out.push((
+                r.focus_node.to_string(),
+                r.messages.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
+            ))
+        });
+        assert!(v.take_error().is_none());
+        out.sort();
+        out
+    };
+    // One row per bridge, the same result for each: once per road.
+    let same = count(
+        r#"ex:S a sh:NodeShape ; sh:targetClass ex:Road ; sh:sparql [ sh:select """
+        SELECT $this WHERE { $this <http://example.com/passesUnder> ?b }""" ] ."#,
+    );
+    assert_eq!(
+        same.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(),
+        [iri("r1"), iri("r2")]
+    );
+    // A message that names the bridge: two results for r1.
+    let named = count(
+        r#"ex:S a sh:NodeShape ; sh:targetClass ex:Road ; sh:sparql [ sh:message "under {?b}" ;
+        sh:select """SELECT $this ?b WHERE { $this <http://example.com/passesUnder> ?b }""" ] ."#,
+    );
+    assert_eq!(named.len(), 3, "{named:?}");
+}
+
+/// #91: with a focus graph, targets find their focus nodes there only, while the rest of the
+/// data graph is still read (here by `sh:class` and a SPARQL constraint).
+#[test]
+fn a_focus_graph_gives_the_focus_nodes() {
+    let data = graph(
+        r#"
+    ex:t1 a ex:Track ; ex:kind ex:Main .
+    ex:t2 a ex:Track ; ex:kind ex:Unknown .
+    "#,
+    );
+    let vocab = graph(
+        r#"
+    ex:Main a ex:Kind .
+    ex:Track a ex:Class .
+    ex:Unknown a ex:Track ; ex:kind ex:Nope .
+    "#,
+    );
+    let shapes = Shapes::compile(&graph(
+        r#"
+    ex:S a sh:NodeShape ; sh:targetClass ex:Track ;
+        sh:property [ sh:path ex:kind ; sh:class ex:Kind ] .
+    ex:T a sh:NodeShape ; sh:targetSubjectsOf ex:kind ;
+        sh:sparql [ sh:select """SELECT $this WHERE {
+            $this <http://example.com/kind> ?k FILTER NOT EXISTS { ?k a <http://example.com/Kind> }
+        }""" ] .
+    "#,
+    ))
+    .unwrap();
+    let all = Union(vec![&data, &vocab]);
+    let failing = |v: &Validator| {
+        let mut out: Vec<String> = v
+            .validate()
+            .into_iter()
+            .map(|(f, _)| f.to_string())
+            .collect();
+        assert!(v.take_error().is_none());
+        out.sort();
+        out
+    };
+    // Over everything, ex:Unknown (a track in the vocabulary) is validated too: it fails both
+    // shapes, as t2 does (their kinds are not Kinds).
+    let v = Validator::new(&shapes, &all);
+    assert_eq!(
+        failing(&v),
+        [iri("Unknown"), iri("Unknown"), iri("t2"), iri("t2")]
+    );
+    // With the data as focus graph, only t1 and t2 are focus nodes, and t1 still finds the
+    // class of its kind in the vocabulary.
+    let v = Validator::new(&shapes, &all).with_focus_graph(&data);
+    assert_eq!(failing(&v), [iri("t2"), iri("t2")]);
+    for &s in shapes.targeted() {
+        let mut foci: Vec<String> = v.focus_nodes(s).iter().map(|f| f.to_string()).collect();
+        foci.sort();
+        foci.dedup();
+        assert!(
+            foci.iter().all(|f| *f == iri("t1") || *f == iri("t2")),
+            "{foci:?}"
+        );
+    }
+}

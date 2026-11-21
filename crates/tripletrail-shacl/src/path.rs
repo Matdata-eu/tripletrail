@@ -9,7 +9,7 @@ use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
 
 /// A property path (SHACL 2.3.1).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Path {
     Predicate(NamedNode),
     Inverse(Box<Path>),

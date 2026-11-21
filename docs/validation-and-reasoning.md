@@ -17,7 +17,8 @@ failing constraint (per failing value node for constraints on each value), with 
 `sh:resultMessage` (the shape's `sh:message`s, or those of the SPARQL constraint; for a
 SPARQL-based result, each `{$var}` and `{?var}` is filled in from the solution and the
 component's parameters, as SHACL 5.3.2 and 6.4 say: an IRI as the IRI, a literal as its
-lexical form, an unbound variable left as written). Failures of
+lexical form, an unbound variable left as written; solutions that make the same result, with
+the same focus node, value, path and message, give it once, #91). Failures of
 shapes reached through `sh:node`, `sh:not`, `sh:and`, `sh:or`, `sh:xone` or
 `sh:qualifiedValueShape` are one result of that constraint, whose `sh:detail`s are the results
 of the value node against the nested shapes it fails: the shape of `sh:node`, the members of
@@ -34,6 +35,16 @@ tripletrail validate --location /data/tripletrail --dataset kg --shapes-graph ht
 
 The command exits with status 1 when the data does not conform (warnings included, as
 `sh:conforms` is defined); the report goes to standard output as Turtle without `--report`.
+
+Lookup data (#91), such as the vocabularies, code lists and ontologies that `sh:class`, paths
+and SPARQL constraints read, can be read without being validated: `--lookup FILE` (repeatable;
+loaded into the graph `urn:x-tripletrail:lookup`) with files, `--lookup-graph IRI` (repeatable)
+with `--location`. The data and the lookups are then one data graph to the shapes, but focus
+nodes come from the data only: class targets are the instances the data types (subclasses come
+from both), `sh:targetSubjectsOf` and `sh:targetObjectsOf` the data's triples, SPARQL targets
+the nodes the data has triples about, and `sh:targetNode` stays as written. In Rust,
+`Engine::validate_report_with` and `Engine::validate_counted_with` take the lookup graphs;
+lookups need a named data graph when the default graph is the union of the graphs.
 From Python, `Engine.validate(shapes_graph, *, data_graph=None, report_graph=None)` returns a
 report with `conforms`, `results` (dicts, ready for `pandas.DataFrame`) and `serialize()`.
 

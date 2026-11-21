@@ -154,7 +154,96 @@ sh:resultMessage "https://example.org/rail#S20 (Gent - Brugge) leads back to its
 ```
 
 A variable the row leaves unbound stays as written. The parameters of a constraint component
-you declare yourself fill in the same way, as `{$min}` for its `ex:min` parameter.
+you declare yourself fill in the same way, as `{$min}` for its `ex:min` parameter. Rows that
+would make the same result (the same focus node, value, path and message), as a query that
+joins through several paths returns, give it once.
+
+### Read vocabularies without checking them
+
+Shapes often read more than the data: `sh:class` looks up the class of a value, and a SPARQL
+constraint may read a code list. Loading that vocabulary with `--data` validates it too, and its
+own resources then show up in the report. Give it with `--lookup` instead: it is read, but only
+the `--data` files give focus nodes. Save this as `track-shapes.ttl`: a track's kind must be a
+track kind, and labels must be in English, Dutch or French:
+
+<!-- test: file track-shapes.ttl -->
+```turtle
+@prefix ex:   <https://example.org/rail#> .
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:TrackShape a sh:NodeShape ;
+  sh:targetClass ex:Track ;
+  sh:property [ sh:path ex:kind ; sh:class ex:TrackKind ] .
+
+ex:LabelShape a sh:NodeShape ;
+  sh:targetSubjectsOf rdfs:label ;
+  sh:property [ sh:path rdfs:label ; sh:languageIn ( "en" "nl" "fr" ) ] .
+```
+
+this as `tracks.ttl`, two tracks, one of an unknown kind:
+
+<!-- test: file tracks.ttl -->
+```turtle
+@prefix ex:   <https://example.org/rail#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:T1 a ex:Track ; rdfs:label "Spoor 1"@nl ; ex:kind ex:Main .
+ex:T2 a ex:Track ; rdfs:label "Spoor 2"@nl ; ex:kind ex:Unknown .
+```
+
+and this as `kinds.ttl`, a vocabulary from elsewhere, labelled in German:
+
+<!-- test: file kinds.ttl -->
+```turtle
+@prefix ex:   <https://example.org/rail#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:Main a ex:TrackKind ; rdfs:label "Hauptgleis"@de .
+```
+
+With both as data, the report has two results: T2, and the vocabulary's German label. (The
+`||` counts them when the data does not conform.)
+
+<!-- test: run -->
+```sh
+tripletrail validate --data tracks.ttl --data kinds.ttl --shapes track-shapes.ttl --report all.ttl 2>/dev/null ||
+  grep -c sh:focusNode all.ttl
+```
+
+<!-- test: output -->
+```text
+2
+```
+
+With the vocabulary as a lookup, T1 still finds the class of its kind there, and only T2 fails:
+
+<!-- test: run fails -->
+```sh
+tripletrail validate --data tracks.ttl --lookup kinds.ttl --shapes track-shapes.ttl
+```
+
+<!-- test: output contains -->
+```text
+sh:focusNode <https://example.org/rail#T2> ;
+does not conform in
+```
+
+It is the only result:
+
+<!-- test: run -->
+```sh
+tripletrail validate --data tracks.ttl --lookup kinds.ttl --shapes track-shapes.ttl --report data.ttl 2>/dev/null ||
+  grep -c sh:focusNode data.ttl
+```
+
+<!-- test: output -->
+```text
+1
+```
+
+On a dataset on disk, `--lookup-graph <graph>` (repeatable) reads named graphs the same way,
+with `--data-graph` the graph to validate.
 
 ## Derive facts with SHACL rules
 
