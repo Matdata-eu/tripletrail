@@ -109,6 +109,8 @@ tts:Reader-GraphQL a tts:Reader ; skos:inScheme tts:Readers ; skos:prefLabel "Gr
     skos:notation "graphql" .
 tts:Reader-Ai a tts:Reader ; skos:inScheme tts:Readers ; skos:prefLabel "AI assistant"@en ;
     skos:notation "ai" .
+tts:Reader-Forms a tts:Reader ; skos:inScheme tts:Readers ; skos:prefLabel "Forms"@en ;
+    skos:notation "forms" .
 
 tts:hiddenFrom a rdf:Property ;
     rdfs:label "hidden from"@en ;

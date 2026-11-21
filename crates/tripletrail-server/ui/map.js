@@ -176,7 +176,8 @@ window.TripleTrailMap = (function () {
     loaded = false;
     map.once("load", () => { loaded = true; });
     // The tools: an area to filter by (in the link as area, rel and dist), measuring.
-    tools = window.TripleTrailMapTools ? window.TripleTrailMapTools.panel({ map, ui, icon, getArea: () => state.area, setArea: (area) => apply({ area }) }) : null;
+    tools = window.TripleTrailMapTools ? window.TripleTrailMapTools.panel({ map, ui, icon, getArea: () => state.area, setArea: (area) => apply({ area }),
+      layers: collections.map((c) => ({ id: c.id, title: c.title })) }) : null;
     if (tools) map.once("load", () => tools.attach());
     map.addControl(new lib.NavigationControl(), "top-right");
     map.addControl(mapButtons(name, basemaps, state), "top-right");
@@ -435,9 +436,15 @@ window.TripleTrailMap = (function () {
     return q.toString();
   }
 
-  /** The area filter, {area, rel, dist} or null, as the tiles, facets and OGC API take it. */
-  function appendArea(q, area) {
+  /** The area filter, {area, rel, dist} or null, as the tiles, facets and OGC API take it.
+   *  An area of another layer (`layer:{id}`, select by location) takes that layer's filters
+   *  along, `{id}.{key}`, from `chosen` (the tiles have them all already). */
+  function appendArea(q, area, chosen) {
     if (!area || !area.area) return;
+    const layer = /^layer:(.+)$/.exec(area.area);
+    if (layer && chosen && chosen[layer[1]]) {
+      for (const [key, choice] of Object.entries(chosen[layer[1]])) appendChoice(q, layer[1] + ".", key, choice);
+    }
     q.set("area", area.area);
     if (area.rel && area.rel !== "intersects") q.set("rel", area.rel);
     if (area.rel === "dwithin") q.set("dist", String(area.dist));
@@ -532,11 +539,11 @@ window.TripleTrailMap = (function () {
 
   /** The collection's features in the OGC API, filtered as on the map: `f=html` for a page,
    *  `f=json` for a GIS. */
-  function ogcItems(ds, c, keys, f, area) {
+  function ogcItems(ds, c, chosen, f, area) {
     const q = new URLSearchParams({ f });
-    const filter = cql(keys);
+    const filter = cql(chosen[c.id]);
     if (filter) q.set("filter", filter);
-    appendArea(q, area);
+    appendArea(q, area, chosen);
     if (when) q.set("datetime", when);
     return new URL(service(ds, "ogc/collections/" + encodeURIComponent(c.id) + "/items?" + q), location.href).href;
   }
@@ -558,7 +565,7 @@ window.TripleTrailMap = (function () {
   async function layerQuery(ds, c, state) {
     const params = new URLSearchParams();
     for (const [key, choice] of Object.entries(state.chosen[c.id] || {})) appendChoice(params, "", key, choice);
-    appendArea(params, state.area);
+    appendArea(params, state.area, state.chosen);
     if (when) params.set("datetime", when);
     const out = await getJson(service(ds, tilesPath("facets/" + encodeURIComponent(c.id) + (params.toString() ? "?" + params : ""))));
     // Its counts take a sample of the features; the citation names them all.
@@ -654,7 +661,7 @@ window.TripleTrailMap = (function () {
         for (const [key, choice] of Object.entries(chosen[c.id] || {})) append(params, "", key, choice);
         // The colouring, for the counts of its legend.
         if (colors[c.id]) params.set("color", colors[c.id]);
-        appendArea(params, state.area);
+        appendArea(params, state.area, chosen);
         if (when) params.set("datetime", when);
         panel.replaceChildren(el("p", { class: "muted small" }, "Counting…"));
         let out;
@@ -753,7 +760,7 @@ window.TripleTrailMap = (function () {
           load();
         };
         const copy = async () => {
-          const url = ogcItems(ds, c, chosen[c.id], "json", state.area);
+          const url = ogcItems(ds, c, chosen, "json", state.area);
           try {
             await navigator.clipboard.writeText(url);
             ui.toast("Copied the GeoJSON link of " + c.title + (filtered ? ", filtered" : "") + ": open it in QGIS or another GIS.");
@@ -791,7 +798,7 @@ window.TripleTrailMap = (function () {
           colourBy,
           el("div", { class: "map-facet-tools" },
             filtered ? el("button", { class: "btn small", type: "button", onclick: () => { delete chosen[c.id]; refilter(); load(); } }, "Clear filters") : null,
-            el("a", { class: "btn small", href: ogcItems(ds, c, chosen[c.id], "html", state.area), target: "_blank", rel: "noopener", title: "These features in the OGC API – Features" }, "OGC API"),
+            el("a", { class: "btn small", href: ogcItems(ds, c, chosen, "html", state.area), target: "_blank", rel: "noopener", title: "These features in the OGC API – Features" }, "OGC API"),
             el("button", { class: "btn small", type: "button", onclick: copy, title: "Copy the OGC API link of these features, as GeoJSON, for a GIS" }, "Copy GIS link"),
             c.class ? el("a", { class: "btn small", href: "#", title: "Find " + c.title + " in the area the map shows, with conditions on any property, on the Search page",
               onclick: (e) => { e.preventDefault(); location.href = searchArea(ds, c); } }, "Search this area") : null,

@@ -599,6 +599,24 @@ curl -s 'http://localhost:7878/ds/tiles/facets/Section?area=LINESTRING(4.35%2050
 "features":3
 ```
 
+**Or the features of** a layer selects by location: the features of that layer, as its own
+filters keep them, are the area (`area=layer:{id}`, with the layer's filters as
+`{id}.{key}=…`), and each feature is taken against every one of them but itself. The
+stations at the ends of a section without electrification, and the stations within 2 km of
+another station:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?area=layer:Section&Section.electrified=false' | grep -o '"features":[0-9]*'
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?area=layer:Station&rel=dwithin&dist=2000' | grep -o '"features":[0-9]*'
+```
+
+<!-- test: output -->
+```text
+"features":2
+"features":3
+```
+
 **Measure** draws a line, with its length and each leg's length and bearing ("43.0 km · 90°
 E"), or an area, with its size and perimeter. Lengths and areas are on the Earth's sphere,
 not on the flat map, so they hold far from the equator too. A measurement stays on the map
@@ -1306,6 +1324,32 @@ curl -s -X PUT 'http://localhost:7878/$/datasets/ds/shapes/files/wrong.ttl' --da
 The shapes are not valid:
 <https://example.org/rail#WrongShape>: the facet "speedClass"'s tts:select binds no ?value
 ```
+
+### Keep a property from the record forms
+
+The forms that show and edit one record read the shapes as a reader of their own,
+`tts:Reader-Forms` (`forms`), so `tts:hiddenFrom` and `tts:onlyFor` work on them as on the map
+or describe pages. The speed class above is only for the map, so the forms leave it out, and a
+property hidden from the forms stays on the map:
+
+<!-- test: run -->
+```sh
+for reader in map forms; do
+  curl -s "http://localhost:7878/\$/datasets/ds/shapes?reader=$reader" | grep -q speedClass \
+    && echo "$reader: speed class" || echo "$reader: no speed class"
+done
+```
+
+<!-- test: output -->
+```text
+map: speed class
+forms: no speed class
+```
+
+The forms draw each field with the editor its shape names (`dash:editor`, such as
+`dash:TextAreaEditor` or `dash:EnumSelectEditor`), or the one that fits its values: a check
+box for a boolean, a list for `sh:in`, a date picker for a date. The web UI's pages share one
+renderer for this, `/$/ui/forms.js`; see [the reference](../server.md#shapes).
 
 ### Show data quality on the map
 

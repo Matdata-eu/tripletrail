@@ -29,6 +29,7 @@ const EXPLORE_JS: &str = include_str!("../ui/explore.js");
 const AI_JS: &str = include_str!("../ui/ai.js");
 const BUILDER_JS: &str = include_str!("../ui/builder.js");
 const IMPORT_JS: &str = include_str!("../ui/import.js");
+const FORMS_JS: &str = include_str!("../ui/forms.js");
 /// Release notes for the What's new dialog, newest first.
 pub(crate) const WHATS_NEW: &str = include_str!("../ui/whats-new.json");
 const ICON: &str = include_str!("../ui/icon.svg");
@@ -298,6 +299,7 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
         )),
         ["builder.js"] => Ok(page("text/javascript; charset=utf-8", BUILDER_JS)),
         ["import.js"] => Ok(page("text/javascript; charset=utf-8", IMPORT_JS)),
+        ["forms.js"] => Ok(page("text/javascript; charset=utf-8", FORMS_JS)),
         ["describe-map.js"] => Ok(page("text/javascript; charset=utf-8", DESCRIBE_MAP_JS)),
         ["describe.js"] => Ok(page("text/javascript; charset=utf-8", DESCRIBE_JS)),
         ["whats-new.json"] => Ok(page("application/json", WHATS_NEW)),
@@ -369,6 +371,7 @@ mod tests {
             ("ai.js", super::AI_JS),
             ("builder.js", super::BUILDER_JS),
             ("import.js", super::IMPORT_JS),
+            ("forms.js", super::FORMS_JS),
             ("whats-new.json", super::WHATS_NEW),
         ] {
             for marker in ["<<<<<<< ", "=======\n", ">>>>>>> "] {

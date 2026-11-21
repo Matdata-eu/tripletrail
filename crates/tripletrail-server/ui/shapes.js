@@ -9,7 +9,7 @@
 "use strict";
 
 window.TripleTrailShapes = (function () {
-  const READERS = ["validation", "map", "describe", "search", "ogc-features", "rest-api", "graphql", "ai"];
+  const READERS = ["validation", "map", "describe", "search", "ogc-features", "rest-api", "graphql", "ai", "forms"];
   let ui = null;
   let state = null;
   const el = (...a) => ui.el(...a);
@@ -272,34 +272,20 @@ window.TripleTrailShapes = (function () {
     const spec = state.form && state.form[path ? "property" : "node"];
     if (!spec) return el("p", { class: "muted small" }, "Loading the form…");
     const editable = state.outline.editable || state.outline.bound;
+    const Forms = window.TripleTrailForms;
+    // The settings that only this page knows how to pick; the rest come from the shared editors.
+    const custom = (f) => {
+      if (f.class === "http://w3id.org/tripletrail/shapes#Profile") return input(row, path, f.setting, "profiles");
+      if (f.class === "http://www.w3.org/ns/shacl#PropertyGroup") return groupPicker(row);
+      if (f.in && f.multiple) return input(row, path, f.setting, "readers");
+      return null;
+    };
     const fields = spec.map((f) => {
       const id = "shapes-f-" + (path ? "p-" : "n-") + f.setting;
-      let control;
-      const v = value(row, f.setting, path);
-      if (f.editor === "BooleanSelectEditor") control = input(row, path, f.setting, "flag");
-      else if (f.class === "http://w3id.org/tripletrail/shapes#Profile") control = input(row, path, f.setting, "profiles");
-      else if (f.class === "http://www.w3.org/ns/shacl#PropertyGroup") control = groupPicker(row);
-      else if (f.in && f.multiple) control = input(row, path, f.setting, "readers");
-      else if (f.in) {
-        control = el("select", { id, disabled: !editable, onchange: (e) => set(path, f.setting, e.target.value) },
-          el("option", { value: "", selected: !v }, "none"),
-          f.in.map((o) => el("option", { value: o.value, selected: o.value === v, title: o.value }, o.label)));
-      } else if (f.editor === "TextAreaWithLangEditor") {
-        control = el("textarea", { id, rows: 2, cols: 40, disabled: !editable, onchange: (e) => set(path, f.setting, e.target.value) }, v == null ? "" : String(v));
-      } else {
-        const number = f.datatype === "integer" || f.datatype === "decimal";
-        control = el("input", { id, type: number ? "number" : "text", disabled: !editable, value: v == null ? "" : v,
-          step: f.datatype === "integer" ? 1 : number ? "any" : null, min: f.min ?? null, max: f.max ?? null, pattern: f.pattern || null,
-          onchange: (e) => {
-            if (!e.target.checkValidity()) { e.target.reportValidity(); return; }
-            set(path, f.setting, number && e.target.value !== "" ? Number(e.target.value) : e.target.value);
-          } });
-      }
       const lang = BY_LANGUAGE.has(f.setting) && state.lang ? el("span", { class: "muted small" }, " (" + state.lang + ")") : null;
-      return el("div", { class: "shapes-field" },
-        el("label", { for: id }, f.label, lang),
-        control,
-        f.description ? el("span", { class: "muted small" }, f.description) : null);
+      return Forms.field(f, { el, id, value: value(row, f.setting, path), editable, custom,
+        name: `${f.setting} of ${path ? short(path) : "the node shape"}`,
+        set: (v) => set(path, f.setting, v) }, lang);
     });
     return el("fieldset", { class: "shapes-form" },
       el("legend", {}, path ? "Settings of " + short(path) : "Settings of " + title(row)),

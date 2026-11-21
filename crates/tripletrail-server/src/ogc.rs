@@ -620,11 +620,15 @@ fn answer(
         }
         ["collections", id, "items"] => {
             let collection = find(state, entry, id, view)?;
+            let (layers, _) = versioned(state, entry, view)?;
             let mut allowed = ITEMS_PARAMS.to_vec();
             allowed.extend(collection.filters.iter().map(String::as_str));
+            // An area of another layer takes that layer's own filters (#33).
+            let layer_keys = layer_params(&layers, params);
+            allowed.extend(layer_keys.iter().map(String::as_str));
             only_params(&allowed)?;
             json_only(&["json", "geojson", "jsonfg"])?;
-            items(entry, &collection, params, base, timeout, fg, view)
+            items(entry, &collection, &layers, params, base, timeout, fg, view)
         }
         // The id is the percent-encoded IRI; a client that leaves its slashes unencoded
         // (the OGC test suite) sends it over several segments.
@@ -1697,9 +1701,38 @@ pub(crate) fn run(
 
 /// `…/items`: a page of features, in the store's order.
 #[allow(clippy::too_many_arguments)]
+/// The filters of the layer an `area=layer:{id}` names, which the items take besides their
+/// own: `{id}.{key}`, `.min`, `.max` and `.text` of its facets.
+fn layer_params(layers: &[Collection], params: &Params) -> Vec<String> {
+    let Some(id) = params
+        .get("area")
+        .and_then(|a| a.trim().strip_prefix(crate::area::LAYER))
+    else {
+        return Vec::new();
+    };
+    let Some(layer) = layers.iter().find(|c| c.id == id.trim()) else {
+        return Vec::new();
+    };
+    layer
+        .facets
+        .iter()
+        .flat_map(|f| {
+            let key = format!("{}.{}", layer.id, f.key);
+            [
+                format!("{key}.min"),
+                format!("{key}.max"),
+                format!("{key}.text"),
+                key,
+            ]
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn items(
     entry: &Entry,
     collection: &Collection,
+    layers: &[Collection],
     params: &Params,
     base: &str,
     timeout: Option<Duration>,
@@ -1729,7 +1762,9 @@ fn items(
     if let Some(datetime) = params.get("datetime") {
         filter.push_str(&time_filter(&collection.time, datetime)?);
     }
-    if let Some(area) = crate::area::area_filter(entry, view, collection, params, false)? {
+    if let Some(area) =
+        crate::area::area_filter(entry, view, collection, layers, None, params, false)?
+    {
         filter.push_str(&area.sparql);
     }
     if let Some(cql) = params.get("filter") {
