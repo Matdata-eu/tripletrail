@@ -150,8 +150,11 @@ test("Query: a SELECT answers a table of results", async (t) => {
   await page.locator(".yasgui-runButton").waitFor();
   if (await skip.count()) await skip.first().click();
   await page.click(".yasgui-runButton");
-  const rows = page.locator(".yasr .tabulator-row");
-  await rows.nth(9).waitFor();
-  assert.equal(await rows.count(), 10);
-  assert.match(await rows.first().innerText(), /ANT/);
+  // The table may be drawn more than once (the editor can also run the linked query on
+  // opening): wait until it holds the ten stations, then read it in one go.
+  const first = await page.waitForFunction(() => {
+    const rows = document.querySelectorAll(".yasr .tabulator-row");
+    return rows.length === 10 && rows[0].innerText;
+  });
+  assert.match(await first.jsonValue(), /ANT/);
 });
