@@ -599,6 +599,24 @@ curl -s 'http://localhost:7878/ds/tiles/facets/Section?area=LINESTRING(4.35%2050
 "features":3
 ```
 
+**Or the features of** a layer selects by location: the features of that layer, as its own
+filters keep them, are the area (`area=layer:{id}`, with the layer's filters as
+`{id}.{key}=…`), and each feature is taken against every one of them but itself. The
+stations at the ends of a section without electrification, and the stations within 2 km of
+another station:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?area=layer:Section&Section.electrified=false' | grep -o '"features":[0-9]*'
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?area=layer:Station&rel=dwithin&dist=2000' | grep -o '"features":[0-9]*'
+```
+
+<!-- test: output -->
+```text
+"features":2
+"features":3
+```
+
 **Measure** draws a line, with its length and each leg's length and bearing ("43.0 km · 90°
 E"), or an area, with its size and perimeter. Lengths and areas are on the Earth's sphere,
 not on the flat map, so they hold far from the equator too. A measurement stays on the map

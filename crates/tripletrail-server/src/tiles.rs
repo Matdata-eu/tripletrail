@@ -290,7 +290,15 @@ pub(crate) fn warm(state: &State, entry: &Entry, within: Duration) -> Result<War
             continue;
         }
         let timeout = Some(limit.map_or(left, |t| t.min(left)));
-        match facet_counts(entry, c, &none, timeout, &View::default(), version) {
+        match facet_counts(
+            entry,
+            c,
+            &collections,
+            &none,
+            timeout,
+            &View::default(),
+            version,
+        ) {
             Ok(_) => out.counted += 1,
             Err(e) => out.failed.push(format!("{}: {}", c.id, e.1)),
         }
@@ -403,7 +411,15 @@ pub(crate) fn route(
                 },
                 None => None,
             };
-            each.push(facet_counts(entry, c, params, left, view, version)?);
+            each.push(facet_counts(
+                entry,
+                c,
+                &collections,
+                params,
+                left,
+                view,
+                version,
+            )?);
         }
         let counts = combine_facets(each);
         let mut reply = Reply::bytes(200, "application/json", counts.to_string().into_bytes());
@@ -418,7 +434,15 @@ pub(crate) fn route(
             .ok_or_else(|| HttpError(404, format!("No collection {id}")))?;
         let (_, made_for) = shown()?;
         let version = made_for.filter(|v| Some(*v) == data_version(state, entry));
-        let counts = facet_counts(entry, collection, params, timeout, view, version)?;
+        let counts = facet_counts(
+            entry,
+            collection,
+            &collections,
+            params,
+            timeout,
+            view,
+            version,
+        )?;
         let mut reply = Reply::bytes(200, "application/json", counts.to_string().into_bytes());
         reply.headers.push(("Cache-Control", "no-cache".to_owned()));
         return Ok(reply);
@@ -461,8 +485,10 @@ pub(crate) fn route(
     // Facet filters of the collections, and with them the cache key's layer name.
     let single = *layer != "all";
     let mut filters: HashMap<&str, Filter> = HashMap::new();
+    // An area of another layer is joined only within the tile.
+    let window = tile_window(z, x, y);
     for c in &shown {
-        let scope = scope_filter(entry, view, c, params, false)?;
+        let scope = scope_filter(entry, view, c, &collections, Some(&window), params, false)?;
         let filter = facet_filter(c, params, single, None, &scope)?;
         if !filter.sparql.is_empty() || filter.color.is_some() {
             filters.insert(&c.id, filter);
@@ -777,11 +803,14 @@ const SCOPE_GRAPHS: usize = 100;
 /// - `area`, `rel` and `dist`: the features with a geometry in a relation to an area (#33,
 ///   [`crate::area`]).
 ///
+/// `window`: the tile's area (CRS84 WKT), which bounds the join of an `area=layer:{id}`.
 /// `many`: for counts over the whole collection rather than a tile's features.
 fn scope_filter(
     entry: &Entry,
     view: &View,
     collection: &Collection,
+    layers: &[Collection],
+    window: Option<&str>,
     params: &Params,
     many: bool,
 ) -> Result<Scope, HttpError> {
@@ -802,7 +831,9 @@ fn scope_filter(
         ));
         sign(format!("bbox={window}"));
     }
-    if let Some(area) = crate::area::area_filter(entry, view, collection, params, many)? {
+    if let Some(area) =
+        crate::area::area_filter(entry, view, collection, layers, window, params, many)?
+    {
         sparql.push_str(&area.sparql);
         sign(area.signature);
     }
@@ -860,6 +891,16 @@ fn scope_filter(
 }
 
 const SEARCH: &str = "http://w3id.org/tripletrail/fn#search";
+
+/// The features of `collection` an `area=layer:{id}` takes (#33): its own filters
+/// (`{id}.{key}=…`, never the bare ones), as SPARQL over `?f`, and their signature.
+pub(crate) fn layer_selection(
+    collection: &Collection,
+    params: &Params,
+) -> Result<(String, String), HttpError> {
+    let filter = facet_filter(collection, params, false, None, &Scope::default())?;
+    Ok((filter.sparql, filter.signature))
+}
 
 /// A range facet's bound as a SPARQL literal of its datatype: a number for numeric types,
 /// a date or time for the others; `None` when `text` is not one.
@@ -1055,6 +1096,7 @@ fn search(
 fn facet_counts(
     entry: &Entry,
     collection: &Collection,
+    layers: &[Collection],
     params: &Params,
     timeout: Option<Duration>,
     view: &View,
@@ -1067,7 +1109,7 @@ fn facet_counts(
         " FILTER EXISTS {{ {} }}",
         collection.geometry.pattern("?f", "?w")
     );
-    let scope = scope_filter(entry, view, collection, params, true)?;
+    let scope = scope_filter(entry, view, collection, layers, None, params, true)?;
     let all = facet_filter(collection, params, true, None, &scope)?;
     let number = |t: &Option<Term>| match t {
         Some(Term::Literal(l)) => l.value().parse::<u64>().unwrap_or(0),
@@ -1764,6 +1806,17 @@ fn map_views(collections: &[Collection]) -> Vec<serde_json::Value> {
 }
 
 /// The Web Mercator bounds of a tile: `(minx, miny, maxx, maxy)`, grown by `grow` of its width.
+/// The area tile `z/x/y` draws, with its buffer, as CRS84 WKT.
+fn tile_window(z: u32, x: u32, y: u32) -> String {
+    let grow = f64::from(BUFFER) / f64::from(EXTENT);
+    let (minx, miny, maxx, maxy) = bounds(z, x, y, grow);
+    let (west, south) = lon_lat(minx, miny);
+    let (east, north) = lon_lat(maxx, maxy);
+    format!(
+        "POLYGON(({west} {south}, {east} {south}, {east} {north}, {west} {north}, {west} {south}))"
+    )
+}
+
 fn bounds(z: u32, x: u32, y: u32, grow: f64) -> (f64, f64, f64, f64) {
     let size = 2.0 * HALF / f64::from(1u32 << z.min(31));
     let margin = size * grow;
@@ -1883,13 +1936,7 @@ fn group_tiles(
     timeout: Option<Duration>,
     view: &View,
 ) -> Result<Layers, HttpError> {
-    let grow = f64::from(BUFFER) / f64::from(EXTENT);
-    let (minx, miny, maxx, maxy) = bounds(z, x, y, grow);
-    let (west, south) = lon_lat(minx, miny);
-    let (east, north) = lon_lat(maxx, maxy);
-    let window = format!(
-        "POLYGON(({west} {south}, {east} {south}, {east} {north}, {west} {north}, {west} {south}))"
-    );
+    let window = tile_window(z, x, y);
     let mut classes: Vec<&NamedNode> = group.iter().map(|c| &c.class).collect();
     classes.sort();
     classes.dedup();

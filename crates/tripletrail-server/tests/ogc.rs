@@ -2816,3 +2816,191 @@ fn facets_tiles_and_items_by_a_spatial_relation_to_an_area() {
     assert_eq!(code, 200, "{page}");
     assert_eq!(page["numberReturned"], 4);
 }
+
+/// Select by location (#33): `area=layer:{id}`, the features of another collection, with that
+/// collection's own filters, as the area.
+#[test]
+fn select_by_location_takes_another_layers_features() {
+    let mut ttl = String::from(
+        "@prefix ex: <http://example.com/> .\n\
+         @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+         ex:west a ex:Zone ; ex:kind \"west\" ; geo:hasGeometry [ geo:asWKT \
+           \"POLYGON((3.95 50.7, 4.15 50.7, 4.15 50.9, 3.95 50.9, 3.95 50.7))\"^^geo:wktLiteral ] .\n\
+         ex:north a ex:Zone ; ex:kind \"north\" ; geo:hasGeometry [ geo:asWKT \
+           \"POLYGON((10 50, 11 50, 11 51, 10 51, 10 50))\"^^geo:wktLiteral ] .\n",
+    );
+    // Stations 0-3 at longitudes 4.0 to 4.3 (0.1° is about 7 km there), 4-5 further east.
+    for (i, lon) in [4.0, 4.1, 4.2, 4.3, 10.4, 10.5].iter().enumerate() {
+        ttl.push_str(&format!(
+            "ex:s{i} a ex:Station ; \
+             geo:hasGeometry [ geo:asWKT \"POINT({lon} 50.8)\"^^geo:wktLiteral ] .\n"
+        ));
+    }
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let base = start(engine);
+    let count = |query: &str| {
+        let (code, _, out) = get(&format!("{base}/kg/tiles/facets/Station?{query}"));
+        assert_eq!(code, 200, "{query}: {out}");
+        out["features"].as_u64().unwrap()
+    };
+    assert_eq!(count("area=layer:Zone"), 4);
+    // The zones as their own filters keep them; a bare filter is the stations' own.
+    assert_eq!(count("area=layer:Zone&Zone.kind.text=west"), 2);
+    assert_eq!(count("area=layer:Zone&Zone.kind.text=north"), 2);
+    assert_eq!(count("area=layer:Zone&Zone.kind.text=west&rel=disjoint"), 4);
+    // A layer as its own area: the other features, never a feature itself.
+    assert_eq!(count("area=layer:Station&rel=dwithin&dist=5000"), 0);
+    assert_eq!(count("area=layer:Station&rel=dwithin&dist=8000"), 6);
+    let (code, _, out) = get(&format!("{base}/kg/tiles/facets/Station?area=layer:Nope"));
+    assert_eq!(code, 400);
+    assert!(out.as_str().unwrap().contains("no such layer"), "{out}");
+    // A tile, and the OGC API's items, which take the other layer's filters too.
+    let (code, north) = tile(&format!(
+        "{base}/kg/tiles/Station/0/0/0.mvt?area=layer:Zone&Zone.kind.text=north"
+    ));
+    assert_eq!(code, 200);
+    assert!(holds(&north, "http://example.com/s5"));
+    assert!(!holds(&north, "http://example.com/s0"));
+    let (code, _, page) = get(&format!(
+        "{base}/kg/ogc/collections/Station/items?area=layer:Zone&Zone.kind.text=west"
+    ));
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page["numberReturned"], 2);
+    let (code, _, _) = get(&format!(
+        "{base}/kg/ogc/collections/Station/items?area=layer:Zone&Zone.nope=1"
+    ));
+    assert_eq!(code, 400);
+}
+
+/// A tile with `area=layer:{id}` gives each feature the same answer as the items, in every
+/// tile it crosses: a road a degree long crosses a link drawn between two points
+/// (`tts:lineBetween`) in one place only, far outside most of the tiles that draw the road.
+#[test]
+fn select_by_location_answers_a_long_feature_alike_in_every_tile() {
+    let dir = tripletrail_testdir::tempdir("ogc-layer-long");
+    let ttl = "@prefix ex: <http://example.org/> .\n\
+               @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+               ex:p1 a ex:Point ; geo:asWKT \"POINT(10.5 50.0)\"^^geo:wktLiteral .\n\
+               ex:p2 a ex:Point ; geo:asWKT \"POINT(10.5 50.1)\"^^geo:wktLiteral .\n\
+               ex:link1 a ex:Link ; ex:from ex:p1 ; ex:to ex:p2 .\n\
+               ex:road1 a ex:Road ; geo:asWKT \"LINESTRING(10.0 50.05, 11.0 50.05)\"^^geo:wktLiteral .\n\
+               ex:road2 a ex:Road ; geo:asWKT \"LINESTRING(10.0 50.3, 11.0 50.3)\"^^geo:wktLiteral .\n";
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 4,
+            admin_token: Some("t".to_owned()),
+            location: Some(dir.join("data")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let link = "@prefix ex: <http://example.org/> .\n\
+                @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+                @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+                ex:LinkShape a sh:NodeShape ; sh:targetClass ex:Link ; tts:key \"link\" ;\n\
+                  tts:geometry [ sh:order 0 ; sh:path ( geo:hasGeometry geo:asWKT ) ] ,\n\
+                    [ sh:order 1 ; tts:lineBetween ( ( ex:from geo:asWKT ) ( ex:to geo:asWKT ) ) ] .\n";
+    ureq::put(&format!("{base}/$/datasets/kg/shapes/files/Link.ttl"))
+        .set("Authorization", "Bearer t")
+        .send_string(link)
+        .unwrap();
+    let (code, _, page) = get(&format!(
+        "{base}/kg/ogc/collections/Road/items?area=layer:link&f=json"
+    ));
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page["numberReturned"], 1, "{page}");
+    assert!(
+        page["features"][0]["id"]
+            .as_str()
+            .unwrap()
+            .ends_with("road1")
+    );
+    // The tiles along road1, from its west end to its east end, at two zooms.
+    for z in [12u32, 14] {
+        let n = f64::from(1u32 << z);
+        let y =
+            ((1.0 - 50.05f64.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n) as u32;
+        for lon in [10.1, 10.3, 10.5, 10.7, 10.95] {
+            let x = ((lon + 180.0) / 360.0 * n) as u32;
+            let at = format!("{base}/kg/tiles/Road/{z}/{x}/{y}.mvt?area=layer:link");
+            let (code, near) = tile(&at);
+            assert_eq!(code, 200, "{at}");
+            assert!(holds(&near, "http://example.org/road1"), "{at}");
+            let (code, outside) = tile(&format!("{at}&rel=disjoint"));
+            assert_eq!(code, 200, "{at}&rel=disjoint");
+            assert!(
+                !holds(&outside, "http://example.org/road1"),
+                "{at}&rel=disjoint"
+            );
+        }
+    }
+}
+
+/// `area=layer:{id}&rel=disjoint` works out the matching features once, not once per feature
+/// of a tile or a page: on 2,500 stations and 400 zones a tile and a page of items answer well
+/// inside the server's timeout (per feature, they took minutes).
+#[test]
+fn select_by_location_outside_a_layer_is_one_join() {
+    let mut ttl = String::from(
+        "@prefix ex: <http://example.com/> .\n\
+         @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n",
+    );
+    for i in 0..50 {
+        for j in 0..50 {
+            let (lon, lat) = (4.0 + f64::from(i) * 0.01, 50.0 + f64::from(j) * 0.01);
+            ttl.push_str(&format!(
+                "ex:s{i}_{j} a ex:Station ; geo:hasGeometry [ geo:asWKT \"POINT({lon} {lat})\"^^geo:wktLiteral ] .\n"
+            ));
+        }
+    }
+    for i in 0..20 {
+        for j in 0..20 {
+            // Around station s{2i}_{2j}.
+            let (lon, lat) = (4.0 + f64::from(i) * 0.02, 50.0 + f64::from(j) * 0.02);
+            let (w, s, e, n) = (lon - 0.002, lat - 0.002, lon + 0.002, lat + 0.002);
+            ttl.push_str(&format!(
+                "ex:z{i}_{j} a ex:Zone ; geo:hasGeometry [ geo:asWKT \
+                 \"POLYGON(({w} {s}, {e} {s}, {e} {n}, {w} {n}, {w} {s}))\"^^geo:wktLiteral ] .\n"
+            ));
+        }
+    }
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 4,
+            timeout: Some(Duration::from_secs(20)),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    // Each zone holds one station.
+    let (code, _, counts) = get(&format!(
+        "{base}/kg/tiles/facets/Station?area=layer:Zone&rel=disjoint"
+    ));
+    assert_eq!(code, 200, "{counts}");
+    assert_eq!(counts["features"], 2500 - 400);
+    let (code, outside) = tile(&format!(
+        "{base}/kg/tiles/Station/8/130/86.mvt?area=layer:Zone&rel=disjoint"
+    ));
+    assert_eq!(code, 200);
+    assert!(!holds(&outside, "http://example.com/s0_0"));
+    assert!(holds(&outside, "http://example.com/s1_0"));
+    let (code, _, page) = get(&format!(
+        "{base}/kg/ogc/collections/Station/items?area=layer:Zone&rel=disjoint&limit=1000"
+    ));
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page["numberReturned"], 1000);
+}

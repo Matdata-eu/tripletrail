@@ -173,6 +173,8 @@
   const INK = "#e8590c";
   const SOURCE = "map-tools";
   const IS_IRI = /^(https?:|urn:)/i;
+  /** An area of another layer: `layer:{id}`. */
+  const LAYER = /^layer:(.+)$/;
   /** What each drawing tool asks for while it is on. */
   const HINTS = {
     rect: "Click two opposite corners.",
@@ -186,7 +188,7 @@
   const END = "Backspace takes the last point back, Esc stops.";
 
   /** The tools' map control and panel. `ctx`: {map, ui, icon(name), getArea(), setArea(area
-   *  or null)}, the area being {area, rel, dist}. Returns {control, attach(), click(e),
+   *  or null), layers: [{id, title}]}, the area being {area, rel, dist}. Returns {control, attach(), click(e),
    *  busy(), useFeature(iri, label), refresh()}. */
   function panel(ctx) {
     const { map, ui } = ctx;
@@ -297,7 +299,7 @@
       const add = (role, g, props = {}) => features.push({ type: "Feature", properties: { role, ...props }, geometry: g });
       const vertices = (pts) => pts.forEach((p) => add("vertex", { type: "Point", coordinates: p }));
       const a = ctx.getArea();
-      const g = a && !IS_IRI.test(a.area) ? geometry.fromWkt(a.area) : null;
+      const g = a && !IS_IRI.test(a.area) && !LAYER.test(a.area) ? geometry.fromWkt(a.area) : null;
       if (g) {
         const dist = a.rel === "dwithin" ? Number(a.dist) || 0 : 0;
         if (g.type === "Point" && dist > 0) add("area", { type: "Polygon", coordinates: [geometry.circle(g.coordinates, dist)] });
@@ -407,6 +409,8 @@
     function describe(a) {
       if (!a) return "No area: draw one, or open a feature and filter by it.";
       if (IS_IRI.test(a.area)) return "The geometry of " + (areaLabel || a.area) + ".";
+      const layer = LAYER.exec(a.area);
+      if (layer) return "The features of " + layerTitle(layer[1]) + ", with its filters (a feature is not its own area).";
       const g = geometry.fromWkt(a.area);
       if (!g) return "An area given as WKT.";
       if (g.type === "Point") return a.rel === "dwithin" ? "A circle of " + geometry.fmtLength(Number(a.dist) || 0) + " round a point." : "A point.";
@@ -440,7 +444,16 @@
       const close = el("button", { type: "button", class: "icon-btn close", title: "Close the tools", "aria-label": "Close the tools", onclick: () => { show(false); toggle.focus(); } }, "✕");
       liveResults = el("div", { class: "map-tools-results", "aria-live": "polite" });
       liveCoords = el("span", { class: "mono" }, pointer ? geometry.fmtPoint(pointer) : "–");
-      const wkt = a && !IS_IRI.test(a.area) ? a.area : null;
+      const wkt = a && !IS_IRI.test(a.area) && !LAYER.test(a.area) ? a.area : null;
+      const inLayer = a && LAYER.exec(a.area);
+      const layers = ctx.layers || [];
+      const byLayer = layers.length ? el("select", { "aria-label": "Select by location: the layer whose features are the area", onchange: (e) => {
+        const id = e.target.value;
+        areaLabel = null;
+        if (!id) ctx.setArea(null);
+        else ctx.setArea(pref.rel === "dwithin" ? { area: "layer:" + id, rel: "dwithin", dist: pref.dist } : { area: "layer:" + id, rel: pref.rel });
+        refresh();
+      } }, el("option", { value: "" }, "—"), layers.map((l) => el("option", { value: l.id, selected: !!(inLayer && inLayer[1] === l.id) }, l.title))) : null;
       box.replaceChildren(
         el("div", { class: "map-tools-head" }, el("strong", {}, "Tools"), close),
         el("section", {},
@@ -451,6 +464,7 @@
             tool("polygon", "Polygon", "Draw a polygon"),
             tool("circle", "Circle", "Draw a circle: its centre, then its edge"),
             tool("corridor", "Corridor", "Draw a line: the features within the distance of it")),
+          byLayer ? el("label", { class: "map-tools-rel small", title: "Select by location: another layer's features, as its own filters keep them, are the area" }, "Or the features of ", byLayer) : "",
           el("label", { class: "map-tools-rel small" }, "Keep the features whose geometry ", relation),
           rel === "dwithin" || (mode && mode.kind === "corridor") ? el("label", { class: "map-tools-rel small" }, "Distance ", metres, " m") : null,
           a ? el("div", { class: "map-tools-row" },
@@ -470,6 +484,7 @@
         mode ? el("p", { class: "map-tools-hint small", role: "status" }, HINTS[mode.kind] + (mode.kind === "point" || mode.kind === "rect" || mode.kind === "circle" ? " Esc stops." : " " + END)) : "");
       live();
     }
+    const layerTitle = (id) => ((ctx.layers || []).find((l) => l.id === id) || { title: id }).title;
     const withRel = (a, rel, dist) => (rel === "dwithin" ? { area: a.area, rel, dist: a.rel === "dwithin" ? a.dist : dist } : { area: a.area, rel });
 
     /** Draws and lists the area again, after it changed. */
