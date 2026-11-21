@@ -110,6 +110,52 @@ does not conform in
 Details nest as deep as the shapes do. They are not counted as results of their own, and a
 focus node's results have about 1,000 details at most.
 
+### Rules in SPARQL, with messages that name the problem
+
+When a rule is easier to write as a query, a `sh:sparql` constraint runs a `SELECT` for each
+focus node, with `$this` bound to it; each row it returns is a result. Its `sh:message` can
+name what the row found: `{$this}` and `{?var}` are filled in from the row. Save as
+`loops.ttl`: a section must not lead back to itself:
+
+<!-- test: file loops.ttl -->
+```turtle
+@prefix ex: <https://example.org/rail#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+ex:NoLoops a sh:NodeShape ;
+  sh:targetSubjectsOf ex:next ;
+  sh:sparql [
+    sh:message "{$this} ({?name}) leads back to itself" ;
+    sh:select """
+      SELECT $this ?name WHERE {
+        $this <https://example.org/rail#next> $this .
+        OPTIONAL { $this <https://example.org/rail#name> ?name }
+      }""" ] .
+```
+
+and this as `links.ttl`, with one section that does:
+
+<!-- test: file links.ttl -->
+```turtle
+@prefix ex: <https://example.org/rail#> .
+
+ex:S20 ex:name "Gent - Brugge" ; ex:next ex:S20 .
+ex:S21 ex:name "Brugge - Oostende" ; ex:next ex:S22 .
+```
+
+<!-- test: run fails -->
+```sh
+tripletrail validate --data links.ttl --shapes loops.ttl
+```
+
+<!-- test: output contains -->
+```text
+sh:resultMessage "https://example.org/rail#S20 (Gent - Brugge) leads back to itself" .
+```
+
+A variable the row leaves unbound stays as written. The parameters of a constraint component
+you declare yourself fill in the same way, as `{$min}` for its `ex:min` parameter.
+
 ## Derive facts with SHACL rules
 
 SHACL rules ([SHACL-AF](https://www.w3.org/TR/shacl-af/)) add triples. A SPARQL rule runs a
@@ -287,6 +333,8 @@ in a shapes file can be called by its shapes and rules too, with `tripletrail va
 - `tripletrail infer` runs SHACL rules until they infer nothing new.
 - `tripletrail entail` and `serve --rdfs` (or `--owl-rl`) add what an RDFS or OWL schema implies,
   once or kept up to date.
+- A `sh:sparql` constraint's `sh:message` names what each row found, with `{$this}` and
+  `{?var}`.
 - `sh:SPARQLFunction`s are functions you write as data; `serve --functions` makes them callable.
 
 [Validation and reasoning](../validation-and-reasoning.md) has every option, the rest of

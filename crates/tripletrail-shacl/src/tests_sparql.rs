@@ -864,3 +864,61 @@ fn rules_on_one_shape_see_the_focus_nodes_earlier_rules_change() {
         );
     }
 }
+
+/// The `sh:resultMessage`s of a shapes graph's results over `data`, sorted.
+fn messages(shapes: &str, data: &str) -> Vec<String> {
+    let shapes = Shapes::compile(&graph(shapes)).unwrap();
+    let data = graph(data);
+    let v = Validator::new(&shapes, &data);
+    let mut out = Vec::new();
+    v.report(&mut |r| out.extend(r.messages.iter().map(|m| m.to_string())));
+    assert!(v.take_error().is_none());
+    out.sort();
+    out
+}
+
+/// SHACL 5.3.2 and 6.4 (#90): the `{$var}` and `{?var}` of a message are filled in from the
+/// solution that made the result, and from a component's parameters; a variable without a
+/// binding is left as written, and the message keeps its language tag.
+#[test]
+fn messages_are_filled_in_from_the_solution() {
+    let shapes = r#"
+    ex:NoSelfLink a sh:NodeShape ; sh:targetSubjectsOf ex:prev ;
+        sh:sparql [ sh:message "{$this} links to itself" , "{?value} ({?label}) is {?nothing}"@en ;
+            sh:select """
+            SELECT $this ?value ?label WHERE {
+                $this <http://example.com/prev> ?value . FILTER(?value = $this)
+                OPTIONAL { $this <http://example.com/label> ?label } }""" ] .
+    ex:AboveBase a sh:ConstraintComponent ;
+        sh:parameter [ sh:path ex:min ] ;
+        sh:validator [ a sh:SPARQLAskValidator ; sh:message "{$value} is not {$min} above the base of {$this}" ;
+            sh:ask """ASK { $this <http://example.com/base> ?b . FILTER ($value - ?b >= $min) }""" ] .
+    ex:P a sh:NodeShape ; sh:targetSubjectsOf ex:base ;
+        sh:property [ sh:path ex:v ; ex:min 2 ] .
+    "#;
+    let data = r#"
+    ex:bad ex:prev ex:bad ; ex:label "Bad" . ex:good ex:prev ex:bad .
+    ex:b ex:base 1 ; ex:v 3, 2 .
+    "#;
+    assert_eq!(
+        messages(shapes, data),
+        [
+            r#""2 is not 2 above the base of http://example.com/b""#,
+            r#""http://example.com/bad (Bad) is {?nothing}"@en"#,
+            r#""http://example.com/bad links to itself""#,
+        ]
+    );
+}
+
+/// Only the variables a message names are kept for it, and none for plain messages.
+#[test]
+fn messages_name_the_variables_they_need() {
+    use crate::report::template_names;
+    use oxigraph::model::{Literal, Term};
+    let m = |s: &str| Term::from(Literal::new_simple_literal(s));
+    assert!(template_names(&[m("self link"), m("{ not a variable }")]).is_empty());
+    assert_eq!(
+        template_names(&[m("{$this} has {?value} and {$this} again"), m("{?label")]),
+        ["this", "value"]
+    );
+}

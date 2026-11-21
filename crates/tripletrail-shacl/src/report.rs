@@ -24,8 +24,9 @@ pub struct ValidationResult<'a> {
     /// `sh:resultSeverity`: the source shape's `sh:severity`, `sh:Violation` by default.
     pub severity: &'a Term,
     /// `sh:resultMessage`s: the source shape's `sh:message`s, or else those of the
-    /// SPARQL-based constraint.
-    pub messages: &'a [Term],
+    /// SPARQL-based constraint, with the `{$var}` and `{?var}` of a SPARQL-based result
+    /// filled in from its solution (SHACL 5.3.2).
+    pub messages: Cow<'a, [Term]>,
     /// `sh:detail`s: for a failure of a shape reached through `sh:node`, `sh:and`, `sh:or`,
     /// `sh:xone` or `sh:qualifiedValueShape`, the results of the value node against that shape
     /// (see [`crate::Validator::report`]).
@@ -63,7 +64,7 @@ impl ValidationResult<'_> {
             t(sh::SOURCE_CONSTRAINT, c.clone());
         }
         t(sh::RESULT_SEVERITY, self.severity.clone());
-        for m in self.messages {
+        for m in self.messages.iter() {
             t(sh::RESULT_MESSAGE, m.clone());
         }
         for d in &self.details {
@@ -163,4 +164,93 @@ impl ReportWriter {
 /// The constraint component of a SHACL Core constraint, by its local name.
 pub(crate) fn core_component(local: &str) -> Term {
     NamedNode::new_unchecked(format!("{}{local}ConstraintComponent", sh::NS)).into()
+}
+
+/// `messages` with each `{$name}` and `{?name}` filled in from `bindings` (SHACL 5.3.2,
+/// 6.4): an IRI as the IRI, a literal as its lexical form, a blank node as `_:label`. A
+/// variable without a binding is left as written. Messages without a template are borrowed.
+pub(crate) fn fill_messages<'a>(
+    messages: &'a [Term],
+    bindings: &[(String, Term)],
+) -> Cow<'a, [Term]> {
+    let templated = |m: &Term| matches!(m, Term::Literal(l) if l.value().contains('{'));
+    if bindings.is_empty() || !messages.iter().any(templated) {
+        return Cow::Borrowed(messages);
+    }
+    Cow::Owned(
+        messages
+            .iter()
+            .map(|m| match m {
+                Term::Literal(l) if templated(m) => {
+                    let text = fill(l.value(), bindings);
+                    match l.language() {
+                        Some(lang) => Literal::new_language_tagged_literal_unchecked(text, lang),
+                        None => Literal::new_typed_literal(text, l.datatype()),
+                    }
+                    .into()
+                }
+                other => other.clone(),
+            })
+            .collect(),
+    )
+}
+
+/// The names of the variables `messages` name as `{$x}` or `{?x}`, each once.
+pub(crate) fn template_names(messages: &[Term]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for m in messages {
+        let Term::Literal(l) = m else { continue };
+        let mut rest = l.value();
+        while let Some(at) = rest.find('{') {
+            let after = &rest[at + 1..];
+            rest = after;
+            let Some(tail) = after.strip_prefix('$').or_else(|| after.strip_prefix('?')) else {
+                continue;
+            };
+            if let Some(end) = tail.find('}') {
+                let name = &tail[..end];
+                if !names.iter().any(|n| n == name) {
+                    names.push(name.to_owned());
+                }
+            }
+        }
+    }
+    names
+}
+
+fn fill(template: &str, bindings: &[(String, Term)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(at) = rest.find('{') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at..];
+        let filled = after
+            .strip_prefix("{$")
+            .or_else(|| after.strip_prefix("{?"))
+            .and_then(|tail| {
+                let end = tail.find('}')?;
+                let name = &tail[..end];
+                let (_, term) = bindings.iter().find(|(n, _)| n == name)?;
+                Some((
+                    match term {
+                        Term::NamedNode(n) => n.as_str().to_owned(),
+                        Term::Literal(l) => l.value().to_owned(),
+                        other => other.to_string(),
+                    },
+                    end + 3,
+                ))
+            });
+        match filled {
+            Some((text, len)) => {
+                out.push_str(&text);
+                rest = &after[len..];
+            }
+            None => {
+                out.push('{');
+                rest = &after[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
