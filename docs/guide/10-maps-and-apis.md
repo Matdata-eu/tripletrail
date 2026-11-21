@@ -422,6 +422,10 @@ curl -s -o tile.mvt -w '%{http_code} %{content_type}\n' http://localhost:7878/ds
 200 application/vnd.mapbox-vector-tile
 ```
 
+Tiles of a whole country or continent stay small. Below zoom 8, a layer with more than 1,000
+features in a tile is drawn coarser (512 units a side instead of 4,096), and one feature
+remains where several fall on the same position. The small network here keeps every feature.
+
 ### Narrow facets and tiles to an area, a graph or a text
 
 `/ds/tiles/facets/{collection}` counts what the Map page's filters keep. Three more filters
