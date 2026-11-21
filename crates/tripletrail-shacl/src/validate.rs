@@ -3,7 +3,7 @@
 use crate::ShaclError;
 use crate::graph::DataGraph;
 use crate::path::{Path, dedup};
-use crate::report::{ShapeCount, ValidationResult, core_component};
+use crate::report::{ShapeCount, ValidationResult, core_component, fill_messages};
 use crate::shapes::{
     Component, KIND_BLANK, KIND_IRI, KIND_LITERAL, Shape, ShapeId, Shapes, Target,
 };
@@ -38,7 +38,10 @@ pub(crate) const SPARQL_BATCH: usize = 4096;
 /// to check them all with one query per constraint. A query that fails makes its focus nodes
 /// fail; [`Validator::take_error`] tells why.
 /// The results of failing focus nodes of SPARQL checks: `(sh:value, sh:resultPath)`.
-type SparqlResults = RefCell<FxHashMap<(u32, Term), Vec<(Option<Term>, Option<Path>)>>>;
+/// Per SPARQL check and focus node, its results: `sh:value`, `sh:resultPath`, and the
+/// bindings its messages are filled in from.
+type SparqlResults = RefCell<FxHashMap<(u32, Term), Vec<SparqlRow>>>;
+type SparqlRow = (Option<Term>, Option<Path>, Vec<(String, Term)>);
 
 pub struct Validator<'a> {
     shapes: &'a Shapes,
@@ -280,9 +283,12 @@ impl<'a> Validator<'a> {
             for (f, v) in &pairs {
                 if failed.contains(f) || !passing.contains(&(f.clone(), v.clone())) {
                     ok.insert(f, false);
+                    let mut bindings = constants(check);
+                    bindings.push(("this".to_owned(), f.clone()));
+                    bindings.push(("value".to_owned(), v.clone()));
                     rows.entry((k, f.clone()))
                         .or_default()
-                        .push((Some(v.clone()), None));
+                        .push((Some(v.clone()), None, bindings));
                 }
             }
             drop(rows);
@@ -324,9 +330,12 @@ impl<'a> Validator<'a> {
                                 _ => None,
                             };
                             violating.insert(focus.clone());
+                            let mut bindings = constants(check);
+                            bindings
+                                .extend(s.iter().map(|(v, t)| (v.as_str().to_owned(), t.clone())));
                             rows.entry((k, focus.clone()))
                                 .or_default()
-                                .push((value, path));
+                                .push((value, path, bindings));
                         }
                         results.extend(
                             chunk
@@ -352,15 +361,18 @@ impl<'a> Validator<'a> {
     /// if it is an IRI, or else the shape's path), per failing value node of an ASK validator.
     /// They come from the query that checked the focus node; a focus node that failed
     /// without any (a query error) gets one result.
-    fn sparql_results(&self, k: u32, focus: &Term) -> Vec<(Option<Term>, Option<Path>)> {
+    fn sparql_results(&self, k: u32, focus: &Term) -> Vec<SparqlRow> {
         if !self.sparql.borrow().contains_key(&(k, focus.clone())) {
             self.run_check(k, &[focus]);
         }
         match self.sparql_results.borrow().get(&(k, focus.clone())) {
             Some(rows) if !rows.is_empty() => rows.clone(),
             _ => {
-                let shape = self.shapes.get(self.shapes.checks[k as usize].shape);
-                vec![(shape.path.is_none().then(|| focus.clone()), None)]
+                let check = &self.shapes.checks[k as usize];
+                let shape = self.shapes.get(check.shape);
+                let mut bindings = constants(check);
+                bindings.push(("this".to_owned(), focus.clone()));
+                vec![(shape.path.is_none().then(|| focus.clone()), None, bindings)]
             }
         }
     }
@@ -555,11 +567,11 @@ impl<'a> Validator<'a> {
                 source_constraint_component: component,
                 source_constraint: None,
                 severity: &s.severity,
-                messages: if s.messages.is_empty() {
+                messages: Cow::Borrowed(if s.messages.is_empty() {
                     messages
                 } else {
                     &s.messages
-                },
+                }),
                 details: Vec::new(),
             };
         for c in &s.components {
@@ -647,7 +659,7 @@ impl<'a> Validator<'a> {
                                 source_constraint_component: component.clone(),
                                 source_constraint: None,
                                 severity: &s.severity,
-                                messages: &s.messages,
+                                messages: Cow::Borrowed(&s.messages),
                                 details: Vec::new(),
                             });
                         }
@@ -708,8 +720,11 @@ impl<'a> Validator<'a> {
                 Component::Property(_) => unreachable!("handled above"),
                 Component::Sparql(k) => {
                     let check = &shapes.checks[*k as usize];
-                    for (value, path) in self.sparql_results(*k, focus) {
+                    for (value, path, bindings) in self.sparql_results(*k, focus) {
                         let mut r = result(value, check.source.clone(), &check.messages);
+                        if let Cow::Borrowed(messages) = r.messages {
+                            r.messages = fill_messages(messages, &bindings);
+                        }
                         if let Some(path) = path {
                             r.result_path = Some(Cow::Owned(path));
                         }
@@ -960,4 +975,15 @@ impl<'a> Validator<'a> {
             Component::Sparql(k) => self.sparql_check(*k, focus),
         }
     }
+}
+
+/// The constants a SPARQL check's query is run with (a component's parameters and
+/// `$currentShape`), as message bindings.
+fn constants(check: &crate::shapes::SparqlCheck) -> Vec<(String, Term)> {
+    check
+        .query
+        .constants
+        .iter()
+        .map(|(v, t)| (v.as_str().to_owned(), t.clone()))
+        .collect()
 }
