@@ -161,7 +161,10 @@ fn attach_query_swap_and_detach() {
     assert_eq!(d["target"], "assets_v2");
     assert_eq!(d["previous"], "assets_v1");
     // An aliased dataset is not detached by accident.
-    assert_eq!(status(s.admin("DELETE", "/$/datasets/assets_v2").call()), 409);
+    assert_eq!(
+        status(s.admin("DELETE", "/$/datasets/assets_v2").call()),
+        409
+    );
     // Rollback is a swap back.
     s.admin("POST", "/$/datasets/assets/swap")
         .query("to", "assets_v1")
