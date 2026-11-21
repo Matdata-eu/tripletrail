@@ -159,7 +159,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   expression itself, under the `BIND` (`BIND(?a * ?q AS ?g) FILTER(?g > 400000)` on 133k
   orders 222 → 49 ms; a select expression over a join 197 → 59 ms). A computed double that
   doesn't fit an inline id gets one made up for the query, which doesn't order, so an
-  `ORDER BY` of a computed value is left to the evaluator. A `LIMIT` without an order, order
+  `ORDER BY` of a computed value is left to the evaluator. `VALUES` is a table of the ids of
+  its terms (`UNDEF` an unbound cell). A term the store doesn't hold (`2.5e0` when it holds
+  `2.5`) gets an id made up for the query, which joins only itself; a filter that would have
+  to compare it by value (`=`, `IN`, `isLiteral`, `DATATYPE`) leaves the query to the
+  evaluator. Before any work, the plan checks that each `BIND` expression is one the kernels
+  compute, so a query with `STR` or a division doesn't run its patterns on ids first. A `LIMIT` without an order, order
   expressions other than variables, columns the ids don't order, an expression the kernels
   don't compute (`STR`, a division), and every other operator (`GROUP BY` beyond the count
   shortcuts, property paths outside the tables) leave the query to the evaluator, which then

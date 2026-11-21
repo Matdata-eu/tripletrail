@@ -129,12 +129,57 @@ fn computed(p: &GraphPattern, v: &Variable) -> bool {
     }
 }
 
+/// Whether the expression kernels (`idvalue::compile`) may compute `e`, by its form alone: so
+/// that a `BIND` they can't compute leaves the query to the evaluator before any work on ids.
+/// `top`: a constant or a copy is fine there (`BIND(ex:a AS ?k)`), not inside arithmetic.
+fn computable(e: &Expression, top: bool) -> bool {
+    use spargebra::algebra::Function as F;
+    match e {
+        Expression::Variable(_) => true,
+        Expression::Literal(_) => true,
+        Expression::NamedNode(_) => top,
+        Expression::Add(a, b) | Expression::Subtract(a, b) | Expression::Multiply(a, b) => {
+            computable(a, false) && computable(b, false)
+        }
+        Expression::UnaryMinus(a) => computable(a, false),
+        Expression::FunctionCall(
+            F::Abs
+            | F::Ceil
+            | F::Floor
+            | F::Round
+            | F::Year
+            | F::Month
+            | F::Day
+            | F::Hours
+            | F::Minutes,
+            args,
+        ) => args.len() == 1 && computable(&args[0], false),
+        // `STRLEN` and `xsd:integer` of a text test read a variable's string.
+        Expression::FunctionCall(F::StrLen, args) => {
+            args.len() == 1 && !matches!(args[0], Expression::Literal(_))
+        }
+        Expression::FunctionCall(F::Custom(f), args)
+            if f.as_ref() == oxigraph::model::vocab::xsd::INTEGER =>
+        {
+            args.len() == 1 && !matches!(args[0], Expression::Literal(_))
+        }
+        _ => false,
+    }
+}
+
 /// Whether the id tables may answer `p`: what [`crate::rows::covered`] covers, and `BIND`
 /// over it (`idtree::Eval::extend` decides the expression).
 fn covered(p: &GraphPattern) -> bool {
     use GraphPattern as G;
     match p {
-        G::Extend { inner, .. } => covered(inner),
+        G::Extend {
+            inner, expression, ..
+        } => computable(expression, true) && covered(inner),
+        G::Values { bindings, .. } => bindings
+            .iter()
+            .flatten()
+            .flatten()
+            .all(|t| !matches!(t, spargebra::term::GroundTerm::Triple(_))),
         G::Join { left, right }
         | G::Minus { left, right }
         | G::Union { left, right }
