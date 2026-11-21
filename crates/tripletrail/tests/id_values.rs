@@ -73,6 +73,21 @@ fn data() -> String {
         if i % 5 == 0 {
             ttl.push_str(&format!("{s} ex:maybe {} .\n", i % 17));
         }
+        // Doubles whose sums are exact in any order, so the evaluator's sum is the exact one
+        // (#62); in ex:num, mixed with integers and decimals.
+        let dbl = format!(
+            "\"{}{}{}\"^^xsd:double",
+            if i % 4 == 1 { "-" } else { "" },
+            (i * 29) % 1013,
+            [".25", "", ".5", ".125", ".0", ".75"][i as usize % 6]
+        );
+        ttl.push_str(&format!("{s} ex:dbl {dbl} .\n"));
+        let num = match i % 3 {
+            0 => dbl,
+            1 => format!("{}", i % 41),
+            _ => format!("{}.5", i % 23),
+        };
+        ttl.push_str(&format!("{s} ex:num {num} .\n"));
     }
     ttl
 }
@@ -150,10 +165,14 @@ fn sums_match_the_evaluator() {
         "HOURS(?v)",
     ];
     for p in [
-        "ex:int", "ex:dec", "ex:date", "ex:when", "ex:mixed", "ex:maybe",
+        "ex:int", "ex:dec", "ex:date", "ex:when", "ex:mixed", "ex:maybe", "ex:dbl", "ex:num",
     ] {
         for e in sums {
             for q in [
+                format!(
+                    "{P}SELECT ?c (AVG({e}) AS ?avg) (SUM({e}) AS ?sum) WHERE {{ ?s {p} ?v ; a ?c }} GROUP BY ?c"
+                ),
+                format!("{P}SELECT (AVG({e}) AS ?avg) WHERE {{ ?s {p} ?v FILTER(false) }}"),
                 format!("{P}SELECT (SUM({e}) AS ?sum) WHERE {{ ?s {p} ?v }}"),
                 format!(
                     "{P}SELECT ?c (SUM({e}) AS ?sum) (COUNT(*) AS ?n) WHERE {{ ?s {p} ?v ; a ?c }} GROUP BY ?c"
@@ -167,4 +186,37 @@ fn sums_match_the_evaluator() {
             }
         }
     }
+}
+
+/// Doubles are summed exactly and rounded once (#62), where the evaluator rounds after each
+/// addition: ten times 0.1 is 1, not 0.9999999999999999, whatever the order of the rows.
+#[test]
+fn double_sums_are_rounded_once() {
+    let ours = Engine::new_tripletrail();
+    let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..10 {
+        ttl.push_str(&format!(
+            "ex:s{i} ex:v \"0.1\"^^<http://www.w3.org/2001/XMLSchema#double> ; ex:g ex:g{} .\n",
+            i % 2
+        ));
+    }
+    ours.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let double = |v: &str| format!("\"{v}\"^^<http://www.w3.org/2001/XMLSchema#double>");
+    assert_eq!(
+        rows(
+            &ours,
+            &format!("{P}SELECT (SUM(?v) AS ?sum) (AVG(?v) AS ?avg) WHERE {{ ?s ex:v ?v }}")
+        ),
+        [format!("?avg={} ?sum={}", double("0.1"), double("1"))]
+    );
+    assert_eq!(
+        rows(
+            &ours,
+            &format!("{P}SELECT ?g (SUM(?v) AS ?sum) WHERE {{ ?s ex:v ?v ; ex:g ?g }} GROUP BY ?g")
+        ),
+        [
+            format!("?g=<http://example.org/g0> ?sum={}", double("0.5")),
+            format!("?g=<http://example.org/g1> ?sum={}", double("0.5")),
+        ]
+    );
 }

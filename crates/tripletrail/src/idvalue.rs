@@ -3,9 +3,11 @@
 //! and comparisons on them that FILTERs and `SUM` use.
 //!
 //! Everything here follows the evaluator exactly or gives up (`None`): integer overflow,
-//! doubles (their sums depend on the order of the additions), dictionary literals (`xsd:int`,
-//! exponent forms), dates compared with date-times or with and without a time zone. The
-//! caller then leaves the expression to the evaluator.
+//! arithmetic and comparisons on doubles, dictionary literals (`xsd:int`, exponent forms),
+//! dates compared with date-times or with and without a time zone. The caller then leaves the
+//! expression to the evaluator. The one difference is `SUM` and `AVG` over doubles (#62): the
+//! evaluator adds them in row order, rounding after each addition, while these are summed
+//! exactly and rounded once, so they don't depend on the order of the rows.
 
 use oxigraph::model::{Literal, vocab::xsd};
 use oxigraph::sparql::Variable;
@@ -26,6 +28,8 @@ pub(crate) enum Value {
     Integer(i64),
     /// A decimal times 10^18, as the evaluator holds it.
     Decimal(i128),
+    /// An inline `xsd:double` (only `SUM` and `AVG` take it).
+    Double(f64),
     DateTime {
         /// `xsd:date`, else `xsd:dateTime`.
         date: bool,
@@ -48,6 +52,10 @@ pub(crate) fn of_id(id: TermId) -> Option<Value> {
                 digits.checked_mul(10_i128.pow(SCALE - u32::from(scale)))?,
             )),
             tripletrail_store::Numeric::Double(_) => None,
+        },
+        Kind::Double => match id.numeric()? {
+            tripletrail_store::Numeric::Double(d) => Some(Value::Double(d)),
+            tripletrail_store::Numeric::Decimal { .. } => None,
         },
         Kind::DateTime => {
             let v = id.date_time_value()?;
@@ -383,39 +391,167 @@ pub(crate) fn compare(x: Value, y: Value) -> Option<Option<Ordering>> {
     }
 }
 
-/// The running `SUM` of a group: `None` once it gives up.
+/// The running `SUM` (and `AVG`) of a group: `None` once it gives up. Integers and decimals
+/// add up exactly, as the evaluator does; once a double comes in, the sum is a double, the
+/// exact sum of the doubles plus the integers and decimals, rounded once at the end.
+#[derive(Clone, Default)]
+pub(crate) struct Sum {
+    exact: Exact,
+    doubles: Option<Fsum>,
+}
+
 #[derive(Clone, Copy)]
-pub(crate) enum Sum {
+enum Exact {
     Integer(i64),
     Decimal(i128),
 }
 
-impl Default for Sum {
+impl Default for Exact {
     fn default() -> Self {
-        Sum::Integer(0)
+        Exact::Integer(0)
     }
 }
 
 impl Sum {
-    pub(crate) fn add(self, v: Value) -> Option<Self> {
-        Some(match (self, v) {
-            (Sum::Integer(a), Value::Integer(b)) => Sum::Integer(a.checked_add(b)?),
-            (Sum::Integer(a), Value::Decimal(b)) => {
-                Sum::Decimal(i128::from(a).checked_mul(ONE)?.checked_add(b)?)
+    pub(crate) fn add(&mut self, v: Value) -> Option<()> {
+        self.exact = match (self.exact, v) {
+            (Exact::Integer(a), Value::Integer(b)) => Exact::Integer(a.checked_add(b)?),
+            (Exact::Integer(a), Value::Decimal(b)) => {
+                Exact::Decimal(i128::from(a).checked_mul(ONE)?.checked_add(b)?)
             }
-            (Sum::Decimal(a), Value::Integer(_) | Value::Decimal(_)) => {
-                Sum::Decimal(a.checked_add(decimal(v)?)?)
+            (Exact::Decimal(a), Value::Integer(_) | Value::Decimal(_)) => {
+                Exact::Decimal(a.checked_add(decimal(v)?)?)
+            }
+            (exact, Value::Double(d)) => {
+                self.doubles.get_or_insert_with(Fsum::default).add(d)?;
+                exact
             }
             _ => return None,
+        };
+        Some(())
+    }
+
+    /// The value of the sum, as a double once a double came in.
+    fn total(&self) -> Option<Total> {
+        Some(match (&self.doubles, self.exact) {
+            (None, Exact::Integer(i)) => Total::Integer(i),
+            (None, Exact::Decimal(d)) => Total::Decimal(d),
+            (Some(f), exact) => {
+                let mut f = f.clone();
+                // The integers and decimals as one double, correctly rounded, as the
+                // evaluator turns each into a double when it adds it to a double.
+                let rest: f64 = match exact {
+                    Exact::Integer(i) => i.to_string().parse().ok()?,
+                    Exact::Decimal(d) => decimal_lexical(d).parse().ok()?,
+                };
+                f.add(rest)?;
+                Total::Double(f.value())
+            }
         })
     }
 
     /// The literal the evaluator gives for this sum.
-    pub(crate) fn literal(self) -> Option<Literal> {
-        Some(match self {
-            Sum::Integer(i) => Literal::from(i),
-            Sum::Decimal(d) => Literal::new_typed_literal(decimal_lexical(d), xsd::DECIMAL),
+    pub(crate) fn literal(&self) -> Option<Literal> {
+        Some(match self.total()? {
+            Total::Integer(i) => Literal::from(i),
+            Total::Decimal(d) => Literal::new_typed_literal(decimal_lexical(d), xsd::DECIMAL),
+            Total::Double(d) => Literal::from(oxsdatatypes::Double::from(d)),
         })
+    }
+
+    /// The literal the evaluator gives for the average of `count` values with this sum: only
+    /// for doubles (an average of integers and decimals is a decimal division, left to the
+    /// evaluator).
+    pub(crate) fn average(&self, count: usize) -> Option<Literal> {
+        if count == 0 {
+            return Some(Literal::from(0_i64));
+        }
+        match self.total()? {
+            Total::Double(d) => Some(Literal::from(oxsdatatypes::Double::from(d / count as f64))),
+            _ => None,
+        }
+    }
+}
+
+enum Total {
+    Integer(i64),
+    Decimal(i128),
+    Double(f64),
+}
+
+/// An exact sum of doubles, rounded once at the end (Shewchuk's partials, as Python's
+/// `math.fsum`): the result doesn't depend on the order of the additions.
+#[derive(Clone, Default)]
+struct Fsum {
+    /// Non-overlapping partial sums, smallest first; their exact sum is the sum so far.
+    partials: Vec<f64>,
+    /// The sum of the infinite and NaN values, which make the result one of them.
+    special: Option<f64>,
+}
+
+impl Fsum {
+    /// Adds `x`; `None` when an intermediate sum overflows (the evaluator's order may not).
+    fn add(&mut self, mut x: f64) -> Option<()> {
+        if !x.is_finite() {
+            self.special = Some(self.special.map_or(x, |s| s + x));
+            return Some(());
+        }
+        let mut i = 0;
+        for j in 0..self.partials.len() {
+            let mut y = self.partials[j];
+            if x.abs() < y.abs() {
+                std::mem::swap(&mut x, &mut y);
+            }
+            let hi = x + y;
+            if !hi.is_finite() {
+                return None;
+            }
+            let lo = y - (hi - x);
+            if lo != 0.0 {
+                self.partials[i] = lo;
+                i += 1;
+            }
+            x = hi;
+        }
+        self.partials.truncate(i);
+        self.partials.push(x);
+        Some(())
+    }
+
+    /// The exact sum, correctly rounded (half to even).
+    fn value(&self) -> f64 {
+        if let Some(s) = self.special {
+            return s;
+        }
+        let p = &self.partials;
+        let mut n = p.len();
+        let mut hi = 0.0;
+        if n > 0 {
+            n -= 1;
+            hi = p[n];
+            let mut lo = 0.0;
+            while n > 0 {
+                let x = hi;
+                n -= 1;
+                let y = p[n];
+                hi = x + y;
+                let yr = hi - x;
+                lo = y - yr;
+                if lo != 0.0 {
+                    break;
+                }
+            }
+            // Half-way between two doubles: round as if the partials below were added.
+            if n > 0 && ((lo < 0.0 && p[n - 1] < 0.0) || (lo > 0.0 && p[n - 1] > 0.0)) {
+                let y = lo * 2.0;
+                let x = hi + y;
+                if y == x - hi {
+                    hi = x;
+                }
+            }
+        }
+        // The evaluator's sum starts at the integer 0: `0 + -0.0` is `0.0`.
+        hi + 0.0
     }
 }
 
@@ -485,6 +621,52 @@ mod tests {
         assert_eq!(decimal_lexical(5 * ONE), "5.0");
         assert_eq!(decimal_lexical(-15 * ONE / 10), "-1.5");
         assert_eq!(decimal_lexical(ONE / 100), "0.01");
+    }
+
+    #[test]
+    fn double_sums_are_exact_and_rounded_once() {
+        let sum = |xs: &[f64]| {
+            let mut s = Sum::default();
+            for &x in xs {
+                s.add(Value::Double(x)).unwrap();
+            }
+            s.literal().unwrap().value().to_owned()
+        };
+        // Left to right, 0.1 + 0.2 + 0.3 is 0.6000000000000001.
+        assert_eq!(sum(&[0.1, 0.2, 0.3]), "0.6");
+        assert_eq!(sum(&[0.3, 0.2, 0.1]), "0.6");
+        // Left to right, 1e16 + 1 + 1 is 1e16: the ones are lost one by one.
+        assert_eq!(sum(&[1e16, 1.0, 1.0]), sum(&[1.0, 1.0, 1e16]));
+        assert_eq!(sum(&[1e100, 1.0, -1e100]), "1");
+        assert_eq!(sum(&[-0.0]), "0");
+        assert_eq!(sum(&[1.5, f64::INFINITY]), "INF");
+        assert_eq!(sum(&[f64::INFINITY, f64::NEG_INFINITY]), "NaN");
+        assert_eq!(sum(&[f64::NAN, 1.0]), "NaN");
+        // Just above half-way between two doubles: up, where left to right gives 1.
+        assert_eq!(
+            sum(&[1.0, 1.1102230246251565e-16, 1e-300]),
+            "1.0000000000000002"
+        );
+        // An overflow on the way: left to the evaluator.
+        let mut s = Sum::default();
+        s.add(Value::Double(f64::MAX)).unwrap();
+        assert!(s.add(Value::Double(f64::MAX)).is_none());
+        // Integers and decimals with doubles: a double.
+        let mut s = Sum::default();
+        for v in [
+            Value::Integer(2),
+            Value::Decimal(ONE / 2),
+            Value::Double(0.25),
+        ] {
+            s.add(v).unwrap();
+        }
+        assert_eq!(s.literal().unwrap().value(), "2.75");
+        assert_eq!(s.literal().unwrap().datatype(), xsd::DOUBLE);
+        assert_eq!(s.average(2).unwrap().value(), "1.375");
+        // An average of integers is a decimal division: not here.
+        let mut s = Sum::default();
+        s.add(Value::Integer(3)).unwrap();
+        assert!(s.average(2).is_none());
     }
 
     #[test]

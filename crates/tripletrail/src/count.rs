@@ -485,6 +485,8 @@ enum Agg<'a> {
     Sample(&'a Variable),
     /// `SUM` of numbers on ids ([`crate::idvalue`]).
     Sum(&'a Expression),
+    /// `AVG` of numbers on ids, when the sum is a double (#62).
+    Avg(&'a Expression),
 }
 
 /// Each aggregate as an [`Agg`], if all are counts, or `MIN`, `MAX` or `SAMPLE` of a variable.
@@ -504,6 +506,7 @@ fn id_aggregates(aggregates: &[(Variable, AggregateExpression)]) -> Option<Vec<A
                 AggregateFunction::Max => Some(Agg::Max(v)),
                 AggregateFunction::Sample => Some(Agg::Sample(v)),
                 AggregateFunction::Sum if !distinct => Some(Agg::Sum(e)),
+                AggregateFunction::Avg if !distinct => Some(Agg::Avg(e)),
                 _ => None,
             },
             AggregateExpression::FunctionCall {
@@ -511,6 +514,11 @@ fn id_aggregates(aggregates: &[(Variable, AggregateExpression)]) -> Option<Vec<A
                 expr,
                 distinct: false,
             } if crate::idtree::value_expression(expr) => Some(Agg::Sum(expr)),
+            AggregateExpression::FunctionCall {
+                name: AggregateFunction::Avg,
+                expr,
+                distinct: false,
+            } if crate::idtree::value_expression(expr) => Some(Agg::Avg(expr)),
             _ => None,
         })
         .collect()
@@ -1579,7 +1587,9 @@ impl Pass<'_> {
         let mut kernels = Vec::with_capacity(n);
         for a in &aggs {
             kernels.push(match (a, &table) {
-                (Agg::Sum(e), Some(t)) => Some(crate::idvalue::compile(e, t, self.snapshot)?),
+                (Agg::Sum(e) | Agg::Avg(e), Some(t)) => {
+                    Some(crate::idvalue::compile(e, t, self.snapshot)?)
+                }
                 _ => None,
             });
         }
@@ -1595,15 +1605,19 @@ impl Pass<'_> {
                     (Agg::Min(v), Some(t)) => Value::Id(pick.extreme(t, rows, v, false)?),
                     (Agg::Max(v), Some(t)) => Value::Id(pick.extreme(t, rows, v, true)?),
                     (Agg::Sample(v), Some(t)) => Value::Id(crate::idtree::Pick::sample(t, rows, v)),
-                    (Agg::Sum(_), Some(t)) => {
+                    (Agg::Sum(_) | Agg::Avg(_), Some(t)) => {
                         let kernel = kernels[i].as_ref()?;
                         let mut sum = crate::idvalue::Sum::default();
                         for &r in rows {
                             // An error (unbound) makes the evaluator's sum an error: leave
                             // it to the evaluator.
-                            sum = sum.add(kernel(t.row(r as usize))?.ok()?)?;
+                            sum.add(kernel(t.row(r as usize))?.ok()?)?;
                         }
-                        Value::literal(self.snapshot, sum.literal()?)
+                        let value = match a {
+                            Agg::Avg(_) => sum.average(rows.len())?,
+                            _ => sum.literal()?,
+                        };
+                        Value::literal(self.snapshot, value)
                     }
                     (_, None) => return None,
                 });
