@@ -276,6 +276,51 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT DISTINCT ?y WHERE { ?s ex:f ?x BIND(?x * 0 AS ?y) }",
         true,
     ),
+    // `VALUES`, also of terms not in the store, and the counts it carries after a `GROUP BY`.
+    (
+        "SELECT * WHERE { VALUES (?s ?k) { (ex:s1 1) (ex:s2 1.0) (ex:nowhere \"x\"@en) } }",
+        true,
+    ),
+    (
+        "SELECT ?s ?o ?k WHERE { VALUES ?s { ex:s1 ex:s7 ex:nowhere } ?s ex:p ?o BIND(1 AS ?k) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?x WHERE { VALUES ?x { 3 \"3\" 3.0 ex:o1 } ?s ex:val ?x }",
+        true,
+    ),
+    (
+        "SELECT ?s ?t WHERE { ?s a ex:C2 VALUES ?t { ex:a ex:b } }",
+        true,
+    ),
+    (
+        "SELECT ?s ?x WHERE { VALUES (?s ?x) { (ex:s0 UNDEF) (UNDEF 3) } }",
+        true,
+    ),
+    (
+        "SELECT ?o (COUNT(*) AS ?n) WHERE { ?s ex:p ?o } GROUP BY ?o",
+        false,
+    ),
+    (
+        "SELECT ?o (COUNT(*) AS ?n) WHERE { ?s ex:p ?o } GROUP BY ?o ORDER BY DESC(?n) ?o LIMIT 5",
+        false,
+    ),
+    (
+        "SELECT ?s ?x WHERE { VALUES (?s ?x) { (ex:s0 UNDEF) (UNDEF 3) } ?s ex:val ?x }",
+        false,
+    ),
+    (
+        "SELECT ?s ?v WHERE { VALUES ?v { 2.5e0 \"2.5000\"^^xsd:decimal } ?s ex:b ?b FILTER(?v = ?b) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?v WHERE { ?s ex:b ?b VALUES ?v { 2.5e0 3 } FILTER(?b IN (?v)) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?v WHERE { VALUES ?v { 2.5e0 \"2.50\"^^xsd:decimal } ?s ex:b ?v }",
+        false,
+    ),
     // Left to the evaluator: an order on a computed value, values the ids don't decide, a
     // division, a string function, an overflow.
     (

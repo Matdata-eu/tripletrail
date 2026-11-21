@@ -203,6 +203,33 @@ impl Eval<'_> {
                 path,
                 object,
             } => self.path(subject, path, object, None)?,
+            // `VALUES`, while the id executor answers whole queries (#11): each term by its
+            // stored id, or one made up for the query; `UNDEF` unbound.
+            GraphPattern::Values {
+                variables,
+                bindings,
+            } if crate::executor_ids() => {
+                let width = variables.len();
+                let mut ids = Vec::with_capacity(bindings.len() * width);
+                let mut maybe = vec![false; width];
+                for row in bindings {
+                    for (c, cell) in row.iter().enumerate() {
+                        ids.push(match cell {
+                            Some(term) => self.snapshot.id_of(term.clone().into()),
+                            None => {
+                                maybe[c] = true;
+                                TermId(0)
+                            }
+                        });
+                    }
+                }
+                Table {
+                    vars: variables.clone(),
+                    ids,
+                    maybe,
+                    ones: bindings.len(),
+                }
+            }
             // `BIND`, while the id executor answers whole queries (#11).
             GraphPattern::Extend {
                 inner,
@@ -259,6 +286,11 @@ impl Eval<'_> {
                     }
                     match kernel(t.row(r))? {
                         Ok(v) => {
+                            // An inline number is its id: no lookup, no literal.
+                            if let Some(id) = crate::idvalue::inline_id(v) {
+                                column.push(id);
+                                continue;
+                            }
                             let key = value_key(v)?;
                             let id = match ids.get(&key) {
                                 Some(&id) => id,
