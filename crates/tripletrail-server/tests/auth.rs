@@ -487,6 +487,37 @@ fn unknown_keys_are_counted_per_client_behind_a_listed_proxy() {
     assert_eq!(status(other, None).0, 200);
 }
 
+/// Key rotation (enterprise #9): a key replaced in the file works without a restart, and the
+/// old one is a 401 from then on, never anonymous, even with anonymous access turned on.
+#[test]
+fn a_rotated_key_works_at_once_and_the_old_one_is_never_anonymous() {
+    let path = temp_file("rotate", &config(false, ""));
+    let base = start(&path);
+    let with = |key: &str| query(&base, "kg").set("X-API-Key", key);
+    assert_eq!(status(with("reader-key"), None).0, 200);
+    assert_eq!(status(with("new-reader-key"), None).0, 401);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let rotated = config(true, "").replace(&hash("reader-key"), &hash("new-reader-key"));
+    std::fs::write(&path, rotated).unwrap();
+    let mut code = 0;
+    for _ in 0..50 {
+        code = status(with("new-reader-key"), None).0;
+        if code == 200 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert_eq!(code, 200);
+    // Anonymous access is on now, yet the old key is refused rather than read as no key.
+    assert_eq!(status(query(&base, "kg"), None).0, 200);
+    let (code, challenge) = status(with("reader-key"), None);
+    assert_eq!(code, 401);
+    assert!(challenge.is_some());
+    // The other keys are unchanged.
+    let writer = update(&base).set("X-API-Key", "writer-key");
+    assert_eq!(status(writer, Some(INSERT)).0, 200);
+}
+
 #[test]
 fn a_broken_configuration_stops_the_server_from_starting() {
     let path = temp_file("broken", r#"{"auth": {"apiKeys": [{"sha256": "abc"}]}}"#);
@@ -1112,6 +1143,121 @@ fn a_graph_write_grant_writes_only_its_graphs() {
     );
     assert_eq!(put("team", "?graph=urn:release"), 204);
     assert_eq!(put("team", "?graph=urn:wip"), 403);
+}
+
+/// A policy swapped while updates run (enterprise #9): each update is judged under one
+/// version of the policy, so it is applied whole or refused whole, never in part. Each update
+/// writes two graphs; one version of the policy lets the editor write both, the other only
+/// the first.
+#[test]
+fn updates_during_a_policy_swap_are_applied_whole_or_not_at_all() {
+    let dir = tripletrail_testdir::tempdir("auth-policy-swap");
+    let policy = |both: bool| {
+        let second = if both {
+            " ; sg:writeGraph <urn:wip2>"
+        } else {
+            ""
+        };
+        format!(
+            "{SG} ex:Editors a sg:Policy ; sg:group \"editors\" ; sg:writeGraph <urn:wip>{second} .
+             ex:Team a sg:Policy ; sg:group \"team\" ; sg:readAllGraphs true ."
+        )
+    };
+    std::fs::write(dir.join("kg.ttl"), policy(true)).unwrap();
+    let key = |k: &str, group: &str| {
+        format!(
+            r#"{{"sha256": "{}", "agent": "https://example.org/people/{k}", "groups": ["{group}"]}}"#,
+            hash(k)
+        )
+    };
+    std::fs::write(
+        dir.join("guard.json"),
+        format!(
+            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"kg": {{"policies": ["kg.ttl"]}}}}}}"#,
+            key("editor", "editors"),
+            key("team", "team"),
+        ),
+    )
+    .unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        [("kg".to_owned(), Engine::new_tripletrail())],
+        Options {
+            threads: 4,
+            auth_config: Some(dir.join("guard.json")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writers: Vec<_> = (0..2)
+        .map(|w| {
+            let (base, stop) = (base.clone(), stop.clone());
+            std::thread::spawn(move || {
+                let mut answers = Vec::new();
+                let mut i = 0;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let n = w * 1_000_000 + i;
+                    let text = format!(
+                        "INSERT DATA {{ GRAPH <urn:wip> {{ <urn:n> <urn:v> {n} }} }} ; \
+                         INSERT DATA {{ GRAPH <urn:wip2> {{ <urn:n> <urn:v> {n} }} }}"
+                    );
+                    let r = ureq::post(&format!("{base}/kg/update")).set("X-API-Key", "editor");
+                    answers.push((n, status(r, Some(&text)).0));
+                    i += 1;
+                }
+                answers
+            })
+        })
+        .collect();
+    // Four swaps, each picked up after the file's time changes.
+    for round in 0..4 {
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(dir.join("kg.ttl"), policy(round % 2 == 1)).unwrap();
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let answers: Vec<(usize, u16)> = writers
+        .into_iter()
+        .flat_map(|w| w.join().unwrap())
+        .collect();
+
+    let values = |graph: &str| -> std::collections::HashSet<usize> {
+        let body = ureq::get(&format!("{base}/kg/query"))
+            .set("X-API-Key", "team")
+            .set("Accept", "text/csv")
+            .query(
+                "query",
+                &format!("SELECT ?v {{ GRAPH <{graph}> {{ <urn:n> <urn:v> ?v }} }}"),
+            )
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap();
+        body.lines()
+            .skip(1)
+            .map(|l| l.trim().parse().unwrap())
+            .collect()
+    };
+    let (wip, wip2) = (values("urn:wip"), values("urn:wip2"));
+    let applied: std::collections::HashSet<usize> = answers
+        .iter()
+        .filter(|(_, code)| *code == 200)
+        .map(|(n, _)| *n)
+        .collect();
+    let refused = answers.iter().filter(|(_, code)| *code == 403).count();
+    assert_eq!(applied.len() + refused, answers.len(), "{answers:?}");
+    // Both versions of the policy were in force while the updates ran.
+    assert!(
+        !applied.is_empty() && refused > 0,
+        "{} applied, {refused} refused",
+        applied.len()
+    );
+    assert_eq!(wip, applied);
+    assert_eq!(wip2, applied);
 }
 
 /// OGC API Features and tiles keep to a caller's graphs (#203): a class only in other graphs
