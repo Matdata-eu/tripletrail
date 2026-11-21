@@ -205,6 +205,39 @@ fn constant_test_is_left_to_the_filter_when_the_rest_binds_fewer_rows() {
     }
 }
 
+/// With the union default graph, the estimates count every graph (#89): data kept in named
+/// graphs, one per source, gets the VALUES block a small window calls for, as it does in the
+/// default graph, instead of being left to the FILTER from an estimate of the empty default
+/// graph.
+#[test]
+fn estimates_under_the_union_default_graph_count_every_graph() {
+    for e in [Engine::new_tripletrail(), Engine::new_oxigraph().unwrap()] {
+        let mut quads = Vec::new();
+        for (k, part) in ["a", "b", "c", "d"].iter().enumerate() {
+            let g = GraphName::NamedNode(nn(format!("{EX}{part}")));
+            let cells = grid(part, "Station", 400, 20, k as f64 * 30.0, 0.0, 1.0);
+            quads.extend(
+                cells
+                    .into_iter()
+                    .map(|q| Quad::new(q.subject, q.predicate, q.object, g.clone())),
+            );
+        }
+        e.load_quads(quads).unwrap();
+        e.set_union_default_graph(true);
+        // The window takes in the first graph's 400 stations, a quarter of all.
+        let window = r#""POLYGON((-1 -1, 20 -1, 20 20, -1 20, -1 -1))"^^geo:wktLiteral"#;
+        let q = format!(
+            "SELECT ?x WHERE {{ ?x geo:asWKT ?w FILTER(geof:sfIntersects(?w, {window})) }}"
+        );
+        let (n, decisions) = check(&e, &q);
+        assert_eq!(n, 400);
+        let (candidates, rows, inject) = constant(&decisions);
+        assert!(inject, "{decisions:?}");
+        assert_eq!((candidates, rows), (400, 1600.0), "{decisions:?}");
+        assert_eq!(e.last_spatial_stats().skipped, 0);
+    }
+}
+
 #[test]
 fn constant_test_is_left_to_the_filter_when_the_window_fills_up() {
     for e in [Engine::new_tripletrail(), Engine::new_oxigraph().unwrap()] {

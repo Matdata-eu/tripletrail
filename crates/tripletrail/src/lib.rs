@@ -4307,6 +4307,9 @@ impl SpatialContext for Engine {
             NamedNodePattern::NamedNode(n) => Some(n.clone()),
             NamedNodePattern::Variable(_) => None,
         };
+        // With the union default graph, the default graph a query reads is every graph
+        // (#89): counting the store's own default graph would find nothing there.
+        let all_graphs = all_graphs || self.reads_named_graphs_as_default();
         let n = self.estimate_triples(
             term(&pattern.subject)?.as_ref(),
             predicate.as_ref(),
