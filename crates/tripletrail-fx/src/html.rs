@@ -23,10 +23,13 @@
 //! `:root`, `:first-child`, `:last-child`, `:only-child`, `:nth-child(n)`, the combinators
 //! ` `, `>`, `+` and `~`, and lists (`h1, h2`). `html.parser=xml` reads the file with an XML parser
 //! (quick-xml) and writes `innerHTML` as Jsoup's XML mode does, not pretty-printed.
-//! `html.metadata` and `html.browser` are not supported.
+//! `html.metadata=true` adds the RDFa and Microdata the page embeds (see [`metadata`]);
+//! `html.browser` is not supported.
 //!
 //! Limits: a start tag may have at most 10,000 attributes, elements may nest at most 512 deep, and the `innerHTML` and `innerText` values
 //! together may hold at most 256 MiB (each element repeats the markup of all it holds).
+
+mod metadata;
 
 use crate::FxError;
 use crate::options::Options;
@@ -46,11 +49,10 @@ pub(crate) fn triplify(
     options: &Options,
     sink: &mut Sink<'_>,
 ) -> Result<(), FxError> {
-    for unsupported in ["html.browser", "html.metadata"] {
-        if options.get(unsupported).is_some_and(|v| v != "false") {
-            return Err(FxError::Unsupported(unsupported.into()));
-        }
+    if options.get("html.browser").is_some_and(|v| v != "false") {
+        return Err(FxError::Unsupported("html.browser".into()));
     }
+    let metadata = options.flag("html.metadata", false)?;
     let xml = match options.get("html.parser") {
         None | Some("html") => false,
         Some("xml") => true,
@@ -62,6 +64,18 @@ pub(crate) fn triplify(
     } else {
         Doc::parse(bytes)?
     };
+    if metadata {
+        let document = sink
+            .common
+            .location
+            .clone()
+            .unwrap_or_else(|| sink.common.root.clone());
+        if xml {
+            metadata::extract(&Doc::parse(bytes)?, &document, sink);
+        } else {
+            metadata::extract(&doc, &document, sink);
+        }
+    }
     let selected = doc.select(&selector);
     let mut writer = Writer {
         doc: &doc,
@@ -1948,6 +1962,7 @@ mod tests {
             root: "http://e/r".into(),
             null_string: None,
             trim: false,
+            location: None,
         };
         let needs = crate::options::Needs {
             all: true,

@@ -111,6 +111,63 @@ Without `location`, the archive itself is the source, and its root lists the nam
 entries, so a nested `SERVICE` can read each one; see
 [sources and options](../facade-x.md#sources-and-options).
 
+## Data a web page embeds
+
+Web pages often carry their own RDF, as RDFa attributes or schema.org Microdata, for search
+engines. `html.metadata=true` adds those triples to the page's source, next to its Facade-X
+tree, so a `CONSTRUCT` can pick them out by their own predicates. Save a page as
+`page/station.html`:
+
+<!-- test: run -->
+```sh
+mkdir -p page
+```
+
+<!-- test: file page/station.html -->
+```html
+<!DOCTYPE html>
+<html>
+<body>
+  <div itemscope itemtype="https://schema.org/TrainStation" itemid="https://example.org/rail#CRL">
+    <h1 itemprop="name">Charleroi-Central</h1>
+    <meta itemprop="identifier" content="CRL">
+  </div>
+  <p vocab="https://schema.org/" typeof="TrainStation" resource="https://example.org/rail#NAM">
+    <span property="name">Namur</span>
+  </p>
+</body>
+</html>
+```
+
+and a query that keeps each station's schema.org name, as `page/names.rq`:
+
+<!-- test: file page/names.rq -->
+```sparql
+PREFIX rdfs:   <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX schema: <https://schema.org/>
+CONSTRUCT { ?station rdfs:label ?name }
+WHERE {
+  SERVICE <x-sparql-anything:location=page/station.html,html.metadata=true> {
+    ?station a schema:TrainStation ; schema:name ?name .
+  }
+}
+```
+
+<!-- test: run -->
+```sh
+tripletrail lift page/names.rq --output page.nt
+sort page.nt
+```
+
+<!-- test: output contains -->
+```text
+<https://example.org/rail#CRL> <http://www.w3.org/2000/01/rdf-schema#label> "Charleroi-Central" .
+<https://example.org/rail#NAM> <http://www.w3.org/2000/01/rdf-schema#label> "Namur" .
+```
+
+As in SPARQL Anything, every embedded literal is a plain string, without its language tag or
+datatype. See [sources and options](../facade-x.md#html) for the rules.
+
 ## Links and comments in a spreadsheet
 
 A spreadsheet cell can hold more than its value: a hyperlink, or a comment someone left on
@@ -277,6 +334,8 @@ For a lift that is one step of a larger job (lift, load, update, validate, expor
 - In a query, `SERVICE <x-sparql-anything:location=FILE>` reads a file as a graph, and
   `fx:entity` makes IRIs.
 - `--as-sparql` turns a mapping into the query that gives its triples.
+- `from-archive` reads a file inside an archive, and `html.metadata=true` the RDFa and
+  Microdata of a web page.
 
 [Facade-X](../facade-x.md) and [R2RML and RML](../rml.md) have every format, option and
 function.

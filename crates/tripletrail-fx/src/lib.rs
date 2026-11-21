@@ -473,6 +473,7 @@ impl FxService {
             root,
             null_string: options.get("null-string").map(str::to_owned),
             trim: options.flag("trim-strings", false)?,
+            location: location.map(|(location, path)| location_iri(location, path)),
         })
     }
 

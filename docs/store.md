@@ -91,9 +91,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   order, so the same query can round differently on other data. The evaluator, and Fuseki, round after each addition in row order, so the last
   digit can differ: ten times `0.1` sums to `1` here and to `0.9999999999999999` there. An
   `AVG` of integers and decimals only (a decimal division) stays with the evaluator.
-  Arithmetic and comparisons on doubles, dictionary literals (`1.5E2`), overflow, inexact
-  products, dates against date-times or with and without a time zone, and unbound values give
-  the expression back to the evaluator. On 300 k rows: `SUM(YEAR(?d))` 83 → 14 ms,
+  Comparisons and `+ - *` take inline doubles too (#11), with integers and decimals turned
+  into doubles as the evaluator turns them, and `-0` equal to `0`. Dictionary literals
+  (`1.5E2`), a double result that is not finite, overflow, inexact decimal products, dates
+  against date-times or with and without a time zone, and unbound values give the expression
+  back to the evaluator. On 133 k doubles: `FILTER(?a > 4000)` 60 → 15 ms,
+  `FILTER(?a * 1.21 > 5000 && ?a < 9000)` 89 → 27 ms. On 300 k rows: `SUM(YEAR(?d))` 83 → 14 ms,
   `SUM(?int)` 24 → 8 ms, `FILTER(?decimal > 5000.5)` 670 → 10 ms. On 133 k orders of 10 k
   customers, `SUM` of a double per customer 170 → 50 ms, `AVG` 160 → 53 ms.
   Eager grouping before a filter is skipped when there are more than half as many distinct
