@@ -888,10 +888,11 @@ pub struct Engine {
     /// How many parts of queries by callers limited to some graphs or rows the count and
     /// id-row shortcuts answered (#204).
     view_shortcuts: Arc<AtomicU64>,
-    /// The filters of the views [`Engine::view_shortcuts`] read, by [`ViewKey`], the latest
-    /// used last: finding the copies within some graphs and merging them with row rules is
+    /// The filters of the views [`Engine::view_shortcuts`] read, by [`ViewKey`] and the row
+    /// rules' filter (the same one, not only one with the same fingerprint), the latest used
+    /// last: finding the copies within some graphs and merging them with row rules is
     /// done once per store version, not for each query.
-    view_filters: Arc<Mutex<Vec<(ViewKey, ViewFilter)>>>,
+    view_filters: Arc<Mutex<Vec<(ViewKey, ViewFilter, ViewFilter)>>>,
     /// User-defined functions (`sh:SPARQLFunction`, #235).
     udf: Arc<udf::Functions>,
     /// The dataset the sub-selects of the `st:` and window services read, for a caller who
@@ -2482,11 +2483,17 @@ impl Engine {
             return make();
         };
         let key: ViewKey = (generation, graphs, rows.map_or(0, |r| r.fingerprint()));
+        // What decides what a caller sees is never matched by a fingerprint alone.
+        let same_rows = |kept: &ViewFilter| match (kept, rows) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) || **a == **b,
+            _ => false,
+        };
         {
             let mut kept = self.view_filters.lock_unpoisoned();
-            if let Some(i) = kept.iter().position(|(k, _)| *k == key) {
+            if let Some(i) = kept.iter().position(|(k, r, _)| *k == key && same_rows(r)) {
                 let entry = kept.remove(i);
-                let filter = entry.1.clone();
+                let filter = entry.2.clone();
                 kept.push(entry);
                 return Some(filter);
             }
@@ -2494,11 +2501,11 @@ impl Engine {
         let filter = make()?;
         let mut kept = self.view_filters.lock_unpoisoned();
         // Those of older versions are of no more use.
-        kept.retain(|(k, _)| k.0 >= generation);
+        kept.retain(|(k, _, _)| k.0 >= generation);
         if kept.len() >= VIEW_FILTERS {
             kept.remove(0);
         }
-        kept.push((key, filter.clone()));
+        kept.push((key, rows.cloned(), filter.clone()));
         Some(filter)
     }
 
