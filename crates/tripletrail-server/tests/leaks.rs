@@ -426,6 +426,29 @@ fn paths() -> Vec<String> {
             "/ds/search/labels?q=geheim",
             "/ds/search/labels?q=label&class=Feature",
             "/ds/ogc/collections?f=html",
+            // Map facets (#139, #92): counts per key, of one collection or several, and
+            // filtered by map area, graph and text.
+            "/ds/tiles/facets/Feature",
+            "/ds/tiles/facets/Secret",
+            "/ds/tiles/facets/all",
+            "/ds/tiles/facets?collection=Feature&collection=Secret",
+            "/ds/tiles/facets/Feature?bbox=2,2,7,7",
+            "/ds/tiles/facets/Feature?graph=urn:wip",
+            "/ds/tiles/facets/Feature?q=label",
+            "/ds/tiles/facets/Feature?kind=wip",
+            "/ds/tiles/all/0/0/0.mvt?graph=urn:wip",
+            "/ds/tiles/all/0/0/0.mvt?q=hid",
+            // The JSON-LD REST API (#143): datasets, records, filters and one record.
+            "/ds/api/v1",
+            "/ds/api/openapi.json",
+            "/ds/api/v1/Feature?limit=100",
+            "/ds/api/v1/Feature?kind=wip",
+            "/ds/api/v1/Feature?q=label",
+            "/ds/api/v1/Feature/urn%3Ax%3Arel1",
+            "/ds/api/v1/Feature/urn%3Ax%3Awip0",
+            "/ds/api/v1/Feature/urn%3Ax%3Adft0",
+            "/ds/api/v1/Secret",
+            "/ds/api/v1/Person",
         ]
         .map(str::to_owned),
     );

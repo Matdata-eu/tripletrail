@@ -592,6 +592,8 @@ window.TripleTrailMap = (function () {
       const load = async () => {
         const params = new URLSearchParams();
         for (const [key, choice] of Object.entries(chosen[c.id] || {})) append(params, "", key, choice);
+        // The colouring, for the counts of its legend.
+        if (colors[c.id]) params.set("color", colors[c.id]);
         panel.replaceChildren(el("p", { class: "muted small" }, "Counting…"));
         let out;
         try {
@@ -706,8 +708,10 @@ window.TripleTrailMap = (function () {
         const key = by && by.range ? el("ul", { class: "map-key" },
             ...coloured.map((k, i) => el("li", { class: "small" }, el("span", { class: "map-swatch", style: "background:" + k.colour }),
               el("span", { class: "map-name" }, (k.label ? k.label + " " : ""),
-                el("span", { class: "muted" }, k.upTo != null ? "≤ " + fmtBound(k.upTo) + unit(by) : i ? "> " + fmtBound(coloured[i - 1].upTo) + unit(by) : "")))),
-            el("li", { class: "small muted" }, el("span", { class: "map-swatch", style: "background:" + OTHER_COLOUR }), "no number"))
+                el("span", { class: "muted" }, k.upTo != null ? "≤ " + fmtBound(k.upTo) + unit(by) : i ? "> " + fmtBound(coloured[i - 1].upTo) + unit(by) : "")),
+              k.count != null ? el("span", { class: "muted small num" }, ui.fmtNum(k.count)) : null)),
+            el("li", { class: "small muted" }, el("span", { class: "map-swatch", style: "background:" + OTHER_COLOUR }), el("span", { class: "map-name" }, "no number"),
+              coloured.every((k) => k.count != null) ? el("span", { class: "small num" }, ui.fmtNum(Math.max(0, out.features - coloured.reduce((n, k) => n + k.count, 0)))) : null))
           : by ? el("ul", { class: "map-key" },
             ...coloured.map((v, i) => el("li", { class: "small" }, el("span", { class: "map-swatch", style: "background:" + VALUE_COLOURS[i] }),
               el("span", { class: "map-name", title: (v.label ? v.label + "\n" : "") + v.value }, v.label || short(v.value)))),
@@ -952,6 +956,7 @@ window.TripleTrailMap = (function () {
     return classes.map((k, i) => ({
       upTo: i === n - 1 ? null : k.upTo,
       label: k.label || null,
+      count: typeof k.count === "number" ? k.count : null,
       colour: RANGE_COLOURS[n === 1 ? 0 : Math.round((i * (RANGE_COLOURS.length - 1)) / (n - 1))],
     }));
   }

@@ -2633,3 +2633,97 @@ fn a_set_can_hide_the_generated_shapes_from_the_map() {
     assert_eq!(code, 422, "{body}");
     assert!(body.contains("is not a reader"), "{body}");
 }
+
+/// The legend of a map coloured by a range (#92): each colour class with the features drawn
+/// in it under the filters, by each feature's highest number, as the tiles colour them.
+#[test]
+fn legend_counts_of_a_map_coloured_by_a_range() {
+    let dir = tripletrail_testdir::tempdir("ogc-legend");
+    let ttl = "@prefix ex: <http://example.com/> .\n\
+               @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+               ex:l1 a ex:Line ; ex:speed 50 ; ex:len 10 ; geo:hasGeometry [ geo:asWKT \"POINT(1 1)\"^^geo:wktLiteral ] .\n\
+               ex:l2 a ex:Line ; ex:speed 100 ; ex:len 120 ; geo:hasGeometry [ geo:asWKT \"POINT(2 2)\"^^geo:wktLiteral ] .\n\
+               ex:l3 a ex:Line ; ex:speed 120 ; ex:len 250 ; geo:hasGeometry [ geo:asWKT \"POINT(3 3)\"^^geo:wktLiteral ] .\n\
+               ex:l4 a ex:Line ; ex:speed 200 ; ex:len 350 ; geo:hasGeometry [ geo:asWKT \"POINT(4 4)\"^^geo:wktLiteral ] .\n\
+               ex:l5 a ex:Line ; ex:speed 80, 150 ; ex:len 200 ; geo:hasGeometry [ geo:asWKT \"POINT(5 5)\"^^geo:wktLiteral ] .\n\
+               ex:l6 a ex:Line ; ex:len 0 ; geo:hasGeometry [ geo:asWKT \"POINT(6 6)\"^^geo:wktLiteral ] .\n";
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 4,
+            admin_token: Some("t".to_owned()),
+            location: Some(dir.join("data")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let shapes = "@prefix ex: <http://example.com/> .\n\
+                  @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+                  @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                  @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+                  @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+                  ex:LineShape a sh:NodeShape ; sh:targetClass ex:Line ; tts:key \"line\" ;\n\
+                    tts:geometry [ sh:path ( geo:hasGeometry geo:asWKT ) ] ;\n\
+                    sh:property [ sh:path ex:speed ; tts:key \"speed\" ; tts:facet tts:Facet-Range ;\n\
+                        tts:colorClasses ( [ tts:upTo 100 ; rdfs:label \"slow\" ] [ rdfs:label \"fast\" ] ) ] ,\n\
+                      [ sh:path ex:len ; tts:key \"len\" ; tts:facet tts:Facet-Range ] .\n";
+    ureq::put(&format!("{base}/$/datasets/kg/shapes/files/Line.ttl"))
+        .set("Authorization", "Bearer t")
+        .send_string(shapes)
+        .unwrap();
+    let facet = |query: &str, key: &str| -> Value {
+        let (status, _, out) = get(&format!("{base}/kg/tiles/facets/line?{query}"));
+        assert_eq!(status, 200, "{query}: {out}");
+        out["facets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["key"] == key)
+            .cloned()
+            .unwrap()
+    };
+    // Not coloured by it: the shape's classes, without counts.
+    assert_eq!(
+        facet("", "speed")["classes"],
+        json!([{ "upTo": 100.0, "label": "slow" }, { "upTo": null, "label": "fast" }])
+    );
+    // Coloured by it: l5 is fast by its 150; l6, with no speed, is in no class.
+    assert_eq!(
+        facet("color=speed", "speed")["classes"],
+        json!([
+            { "upTo": 100.0, "label": "slow", "count": 2 },
+            { "upTo": null, "label": "fast", "count": 3 },
+        ])
+    );
+    // Under the filters, its own too.
+    assert_eq!(
+        facet("color=speed&speed.min=110", "speed")["classes"],
+        json!([
+            { "upTo": 100.0, "label": "slow", "count": 0 },
+            { "upTo": null, "label": "fast", "count": 3 },
+        ])
+    );
+    assert_eq!(
+        facet("color=speed&len.max=150", "speed")["classes"],
+        json!([
+            { "upTo": 100.0, "label": "slow", "count": 2 },
+            { "upTo": null, "label": "fast", "count": 0 },
+        ])
+    );
+    // Without classes in its shape, five of one round width over its values, as the map
+    // draws them: 0 to 350 in steps of 100.
+    assert_eq!(
+        facet("color=len", "len")["classes"],
+        json!([
+            { "upTo": 100.0, "label": null, "count": 2 },
+            { "upTo": 200.0, "label": null, "count": 2 },
+            { "upTo": 300.0, "label": null, "count": 1 },
+            { "upTo": null, "label": null, "count": 1 },
+        ])
+    );
+}

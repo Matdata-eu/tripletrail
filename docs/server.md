@@ -201,7 +201,7 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
 - `--executor` (`TRIPLETRAIL_EXECUTOR`, `spareval` by default) picks what answers a `SELECT`
   whose pattern runs on term ids (#11). `ids` answers it straight from the id tables (triple
   patterns, joins, `OPTIONAL`, `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, the filters on ids,
-  `BIND` and `SELECT (expr AS ?v)` of copies, constants and arithmetic, `ORDER BY` of variables, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
+  `BIND` and `SELECT (expr AS ?v)` of copies, constants and arithmetic, `VALUES`, `ORDER BY` of variables, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
   only the terms of the answer, each once, on the query threads; anything else still goes to
   the evaluator. SPARQL JSON, CSV and TSV answers are written from the ids: each distinct term
   is written once and copied into the rows where it occurs (the bytes are those of the usual
@@ -2298,7 +2298,8 @@ then takes it out of the address bar.
   (*Copy GIS link*), with the filters as CQL2 (`IN`, `>=`, `<=`). *Colour by* draws a collection in a colour
   per value of one of its values facets (its 10 most frequent values under the filters, the
   others grey), or per class of a range of numbers (the shape's `tts:colorClasses`, else five
-  of equal width on round numbers, blue to red), with a key; the link keeps it as
+  of equal width on round numbers, blue to red), with a key that counts the features of each
+  class under the filters; the link keeps it as
   `color.{collection}={key}`. A range facet's numbers show with their unit (`qudt:hasUnit`).
   The search box finds the map's features by the words of their labels; a result goes on the
   map (its layer shown) and opens its page beside it.
@@ -3091,7 +3092,12 @@ contain (generated for other plain and language-tagged strings, such as names):
   its values gives. A range facet instead has `range: true` and the `min` and `max` of its
   values, with `count`, the features that have one, `unit` (the symbol of its property
   shape's `qudt:hasUnit`, such as `km/h`) and `classes` (its `tts:colorClasses`: `upTo` and
-  `label` each, low to high, the last `upTo` null) when it has them. A text facet has `text: true` and no
+  `label` each, low to high, the last `upTo` null) when it has them. With `color={key}`
+  (`color.{collection}={key}`) naming a range facet, as the map's *Colour by* sends it, its
+  `classes` are those the map colours by (its `tts:colorClasses` when they are 2 to 8, else up
+  to 8 of one round width over `min` to `max`) and each has a `count`: the features drawn in
+  that class under all the filters, its own too, each by its highest number, as the tiles
+  colour it (#92). A text facet has `text: true` and no
   counts: it is searched, `{key}.text=…` keeping the features with a value that contains the
   text, whatever its case. `query` is a SPARQL query of the same features, each once with one
   of its geometries (`?f ?geometry`, at most 1,000 features), which the Map page opens in the
