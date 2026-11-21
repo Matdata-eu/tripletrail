@@ -1738,7 +1738,13 @@ ex:NetworkWriters a sg:Policy ; sg:group "network-assets" ; sg:writeAllGraphs tr
   paths are judged again with it (enterprise #7: a write under 20 shapes, one of them on
   `ex:vendor/ex:country`, went from 6 to 7.5 s to 4 to 47 ms on 200,000 offers). Otherwise,
   after bulk loads or writes of more than 65,536 quads, and when more than 65,536 resources
-  would be judged again, the rules are compiled anew. Full-text search (`tt:search`, `text:query`, the map search) reads
+  would be judged again, the rules are compiled anew. An "own records" shape, one that names
+  `sg:requestingAgent` only as the `sh:hasValue` of its own property shapes (`sh:property [
+  sh:path ex:owner ; sh:hasValue sg:requestingAgent ]`), is not judged again for every agent:
+  its targets, and those that fail the rest of the shape, are worked out once per store version
+  and shared, as a bitmap, by every agent's filter, which only lists the agent's own records
+  (enterprise #7: with 1,000 agents on 200,000 offers, a first query as a new agent went from
+  200 to 250 ms to 3 to 6 ms, and the server from 1.5 GB to 160 MB). Full-text search (`tt:search`, `text:query`, the map search) reads
   an index of the visible labels alone, ranked as on a store holding only them (#203; see
   [full-text search](full-text-search.md#access-control)). The built-in services (`st:`, the window service, path search and `pgr`)
   read the same view: their sub-selects, the edges path search follows and the networks routing
