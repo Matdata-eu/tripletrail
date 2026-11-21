@@ -201,6 +201,12 @@ impl Drop for Open {
     }
 }
 
+/// A number no other store of this process has had.
+fn next_store_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Store {
     fn with_inner(inner: Inner) -> Self {
         let inner = Arc::new(inner);
@@ -306,6 +312,8 @@ struct Inner {
     mapped: bool,
     /// Bumped by every change of the quads (see [`Store::generation`]).
     generation: std::sync::atomic::AtomicU64,
+    /// Unique to this store in the process (see [`Snapshot::store_id`]).
+    id: u64,
     /// What the last commits changed, by the generation each made (see
     /// [`Store::touched_between`]).
     touched: Mutex<std::collections::VecDeque<Touched>>,
@@ -496,6 +504,7 @@ impl Store {
             read_only,
             mapped,
             generation: Default::default(),
+            id: next_store_id(),
             touched: Default::default(),
             ranks: Default::default(),
             union_copies: Default::default(),
@@ -560,6 +569,7 @@ impl Store {
             mapped: true,
             shipping: None,
             generation: Default::default(),
+            id: next_store_id(),
             touched: Default::default(),
             _lock: lock,
             closed: Default::default(),
@@ -3585,6 +3595,12 @@ impl Snapshot {
     /// The [`Store::generation`] of the quads this view reads; `None` for a transaction's view.
     pub fn generation(&self) -> Option<u64> {
         self.generation
+    }
+
+    /// A number unique to the store this view reads, among the stores of this process: with
+    /// [`Snapshot::generation`], a key for what is derived from these quads.
+    pub fn store_id(&self) -> u64 {
+        self.inner.id
     }
 
     /// This view with the result tables registered on this thread so far (see
