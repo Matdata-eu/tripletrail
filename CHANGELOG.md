@@ -7,6 +7,10 @@ versions may change the store format and the API; the release notes say how to u
 
 ## [Unreleased]
 
+### Fixed
+
+- Building the image for linux/amd64 and linux/arm64 together (the Release and Docker image workflows) no longer fails now and then with `failed to unpack package … File exists`: each architecture's build has its own crate cache.
+
 ## 0.1.0 - 2026-11-21
 
 The first release: an Import page, a faster and richer map, SHACL messages and lookup graphs, the id executor behind `--executor ids`, and a Docker image published with each version tag.
