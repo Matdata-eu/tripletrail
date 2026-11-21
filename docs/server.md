@@ -3069,6 +3069,15 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   API's property filters. A range takes `{key}.min` and `{key}.max` (either may be left out),
   read as the facet's `sh:datatype` (numbers, or dates and times), and keeps the features with
   a value within it. A filtered collection's tiles are made and kept apart.
+- Three filters apply to every collection, on the facets and on the tiles alike (#92), with
+  the same names on `all` tiles: `bbox=minLon,minLat,maxLon,maxLat` (CRS84) keeps the features
+  with a geometry that meets the box, read through the spatial index as the OGC API's `bbox`;
+  `graph=IRI`, repeated for up to 100 graphs, the features with triples in one of those named
+  graphs (under a union default graph, or a caller's graphs); `q=words`, the features with a
+  literal in the [full-text index](full-text-search.md) that holds every word (up to 8, the
+  last as a prefix; case and Latin accents aside), as `/{ds}/tiles/search` matches them. A
+  bad box or graph IRI is `400`. A facet named `bbox`, `graph` or `q` is no longer filtered by
+  that bare name: use `{collection}.{key}`.
 
 ## REST API (JSON-LD)
 
