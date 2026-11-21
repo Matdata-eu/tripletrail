@@ -419,7 +419,7 @@ percent-encoded, so a customised set can override it by IRI) with:
   confirm, as the instances outside the sample may have no other type.
 
 `reader=` (`validation`, `map`, `describe`, `search`, `ogc-features`, `rest-api`, `graphql`,
-`ai`) answers that reader's projection: shapes it is `tts:hiddenFrom`, or not `tts:onlyFor`,
+`ai`, `forms`) answers that reader's projection: shapes it is `tts:hiddenFrom`, or not `tts:onlyFor`,
 left out, deactivated shapes (`sh:deactivated true`) left out, a data-quality facet added to
 each node shape for the map when a pack or the own set names a named graph holding a stored
 SHACL validation report with `tts:qualityReport` (key `quality`, a `tts:select` facet: the
@@ -511,6 +511,15 @@ two requests:
   or `EnumSelectEditor`), `multiple`, and when they apply `datatype`, `pattern`, `min`, `max`,
   the values to choose from (`in`: `{value, label}`) or the `class` whose instances are
   offered (`sh:PropertyGroup`, `tts:Profile`).
+  The web UI draws these, and the record forms, with one renderer, `/$/ui/forms.js`
+  (`window.TripleTrailForms`): editors and viewers are looked up by the local name of a field's
+  `dash:editor` or `dash:viewer` (`BooleanSelectEditor`, `EnumSelectEditor`, `TextAreaEditor`,
+  `TextAreaWithLangEditor`, `TextFieldEditor`, `DatePickerEditor`, `DateTimePickerEditor`,
+  `URIEditor`; `LiteralViewer`, `URIViewer`, `LabelViewer`, `ImageViewer`), else chosen by the
+  field's values, and a page may register its own with `registerEditor` and `registerViewer`.
+  Values come from the data, so the viewers link only `http` and `https` IRIs and show any
+  other IRI (`urn:`, `javascript:`…) as text; `ImageViewer` shows only web images, fetched
+  without a referrer, so their host does not learn which record shows them.
 - `POST …/shapes/edit` with `{"changes": [{"shape", "path"?, "setting", "value", "lang"?}]}`
   changes settings in the own set and keeps it as its next version (`{"version", "changed"}`).
   `path` picks the property shape of that `sh:path` (none: the node shape itself); `value:
