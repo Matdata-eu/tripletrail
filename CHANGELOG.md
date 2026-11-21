@@ -22,6 +22,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Changed
 
+- Filters that compare or compute on stored `xsd:double` values (`FILTER(?a > 4000)`, `?a * 1.21 > 5000`, `SUM(?a * 1.21)`) run on term ids (#11): over 133k doubles, 60 → 15 ms and 89 → 27 ms, with the same answers. Integers and decimals are turned into doubles as before.
 - `ORDER BY ?v LIMIT k` over inline doubles, decimals, dates and date-times is ordered on term ids (#64), and only the first rows are read back: the top 50 of 133k double amounts took 54 ms and now take 17 ms, and 319 → 34 ms with a three-pattern join. Rows with equal values keep the order they were found in.
 - `SUM` and `AVG` over stored `xsd:double` values (also mixed with integers and decimals) run on term ids (#62): a `GROUP BY` of 133k doubles into 10k groups took 170 ms and now takes 50 ms. The sum is exact and rounded once, so it no longer depends on the order of the rows; it can differ from Fuseki's, which rounds after each addition, in the last digit (ten times `0.1` is `1`, not `0.9999999999999999`). See [the guide](docs/guide/11-fuseki.md#small-differences).
 - `FILTER(?v IN (…))` and `NOT IN` with a list of IRIs and literals look each row up in a hash set of the items' term ids (#63) instead of comparing it with every item: 1,000 IRIs over 133k rows took 933 ms and now take 16 ms, close to the 11 ms of the same list as `VALUES`. Answers are unchanged: numbers of different datatypes still compare by value.
