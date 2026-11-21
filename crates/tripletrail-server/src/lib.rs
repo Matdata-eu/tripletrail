@@ -479,6 +479,51 @@ impl Handle {
         shapes::install_folder(&self.state, &entry, dir)
     }
 
+    /// Makes the map of the dataset `name` ahead of its first visitor (#92, `serve`, unless
+    /// `--no-warm-up`): its collections and their unfiltered facet counts, kept in the caches
+    /// requests read, each facet query under the dataset's timeout and the whole in at most
+    /// five minutes. Answers what was done.
+    pub fn warm_map(&self, name: &str) -> Result<String, String> {
+        self.warm_map_within(name, tiles::WARM_UP_LIMIT)
+    }
+
+    /// [`Handle::warm_map`] in at most `within`.
+    pub fn warm_map_within(&self, name: &str, within: Duration) -> Result<String, String> {
+        let entry = self
+            .state
+            .registry
+            .read_unpoisoned()
+            .datasets
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no dataset {name}"))?;
+        let started = std::time::Instant::now();
+        let warmed = tiles::warm(&self.state, &entry, within).map_err(|e| e.1)?;
+        let mut done = format!(
+            "map ready: {} collections and their facets in {:.1} s",
+            warmed.collections,
+            started.elapsed().as_secs_f64()
+        );
+        if !warmed.left.is_empty() {
+            done = format!(
+                "map made ahead in part: the facets of {} of {} collections in {:.1} s; \
+                 out of time ({} s) for {}, which the first request makes",
+                warmed.counted,
+                warmed.collections,
+                started.elapsed().as_secs_f64(),
+                within.as_secs(),
+                warmed.left.join(", ")
+            );
+        }
+        if !warmed.failed.is_empty() {
+            done.push_str(&format!(
+                "; facets that failed: {}",
+                warmed.failed.join("; ")
+            ));
+        }
+        Ok(done)
+    }
+
     /// Warnings about the names from before the rename to TripleTrail that the dataset `name`
     /// still uses (#955): in the shape files of its shapes folder, and as the names of its
     /// graphs. Each names the file or graph and how to carry it over.
