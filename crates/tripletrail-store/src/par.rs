@@ -75,6 +75,8 @@ pub fn chunks_sized<T: Send>(
     let helpers = pool.current_num_threads();
     let parts = ((helpers + 1) * 4).min(n / least.max(1)).max(1);
     let size = n.div_ceil(parts);
+    // Fewer parts when the last ones would be empty (50 rows in 16 parts of 4: 13 parts).
+    let parts = n.div_ceil(size);
     let next = AtomicUsize::new(0);
     let done: Vec<Mutex<Option<T>>> = (0..parts).map(|_| Mutex::new(None)).collect();
     let work = || {
@@ -105,6 +107,19 @@ pub fn chunks_sized<T: Send>(
         .collect()
 }
 
+/// `v` sorted, on the query pool from [`PARALLEL_ROWS`] items, else here. Unstable, so
+/// for items whose equal ones can't be told apart (as `(key, row)` pairs): then the order is
+/// the same with any number of threads.
+pub fn sort_unstable<T: Ord + Send>(v: &mut [T]) {
+    use rayon::slice::ParallelSliceMut;
+    match pool() {
+        Some(pool) if v.len() >= PARALLEL_ROWS && query_threads() > 1 => {
+            pool.install(|| v.par_sort_unstable());
+        }
+        _ => v.sort_unstable(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +134,15 @@ mod tests {
                 next = r.end;
             }
             assert_eq!(next, n);
+        }
+        // Small ranges in chunks of one row and more: none starts past the end (#4).
+        for n in [2, 50, 61, 97] {
+            let parts = chunks_sized(n, 2, 1, |r| r);
+            assert!(
+                parts.iter().all(|r| r.start < r.end && r.end <= n),
+                "{n}: {parts:?}"
+            );
+            assert_eq!(parts.last().map(|r| r.end), Some(n));
         }
     }
 
