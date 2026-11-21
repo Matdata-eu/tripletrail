@@ -1,6 +1,6 @@
 #[cfg(feature = "sparql-12")]
 use crate::ExpressionTriple;
-use crate::dataset::ExpressionTerm;
+use crate::dataset::{ExpressionTerm, decimal_divide};
 use md5::{Digest, Md5};
 use oxiri::Iri;
 use oxrdf::vocab::{rdf, xsd};
@@ -423,12 +423,11 @@ pub fn build_expression_evaluator<'a, C: ExpressionEvaluatorContext<'a>>(
                 Some(match NumericBinaryOperands::new(a(tuple)?, b(tuple)?)? {
                     NumericBinaryOperands::Float(v1, v2) => ExpressionTerm::FloatLiteral(v1 / v2),
                     NumericBinaryOperands::Double(v1, v2) => ExpressionTerm::DoubleLiteral(v1 / v2),
+                    // tripletrail (#8): as Jena, exact or 24 fraction digits.
                     NumericBinaryOperands::Integer(v1, v2) => {
-                        ExpressionTerm::DecimalLiteral(Decimal::from(v1).checked_div(v2)?)
+                        decimal_divide(Decimal::from(v1), Decimal::from(v2))?
                     }
-                    NumericBinaryOperands::Decimal(v1, v2) => {
-                        ExpressionTerm::DecimalLiteral(v1.checked_div(v2)?)
-                    }
+                    NumericBinaryOperands::Decimal(v1, v2) => decimal_divide(v1, v2)?,
                     #[cfg(feature = "sep-0002")]
                     _ => return None,
                 })
