@@ -231,7 +231,7 @@ impl ReadableGraphs {
             | spargebra::Query::Describe { pattern, .. }
             | spargebra::Query::Ask { pattern, .. } => pattern,
         };
-        scoped_services_only(pattern, &query.to_string())?;
+        scoped_services_only(pattern, &query.to_string(), SOME_GRAPHS)?;
         let own = match query {
             spargebra::Query::Select { dataset, .. }
             | spargebra::Query::Construct { dataset, .. }
@@ -293,12 +293,16 @@ impl ReadableGraphs {
 /// path search reads, then come from the caller's dataset (#203).
 const SCOPED_SERVICES: [&str; 4] = [ST_SERVICE, WINDOW_SERVICE, PATH_SERVICE, PGR_SERVICE];
 
+/// How [`scoped_services_only`] names the limit of a caller who reads only some graphs.
+const SOME_GRAPHS: &str = "with access to only some graphs";
+
 /// Refuses a `SERVICE` other than [`SCOPED_SERVICES`], and one of them called inside another
 /// (the inner one would read the store). `text` is the query's text: every `SERVICE` in it
 /// must be one found here, so one inside an `EXISTS` (not walked) is refused too.
 fn scoped_services_only(
     pattern: &spargebra::algebra::GraphPattern,
     text: &str,
+    limit: &str,
 ) -> Result<(), Error> {
     use spargebra::algebra::GraphPattern as G;
     fn walk(p: &G, found: &mut usize) -> Result<(), ()> {
@@ -334,11 +338,9 @@ fn scoped_services_only(
     }
     let mut found = 0;
     let refused = || {
-        Error::Request(
-            "SERVICE is not available with access to only some graphs, except st:, window:, \
-             path: and pgr:, not nested"
-                .to_owned(),
-        )
+        Error::Request(format!(
+            "SERVICE is not available {limit}, except st:, window:, path: and pgr:, not nested"
+        ))
     };
     walk(pattern, &mut found).map_err(|()| refused())?;
     if text.matches("SERVICE ").count() != found {
@@ -440,7 +442,7 @@ fn limit_update(
                     let text = where_.to_string();
                     let calls_service = text.contains("SERVICE ");
                     if calls_service {
-                        scoped_services_only(where_, &text)?;
+                        scoped_services_only(where_, &text, SOME_GRAPHS)?;
                     }
                     let keep = |n: &NamedNode| r.contains(n.as_ref().into());
                     *using = Some(match using.take() {
@@ -2560,7 +2562,7 @@ impl Engine {
             | spargebra::Query::Construct { pattern, .. }
             | spargebra::Query::Describe { pattern, .. }
             | spargebra::Query::Ask { pattern, .. }) = &query;
-            scoped_services_only(pattern, &text)?;
+            scoped_services_only(pattern, &text, "under row-level access rules")?;
         }
         let union = !has_own_dataset(&query);
         let dataset = options
