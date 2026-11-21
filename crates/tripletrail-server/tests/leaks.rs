@@ -7,6 +7,10 @@
 //! The release graph is loaded first in both, so its terms get the same ids and the answers
 //! the same order. Ports, blank node labels and timestamps are written out of the answers
 //! before they are compared.
+//!
+//! In the enterprise build, the same requests check row rules (enterprise #9): the caller
+//! reads every graph, row rules hide some resources and properties, and the second server
+//! holds only what they let it see, its terms loaded first in both.
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -86,15 +90,16 @@ struct Pair {
     _dir: tripletrail_testdir::TestDir,
 }
 
-fn start(union_default_graph: bool, name: &str) -> Pair {
+/// The graph grant of the tests below: the contractor reads `urn:release` only.
+const GRAPH_GRANT: &str = "@prefix sg: <https://matdata.eu/ns/sparql-guard#> .
+     @prefix ex: <https://example.org/policies/> .
+     ex:C a sg:Policy ; sg:group \"contractor\" ; sg:readGraph <urn:release> .";
+
+/// Two servers whose datasets `ds` have the contractor's `policy`: the first loads the TriG
+/// documents of `a` in order, the second those of `b`.
+fn start(name: &str, policy: &str, union_default_graph: bool, a: &[String], b: &[String]) -> Pair {
     let dir = tripletrail_testdir::tempdir(&format!("leaks-{name}"));
-    std::fs::write(
-        dir.join("ds.ttl"),
-        "@prefix sg: <https://matdata.eu/ns/sparql-guard#> .
-         @prefix ex: <https://example.org/policies/> .
-         ex:C a sg:Policy ; sg:group \"contractor\" ; sg:readGraph <urn:release> .",
-    )
-    .unwrap();
+    std::fs::write(dir.join("ds.ttl"), policy).unwrap();
     std::fs::write(
         dir.join("guard.json"),
         format!(
@@ -104,11 +109,10 @@ fn start(union_default_graph: bool, name: &str) -> Pair {
         ),
     )
     .unwrap();
-    let serve = |with_hidden: bool, sub: &str| {
+    let serve = |data: &[String], sub: &str| {
         let engine = Engine::new_tripletrail();
-        engine.load(RdfFormat::TriG, release().as_bytes()).unwrap();
-        if with_hidden {
-            engine.load(RdfFormat::TriG, hidden().as_bytes()).unwrap();
+        for trig in data {
+            engine.load(RdfFormat::TriG, trig.as_bytes()).unwrap();
         }
         engine.set_union_default_graph(union_default_graph);
         let mut options = Options {
@@ -123,7 +127,7 @@ fn start(union_default_graph: bool, name: &str) -> Pair {
         server.spawn();
         base
     };
-    let (a, b) = (serve(true, "ws-a"), serve(false, "ws-b"));
+    let (a, b) = (serve(a, "ws-a"), serve(b, "ws-b"));
     Pair { a, b, _dir: dir }
 }
 
@@ -494,8 +498,8 @@ fn paths() -> Vec<String> {
     paths
 }
 
-fn compare(union_default_graph: bool, name: &str) {
-    let pair = start(union_default_graph, name);
+/// Asks both servers of `pair` everything, twice, and fails with the answers that differ.
+fn compare(pair: &Pair) {
     let mut differ = Vec::new();
     let mut check = |what: String, a: Answer, b: Answer| {
         let (ha, hb) = (normal(&pair.a, &a.1), normal(&pair.b, &b.1));
@@ -510,7 +514,7 @@ fn compare(union_default_graph: bool, name: &str) {
                 .saturating_sub(100);
             let cut = |s: &str| s.chars().skip(from).take(400).collect::<String>();
             differ.push(format!(
-                "{what}\n  with hidden graphs: {} {ha} {}\n  without:            {} {hb} {}",
+                "{what}\n  with what is hidden: {} {ha} {}\n  without:             {} {hb} {}",
                 a.0,
                 cut(&na),
                 b.0,
@@ -632,18 +636,114 @@ fn compare(union_default_graph: bool, name: &str) {
     );
     assert!(
         differ.is_empty(),
-        "{} answers tell the hidden graphs apart:\n{}",
+        "{} answers tell what is hidden apart:\n{}",
         differ.len(),
         differ.join("\n")
     );
 }
 
+/// The servers of the graph grant tests: with and without the hidden graphs.
+fn graph_grant(union_default_graph: bool, name: &str) -> Pair {
+    start(
+        name,
+        GRAPH_GRANT,
+        union_default_graph,
+        &[release(), hidden()],
+        &[release()],
+    )
+}
+
 #[test]
 fn a_graph_grant_hides_the_other_graphs() {
-    compare(false, "named");
+    compare(&graph_grant(false, "named"));
 }
 
 #[test]
 fn a_graph_grant_hides_the_other_graphs_under_a_union_default_graph() {
-    compare(true, "union");
+    compare(&graph_grant(true, "union"));
+}
+
+/// Row rules (#202, enterprise #9): the contractor reads every graph, but `sg:visibleIf` hides
+/// the draft features, the people without clearance and the unapproved secrets (with the
+/// references to them), and `sg:hideProperties` the secret properties of features and notes
+/// everywhere. The second server has the same policy and holds only what it lets the
+/// contractor see, so it hides nothing.
+#[cfg(feature = "enterprise")]
+const ROW_RULES: &str = "@prefix sg: <https://matdata.eu/ns/sparql-guard#> .
+     @prefix sh: <http://www.w3.org/ns/shacl#> .
+     @prefix pol: <https://example.org/policies/> .
+     @prefix ex: <urn:x:> .
+     pol:C a sg:Policy ; sg:group \"contractor\" ; sg:readAllGraphs true ;
+       sg:visibleIf ex:Released, ex:Cleared, ex:Approved ; sg:hideProperties ex:NoSecrets, ex:NoNotes .
+     ex:Released a sh:NodeShape ; sh:targetClass ex:Feature ;
+       sh:property [ sh:path ex:status ; sh:maxCount 0 ] .
+     ex:Cleared a sh:NodeShape ; sh:targetClass ex:Person ;
+       sh:property [ sh:path ex:clearance ; sh:hasValue \"public\" ] .
+     ex:Approved a sh:NodeShape ; sh:targetClass ex:Secret ;
+       sh:property [ sh:path ex:approved ; sh:minCount 1 ] .
+     ex:NoSecrets a sh:NodeShape ; sh:targetClass ex:Feature ;
+       sh:property [ sh:path ex:secret ] , [ sh:path ex:hiddenprop ] .
+     ex:NoNotes a sh:NodeShape ; sh:property [ sh:path ex:note ] .";
+
+/// What the row rules let the contractor see beyond the release graph's own data: the
+/// geometries of the draft features and of the secret, and a cleared person. Loaded before
+/// [`row_hidden`], so that its terms get the same ids in both servers.
+#[cfg(feature = "enterprise")]
+fn row_visible() -> String {
+    let geometries: String = features("wip", 30, "")
+        .lines()
+        .map(|line| format!("ex:{}\n", line.split_once(" . ex:").unwrap().1))
+        .collect();
+    format!(
+        "{PREFIXES}<urn:release> {{\n{geometries}\
+         ex:sec1g geo:asWKT \"POINT(1 1)\"^^geo:wktLiteral .\n\
+         ex:p2 a ex:Person ; ex:clearance \"public\" ; ex:name \"Public Person\" .\n\
+         ex:rel3 ex:owner ex:p2 .\n}}\n"
+    )
+}
+
+/// What the row rules hide, in the release graph: draft features (with
+/// labels, vectors and owners), secret and hidden properties of released features, notes, a
+/// person without clearance (named and blank) and an unapproved secret, with references to
+/// them from released features; and `urn:wip`, which holds only draft features.
+#[cfg(feature = "enterprise")]
+fn row_hidden() -> String {
+    // The features without their geometries, which the rules do not hide.
+    let drafts = |tag: &str, n: usize, extra: &str| -> String {
+        features(tag, n, extra)
+            .lines()
+            .map(|line| format!("{} .\n", line.split_once(" . ex:").unwrap().0))
+            .collect()
+    };
+    format!(
+        "{PREFIXES}<urn:release> {{\n{}\
+         ex:wip0 rdfs:label \"Hidden label kind\" .\n\
+         ex:wip1 ex:emb \"[1, 0.1]\"^^<http://w3id.org/tripletrail/fn#vector> .\n\
+         ex:rel1 ex:secret \"about-rel1\" ; ex:hiddenprop \"hp\" ; ex:note \"geheim\"@nl .\n\
+         ex:p2 ex:note \"a note\" .\n\
+         ex:rel2 ex:owner ex:p1 . ex:p1 a ex:Person ; ex:name \"Secret Person\" ; rdfs:label \"Hidden label\" .\n\
+         ex:rel3 ex:owner [ a ex:Person ; ex:name \"hidden blank\" ] .\n\
+         ex:sec1 a ex:Secret ; geo:hasGeometry ex:sec1g ;\
+           ex:emb \"[1, 0]\"^^<http://w3id.org/tripletrail/fn#vector> .\n\
+         ex:rel0 ex:part ex:sec1 .\n}}\n\
+         <urn:wip> {{\n{}}}\n",
+        drafts(
+            "wip",
+            30,
+            " ex:status \"draft\" ; ex:hiddenprop \"hp\" ; ex:owner ex:p1 ;"
+        ),
+        drafts("drf", 5, " ex:status \"draft\" ;"),
+    )
+}
+
+#[cfg(feature = "enterprise")]
+#[test]
+fn row_rules_hide_rows_from_every_reader() {
+    compare(&start(
+        "rows",
+        ROW_RULES,
+        false,
+        &[release(), row_visible(), row_hidden()],
+        &[release(), row_visible()],
+    ));
 }
