@@ -27,6 +27,14 @@ const BUFFER: u32 = 64;
 /// Below this zoom, lines and polygons are simplified to [`SIMPLIFY_UNITS`] tile units.
 const SIMPLIFY_BELOW: u32 = 14;
 const SIMPLIFY_UNITS: f64 = 1.0;
+/// Below this zoom a layer of more than [`CROWDED`] features is generalised (#92):
+/// [`LOW_EXTENT`] units a side instead of [`EXTENT`], and one feature per position, the one
+/// drawn on top (the last), as a country or a continent then shows far more features than
+/// pixels. Lines and polygons smaller than a unit are left out. A layer of fewer keeps every
+/// feature.
+const LOW_ZOOM_BELOW: u32 = 8;
+const LOW_EXTENT: u32 = 512;
+const CROWDED: usize = 1000;
 /// Deepest zoom served.
 const MAX_ZOOM: u32 = 24;
 /// Features in one layer of one tile; past it the tile is refused, so a client zooms in.
@@ -1885,6 +1893,12 @@ fn group_tiles(
         if order.len() > MAX_FEATURES {
             return Err(too_many(&collection.id, z, x, y));
         }
+        let low = z < LOW_ZOOM_BELOW && order.len() > CROWDED;
+        let (extent, buffer) = if low {
+            (LOW_EXTENT, BUFFER * LOW_EXTENT / EXTENT)
+        } else {
+            (EXTENT, BUFFER)
+        };
         // By IRI, so a tile has the same bytes whatever order the query gave the rows in
         // (which differs between stores and runs).
         let mut order: Vec<&NamedNode> = order.iter().collect();
@@ -1914,6 +1928,9 @@ fn group_tiles(
             }
         }
         let mut features = Vec::with_capacity(order.len());
+        // At low zooms, the index in `features` of the feature at each position, so a later one
+        // there replaces it.
+        let mut at: HashMap<String, usize> = HashMap::new();
         for f in order {
             let Some(geometry) = chosen.get(f).and_then(parse_wkt_literal) else {
                 continue;
@@ -1921,12 +1938,25 @@ fn group_tiles(
             let Some(geometry) = as_mvt_geom_simplified(
                 &geometry,
                 &tile_bounds,
-                f64::from(EXTENT),
-                f64::from(BUFFER),
+                f64::from(extent),
+                f64::from(buffer),
                 true,
                 tolerance,
             ) else {
                 continue;
+            };
+            let replaces = if low {
+                // In whole tile units already: equal shapes are drawn on the same pixels.
+                let key = format!("{geometry:?}");
+                match at.get(&key) {
+                    Some(i) => Some(*i),
+                    None => {
+                        at.insert(key, features.len());
+                        None
+                    }
+                }
+            } else {
+                None
             };
             let mut properties = vec![(
                 "iri".to_owned(),
@@ -1938,15 +1968,19 @@ fn group_tiles(
                     Literal::new_simple_literal(value).into(),
                 ));
             }
-            features.push(Feature {
+            let feature = Feature {
                 geometry,
                 id: None,
                 properties,
-            });
+            };
+            match replaces {
+                Some(i) => features[i] = feature,
+                None => features.push(feature),
+            }
         }
         out.push((
             collection.id.clone(),
-            encode_tile(&collection.id, EXTENT, &features),
+            encode_tile(&collection.id, extent, &features),
         ));
     }
     Ok(out)
