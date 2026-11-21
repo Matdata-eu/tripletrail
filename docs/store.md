@@ -141,6 +141,14 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   order expressions other than variables. On 300 k labels, `ORDER BY ?label LIMIT 10`
   1.1 s → 11 ms, `SELECT DISTINCT ?t ... ORDER BY ?t LIMIT 10` 1.0 s → 12 ms. The top 50 of
   133 k double amounts 54 → 17 ms, and with a three-pattern join 319 → 34 ms.
+- **Whole queries on term ids.** Under `--executor ids` (#11, `crates/tripletrail/src/direct.rs`)
+  a `SELECT` without a dataset of its own whose pattern the tables cover (as above) is answered
+  from its table alone: the projection, `DISTINCT` and `REDUCED` on the ids of the projected
+  columns, `ORDER BY` of variables as above, then `OFFSET` and `LIMIT`. The ids of the answer
+  are decoded under one lock of the dictionary, each distinct id once. A `LIMIT` without an
+  order, order expressions other than variables, columns the ids don't order, and every other
+  operator (`GROUP BY` beyond the count shortcuts, `BIND`, property paths outside the tables)
+  leave the query to the evaluator, which then runs it as before.
 - **Geometries.** Geometry literals (`geo:wktLiteral`, `geoJSONLiteral`, `gmlLiteral`,
   `kmlLiteral`, H3 cell lists) get their own term kind. They are parsed the first time
   something asks for them (`Snapshot::geometry(id)`, the spatial index) and then kept by term

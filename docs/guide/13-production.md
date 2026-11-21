@@ -223,6 +223,23 @@ SELECT * WHERE { hint:Query hint:optimizer "None" . ?s ?p ?o } LIMIT 1' | grep -
 "hints":["#pragma tt.optimizer off"]
 ```
 
+- `--executor ids` answers a `SELECT` whose pattern runs on term ids (joins, `OPTIONAL`,
+  `MINUS`, filters, `ORDER BY`, `DISTINCT`) straight from the id tables, without the term
+  evaluator: a query that returns many rows comes back up to twice as fast, and an `OPTIONAL`
+  several times. The answers are the same. It is off by default for now; try it on one query
+  with `#pragma tt.executor ids`, and `/explain` says which executor answered:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/rail_v1/explain' --data-urlencode 'query=#pragma tt.executor ids
+SELECT ?s ?type WHERE { ?s a ?type }' | grep -o '"executor":"[a-z]*"'
+```
+
+<!-- test: output -->
+```text
+"executor":"ids"
+```
+
   All hints are listed under [query hints](../server.md#query-hints).
 
 ## Monitoring

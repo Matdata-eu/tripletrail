@@ -158,6 +158,75 @@ fn check(engine: &Engine) {
     }
 }
 
+/// The solutions of `query` in the order given.
+fn ordered(engine: &Engine, query: &str) -> Vec<String> {
+    let QueryResults::Solutions(solutions) = engine.query(query).unwrap() else {
+        panic!("not a SELECT")
+    };
+    solutions
+        .map(|s| {
+            let s = s.unwrap();
+            s.iter()
+                .map(|(v, t)| format!("{v}={t}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect()
+}
+
+/// Whole queries answered by the id executor (#11) are the evaluator's answers.
+fn check_executor(engine: &Engine) {
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    for p in PATTERNS {
+        let run = |executor: &str, q: &str, keep_order: bool| {
+            let q = format!("#pragma tt.executor {executor}\n{prefix} {q}");
+            if keep_order {
+                ordered(engine, &q)
+            } else {
+                rows(engine, &q)
+            }
+        };
+        for (q, keep_order) in [
+            (format!("SELECT * WHERE {{ {p} }}"), false),
+            (format!("SELECT ?s ?o WHERE {{ {p} }}"), false),
+            (format!("SELECT REDUCED ?s WHERE {{ {p} }}"), false),
+            (
+                format!("SELECT DISTINCT ?s WHERE {{ {p} }} ORDER BY DESC(?s)"),
+                true,
+            ),
+            (
+                format!("SELECT DISTINCT ?s WHERE {{ {p} }} ORDER BY ?s LIMIT 7 OFFSET 3"),
+                true,
+            ),
+            (format!("SELECT * WHERE {{ {p} }} OFFSET 5"), false),
+            (
+                format!("SELECT ?s ?missing WHERE {{ {p} }} ORDER BY ?s"),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                run("ids", &q, keep_order),
+                run("spareval", &q, keep_order),
+                "{q}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_id_executor_answers_as_the_evaluator() {
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, data().as_bytes()).unwrap();
+    check_executor(&engine);
+    engine
+        .update(
+            "PREFIX ex: <http://example.org/> INSERT DATA { ex:o1 ex:q \"new\" . ex:s5 ex:r _:x . }
+             ; DELETE DATA { ex:o4 ex:q \"v4\" }",
+        )
+        .unwrap();
+    check_executor(&engine);
+}
+
 #[test]
 fn rows_evaluated_on_ids_are_the_evaluators() {
     let engine = Engine::new_tripletrail();

@@ -12,6 +12,7 @@ mod cache;
 pub mod canon;
 pub mod complexity;
 mod cosine_order;
+mod direct;
 pub use cache::{CacheStatus, ResultCacheStats};
 pub use hints::{Hints, without_defines};
 pub mod bind_join;
@@ -814,6 +815,16 @@ fn geo_evaluator() -> SparqlEvaluator {
     static GEO: OnceLock<SparqlEvaluator> = OnceLock::new();
     GEO.get_or_init(|| tripletrail_geo::register(SparqlEvaluator::new()))
         .clone()
+}
+
+/// The default of [`Engine::set_default_executor_ids`], for the whole process.
+static EXECUTOR_IDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the id executor runs this query: its `#pragma tt.executor`, else the default.
+fn executor_ids() -> bool {
+    Hints::current()
+        .executor_ids
+        .unwrap_or_else(|| EXECUTOR_IDS.load(Ordering::Relaxed))
 }
 
 /// A store plus the evaluator extensions. Cheap to clone.
@@ -2405,6 +2416,13 @@ impl Engine {
         })
     }
 
+    /// Sets which executor runs queries by default (#11): `true` for the id executor, which
+    /// answers whole queries from tables of term ids when they cover them, `false` (the
+    /// default) for the evaluator alone. `#pragma tt.executor` overrides it per query.
+    pub fn set_default_executor_ids(ids: bool) {
+        EXECUTOR_IDS.store(ids, Ordering::Relaxed);
+    }
+
     fn run_query_scoped(
         &self,
         mut query: spargebra::Query,
@@ -2463,6 +2481,21 @@ impl Engine {
             };
             if let Some((snapshot, graph)) = on {
                 query = count::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
+                // The id executor (#11): the whole query from tables of ids, if they cover it.
+                if executor_ids() && !Hints::current().id_rewrites_off {
+                    let eval = idtree::Eval {
+                        snapshot: &snapshot,
+                        cancelled: &|| self.is_cancelled(),
+                        graph,
+                    };
+                    if let Some((variables, rows)) = direct::answer(&query, &eval) {
+                        self.check_cancelled()?;
+                        return Ok(QueryResults::Solutions(QuerySolutionIter::from_tuples(
+                            variables,
+                            rows.into_iter().map(Ok),
+                        )));
+                    }
+                }
                 query = rows::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
                 if graph == GraphSelector::Default {
                     measures::warm(&query, &snapshot, &|| self.is_cancelled());
@@ -2629,6 +2662,8 @@ impl Engine {
                 (query, ranges) = range::rewrite(rewritten, self);
             }
         }
+        // While the ids executor is on: whether it answers the query or hands it on.
+        let mut executor = None;
         let union = !has_own_dataset(&query);
         if let Dataset::TripleTrail(store) = &self.store {
             query = equality::rewrite_query(query, &resources(&store.snapshot()));
@@ -2645,6 +2680,19 @@ impl Engine {
             };
             if let Some((snapshot, graph)) = on {
                 query = count::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
+                // Which executor answers it (#11), as run_query_scoped decides.
+                if executor_ids() && !Hints::current().id_rewrites_off {
+                    let eval = idtree::Eval {
+                        snapshot: &snapshot,
+                        cancelled: &|| self.is_cancelled(),
+                        graph,
+                    };
+                    executor = Some(if direct::answer(&query, &eval).is_some() {
+                        "ids"
+                    } else {
+                        "spareval"
+                    });
+                }
                 query = rows::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
             }
         }
@@ -2726,8 +2774,9 @@ impl Engine {
                 .collect();
             format!(r#","hints":[{}]"#, lines.join(","))
         };
+        let executor = executor.map_or(String::new(), |e| format!(r#","executor":"{e}""#));
         Ok(format!(
-            r#"{{"rows":{rows}{databases}{hints},"spatial":{{"filters":{},"joins":{},"triples":{},"virtual_properties":{},"candidates":{},"skipped":{},"sides_evaluated":{},"sweeps":{},"pinned":{},"materialized":{},"lookup_ms":{},"decisions":[{}]}},"plan":{}}}"#,
+            r#"{{"rows":{rows}{databases}{hints}{executor},"spatial":{{"filters":{},"joins":{},"triples":{},"virtual_properties":{},"candidates":{},"skipped":{},"sides_evaluated":{},"sweeps":{},"pinned":{},"materialized":{},"lookup_ms":{},"decisions":[{}]}},"plan":{}}}"#,
             stats.filters,
             stats.joins,
             stats.triples,
