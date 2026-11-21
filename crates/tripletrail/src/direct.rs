@@ -19,7 +19,6 @@ use tripletrail_store::TermId;
 
 /// The answer of `query`: its variables and rows. `None` when the ids don't answer it.
 pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<IdSolutions> {
-    use GraphPattern as G;
     let Query::Select {
         dataset: None,
         pattern,
@@ -28,6 +27,49 @@ pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<IdSolutions> {
     else {
         return None;
     };
+    let s = select(pattern, eval, true)?;
+    decode(s.variables.into(), &s.table, &s.columns, &s.rows, eval)
+}
+
+/// A sub-select with `DISTINCT`, `REDUCED`, an `ORDER BY` or a slice inside (#11), as a table
+/// of its variables, its rows in order. `None` when the ids don't answer it.
+pub(crate) fn sub_select(pattern: &GraphPattern, eval: &Eval) -> Option<Table> {
+    let s = select(pattern, eval, false)?;
+    let width = s.columns.len();
+    let mut ids = Vec::with_capacity(s.rows.len() * width);
+    for &r in &s.rows {
+        let row = s.table.row(r);
+        ids.extend(s.columns.iter().map(|c| c.map_or(TermId(0), |c| row[c])));
+    }
+    let maybe = s
+        .columns
+        .iter()
+        .map(|c| c.is_none_or(|c| s.table.maybe[c]) && !s.rows.is_empty())
+        .collect();
+    Some(Table {
+        vars: s.variables,
+        ids,
+        maybe,
+        ones: s.rows.len(),
+    })
+}
+
+/// The rows a `SELECT`'s projection, `DISTINCT`, order and slice keep, of the table of its
+/// pattern.
+struct Selected {
+    variables: Vec<Variable>,
+    table: Table,
+    /// The column of `table` of each variable.
+    columns: Vec<Option<usize>>,
+    /// The rows of `table` kept, in order.
+    rows: Vec<usize>,
+}
+
+/// `pattern` as a `SELECT`'s slice, `DISTINCT` or `REDUCED`, projection and order around a
+/// pattern the ids cover. `top`: the whole query (a bare projection is taken too; inside a
+/// pattern the `Project` arm of [`Eval::eval`] takes it).
+fn select(pattern: &GraphPattern, eval: &Eval, top: bool) -> Option<Selected> {
+    use GraphPattern as G;
     let (start, length, inner) = match pattern {
         G::Slice {
             inner,
@@ -47,8 +89,12 @@ pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<IdSolutions> {
         G::OrderBy { inner, expression } => (Some(expression), &**inner),
         other => (None, other),
     };
-    // Under a slice without an order the evaluator stops after the first rows: it is faster.
-    if length.is_some() && order.is_none() {
+    if !top && !distinct && order.is_none() && length.is_none() && start == 0 {
+        return None;
+    }
+    // Under a slice without an order the evaluator stops after the first rows (faster), and
+    // the rows it keeps are its own to choose.
+    if (length.is_some() || start > 0) && order.is_none() {
         return None;
     }
     if !covered(body) {
@@ -97,11 +143,16 @@ pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<IdSolutions> {
                     .collect::<Vec<_>>(),
             )
     });
-    let picked: Vec<usize> = match length {
+    let rows: Vec<usize> = match length {
         Some(l) => picked.skip(start).take(l).collect(),
         None => picked.skip(start).collect(),
     };
-    decode(variables.clone().into(), &t, &columns, &picked, eval)
+    Some(Selected {
+        variables: variables.clone(),
+        table: t,
+        columns,
+        rows,
+    })
 }
 
 /// Whether `v` is bound by a `BIND` of `p` to a computed value (not a copy or a constant).
@@ -124,7 +175,12 @@ fn computed(p: &GraphPattern, v: &Variable) -> bool {
         | G::Minus { left, right }
         | G::Union { left, right }
         | G::LeftJoin { left, right, .. } => computed(left, v) || computed(right, v),
-        G::Filter { inner, .. } | G::Project { inner, .. } => computed(inner, v),
+        G::Filter { inner, .. }
+        | G::Project { inner, .. }
+        | G::Distinct { inner }
+        | G::Reduced { inner }
+        | G::OrderBy { inner, .. }
+        | G::Slice { inner, .. } => computed(inner, v),
         _ => false,
     }
 }
@@ -175,7 +231,11 @@ fn covered(p: &GraphPattern) -> bool {
         G::Extend {
             inner, expression, ..
         } => computable(expression, true) && covered(inner),
-        G::Project { inner, .. } => covered(inner),
+        G::Project { inner, .. }
+        | G::Distinct { inner }
+        | G::Reduced { inner }
+        | G::OrderBy { inner, .. }
+        | G::Slice { inner, .. } => covered(inner),
         G::Values { bindings, .. } => bindings
             .iter()
             .flatten()
