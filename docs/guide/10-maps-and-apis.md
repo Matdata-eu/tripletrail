@@ -62,7 +62,9 @@ curl -s http://localhost:7878/ds/tiles/style.json | grep -o '"title":"[^"]*"' | 
 On a large dataset the map's first request waits for TripleTrail to read the data's classes
 and count every layer's facets: on all of RINF's countries, close to a minute. So once the
 datasets are open, the server makes each one's map in the background, and its log says when
-it is ready. `--no-warm-up` leaves that to the first visitor:
+it is ready. It gives each dataset at most five minutes (and each query the dataset's
+timeout); what is left then waits for the first visitor. `--no-warm-up` leaves it all to the
+first visitor:
 
 <!-- test: run -->
 ```sh

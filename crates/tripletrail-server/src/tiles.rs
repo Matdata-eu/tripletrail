@@ -235,38 +235,59 @@ pub(crate) fn preview_files(
         .ok_or_else(|| HttpError(404, "No such preview: it may have expired".to_owned()))
 }
 
+/// The longest a dataset's warm-up may take ([`warm`]), whatever the timeouts.
+pub(crate) const WARM_UP_LIMIT: Duration = Duration::from_secs(300);
+
+/// What [`warm`] did.
+pub(crate) struct Warmed {
+    /// The map's collections.
+    pub(crate) collections: usize,
+    /// Those whose facets were counted, or failed (`id: error`, a facet query that timed out,
+    /// say), or were left when the warm-up's time ran out.
+    pub(crate) counted: usize,
+    pub(crate) failed: Vec<String>,
+    pub(crate) left: Vec<String>,
+}
+
 /// Makes the map's collections and the unfiltered facets of each ahead of the first visitor
 /// (#92): the profile behind the collections and the first facet queries take seconds to
 /// minutes on a large dataset, which the first map request would otherwise wait for. Their
-/// results stay in the collection and result caches, as a request's would. Answers how many
-/// collections were counted, and the failures (a facet query that times out, say), which do
-/// not stop the others.
-pub(crate) fn warm(state: &State, entry: &Entry) -> Result<(usize, Vec<String>), HttpError> {
+/// results stay in the collection and result caches, as a request's would. Each facet query
+/// gets the dataset's timeout, as a map request does, and the whole warm-up at most `within`:
+/// the collections left when it is over are made by the first request that needs them.
+pub(crate) fn warm(state: &State, entry: &Entry, within: Duration) -> Result<Warmed, HttpError> {
     if data_version(state, entry).is_none() {
         return Err(HttpError(
             400,
             "its store keeps no map caches (only TripleTrail's store does)".to_owned(),
         ));
     }
+    let deadline = std::time::Instant::now() + within;
     let (collections, made_for) = collections_for(state, entry, Reader::Map)?;
     // The OGC API's collections are made from the same profile: cheap once it is cached.
     collections_for(state, entry, Reader::OgcFeatures)?;
     let version = made_for.filter(|v| Some(*v) == data_version(state, entry));
+    let limit = crate::limits::Limits::of(state, &entry.name).timeout(None);
     let none = Params(Vec::new());
-    let mut failed = Vec::new();
+    let mut out = Warmed {
+        collections: collections.len(),
+        counted: 0,
+        failed: Vec::new(),
+        left: Vec::new(),
+    };
     for c in collections.iter() {
-        if let Err(e) = facet_counts(
-            entry,
-            c,
-            &none,
-            state.options.timeout,
-            &View::default(),
-            version,
-        ) {
-            failed.push(format!("{}: {}", c.id, e.1));
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            out.left.push(c.id.clone());
+            continue;
+        }
+        let timeout = Some(limit.map_or(left, |t| t.min(left)));
+        match facet_counts(entry, c, &none, timeout, &View::default(), version) {
+            Ok(_) => out.counted += 1,
+            Err(e) => out.failed.push(format!("{}: {}", c.id, e.1)),
         }
     }
-    Ok((collections.len(), failed))
+    Ok(out)
 }
 
 /// Whether `id` has the form of a preview's id (128 random bits in hex).
