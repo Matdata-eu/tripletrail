@@ -107,8 +107,32 @@ HTML follows SPARQL Anything's HTML triplifier, which is built on Jsoup. `xhtml:
 - **`html.parser=xml`** reads the file as XML: names keep their case and prefix, nothing is
   added (no `html`, `head` or `body`), CDATA is text, and `innerHTML` is written as Jsoup's XML
   mode writes it, not indented, with an empty element as `<a></a>`.
-- **Not supported.** `html.metadata` (RDFa and Microdata through Any23) and `html.browser` (a
-  headless browser) are refused.
+- **`html.metadata=true`** adds the RDF the page embeds to the source's triples, as SPARQL
+  Anything does with its copy of Apache Any23: RDFa (Semargl's RDFa 1.1 processor, then its
+  RDFa 1.0 processor) and Microdata, read from the whole document whatever `html.selector`
+  says. As in SPARQL Anything:
+  - every literal is an `xsd:string` with the lexical form only, without language tag or
+    datatype;
+  - the document IRI is the location's IRI (also with `root`), for `about=""`, `itemid` and
+    relative IRIs; `<base href>` changes the base of RDFa from where it stands;
+  - both RDFa processors run, so a page with `xmlns:` prefixes gives its triples twice and they
+    merge, and a CURIE with an undeclared prefix (`ex:code` without `xmlns:ex`) is also taken
+    by the 1.0 processor as the IRI `<ex:code>`. Their blank nodes share labels in the order
+    each processor makes them, so the same node from both is written once;
+  - an RDFa 1.0 `property` on an element with markup inside gives that markup, written as
+    Semargl writes an XML literal;
+  - Microdata links the document to each top-level item with
+    `http://www.w3.org/1999/xhtml/microdata#item`, gives an item a blank node unless it has an
+    `itemid`, and names its properties in the namespace of its first type (`https://schema.org/`
+    for `https://schema.org/Movie`), else of the item it is in, else `http://schema.org/`.
+
+  Differences: the page is read once, from the bytes the source gave (SPARQL Anything has Any23
+  fetch the location again, so it extracts nothing from `content=`), and always as HTML, also
+  with `html.parser=xml`. The microformats2 h-card extractor SPARQL Anything also registers is
+  not run. Where Semargl stops on an error (an `about` that is not a valid CURIE on an element
+  with neither `rel`, `rev` nor `property`), the rest of the page is still read. Relative IRIs
+  are resolved as RFC 3986 says, so a `file:` base keeps its `file:///`.
+- **Not supported.** `html.browser` (a headless browser) is refused.
 - **Deviations from SPARQL Anything.**
   - The document is parsed by html5ever. html5ever cannot tell `a` from `a=""`, so an empty
     attribute is written as `a` in `innerHTML`.
@@ -267,6 +291,7 @@ SERVICE <x-sparql-anything:location=data.zip,archive.matches=.*csv> {
 
 Tar archives may be compressed with gzip (`.tar.gz`, `.tgz`) or bzip2 (`.tar.bz2`, `.tbz2`). A
 bzip2 or gzip file that is not a tar archive (`data.csv.bz2`) is not read, as in SPARQL Anything.
+Bytes after the last bzip2 stream are an error (the `bzip2` tool warns and ignores them).
 
 Spreadsheets, as SPARQL Anything (which reads only `.xls` and `.xlsx`): each sheet is a
 graph named `<root><sheet name>` with its own `fx:Root` (the default graph holds all sheets).

@@ -18,6 +18,7 @@ They are copied unchanged from the test resources of its modules:
   `test/test.csv` (as `test.csv`), compressed with `bzip2 -1`.
 - `markdown/`: `sparql-anything-markdown/src/test/resources` (every `.md` with its `.ttl`).
 - `html/`: `sparql-anything-html/src/test/resources` (`HTML1`, `HTML2`, `DIRTY1`, `Base`
-  `.html` with their `.ttl`, `BN.html` with `BN.nq`, and `XML.xml` with `XML.ttl`).
+  `.html` with their `.ttl`, `BN.html` with `BN.nq`, `Microdata1.html` and `RDFa.html` with
+  their `.nq`, and `XML.xml` with `XML.ttl`).
 
 Only the files are reused; TripleTrail's Facade-X code is written independently.

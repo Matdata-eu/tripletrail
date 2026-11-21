@@ -9,6 +9,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Added
 
+- Facade-X reads the RDF a web page embeds with `html.metadata=true`, as SPARQL Anything does with Any23: RDFa (the RDFa 1.1 and 1.0 processors) and Microdata join the page's Facade-X triples, with every literal a plain string (#20). See [the guide](docs/guide/07-lifting.md#data-a-web-page-embeds) and [the HTML options](docs/facade-x.md#html).
 - Facade-X reads tar archives compressed with bzip2 (`.tar.bz2`, `.tbz2`, `application/x-bzip-compressed-tar`), as listings and with `from-archive`, as it already did gzip (#20). The decoder is the pure-Rust `crabz2` crate (MIT, no dependencies), which also reads blocks that do not compress and files of several streams (as pbzip2 and lbzip2 write). See [the guide](docs/guide/07-lifting.md#files-inside-an-archive).
 
 ### Fixed

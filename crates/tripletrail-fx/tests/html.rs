@@ -117,6 +117,246 @@ fn base_with_blank_nodes() {
     );
 }
 
+/// The default graph of an N-Quads file, with SPARQL Anything's placeholder `<location>`
+/// for the source's location replaced by the file's IRI, as its tests replace it.
+fn expected_nq(file: &str, source: &str) -> Graph {
+    let location = format!(
+        "file://{}",
+        dir().join(source).canonicalize().unwrap().display()
+    );
+    let text = std::fs::read_to_string(dir().join(file))
+        .unwrap()
+        .replace("<location>", &format!("<{location}>"));
+    RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(text.as_bytes())
+        .filter_map(|q| {
+            let q = q.unwrap();
+            q.graph_name
+                .is_default_graph()
+                .then(|| oxigraph::model::Triple::from(q))
+        })
+        .collect()
+}
+
+/// `html.metadata=true`: the Microdata of the page joins its Facade-X triples.
+#[test]
+fn microdata() {
+    assert_isomorphic(
+        triplify("location=Microdata1.html,blank-nodes=false,html.metadata=true").unwrap(),
+        expected_nq("Microdata1.nq", "Microdata1.html"),
+    );
+}
+
+/// `html.metadata=true`: the RDFa of the page (`vocab`, `typeof`, `property` with text and
+/// with `href`) joins its Facade-X triples.
+#[test]
+fn rdfa() {
+    assert_isomorphic(
+        triplify("location=RDFa.html,blank-nodes=false,html.metadata=true").unwrap(),
+        expected_nq("RDFa.nq", "RDFa.html"),
+    );
+}
+
+/// The triples `html.metadata=true` adds for a page of `tests/html-metadata`, as N-Triples
+/// lines with the page's IRI written `<location>` (blank nodes keep their labels).
+fn metadata(file: &str) -> Vec<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/html-metadata")
+        .join(file);
+    let location = format!("<file://{}>", path.canonicalize().unwrap().display());
+    let graph = triplify(&format!(
+        "location={},html.metadata=true,blank-nodes=false",
+        path.display()
+    ))
+    .unwrap();
+    let mut lines: Vec<String> = graph
+        .iter()
+        .filter(|t| {
+            !t.subject
+                .to_string()
+                .starts_with("<http://www.example.org/document")
+        })
+        .map(|t| format!("{t} .").replace(&location, "<location>"))
+        .collect();
+    lines.sort();
+    lines
+}
+
+fn has(lines: &[String], line: &str) {
+    assert!(
+        lines.iter().any(|l| l == line),
+        "{line} not in:\n{}",
+        lines.join("\n")
+    );
+}
+
+/// RDFa 1.1: `vocab`, `prefix` and the initial context's prefixes, `about`, `typeof`, text,
+/// `content`, `href` and `src` values, `rel` and `rev`, a hanging `rel`, `inlist`, blank
+/// nodes, terms, and `<base>`, which changes the base only from where it stands.
+#[test]
+fn rdfa_features() {
+    let lines = metadata("rdfa.html");
+    let s = "<http://example.org/base/page#brussels>";
+    for line in [
+        format!("{s} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://schema.org/TrainStation> ."),
+        format!("{s} <http://schema.org/name> \"Brussels-Central\" ."),
+        format!("{s} <http://example.org/ns#code> \"BC\" ."),
+        format!("{s} <http://example.org/ns#nested> \"Some bold text\" ."),
+        format!("{s} <http://schema.org/containedInPlace> <http://example.org/cities/brussels> ."),
+        format!("{s} <http://schema.org/image> <http://example.org/base/pic.png> ."),
+        format!("<http://example.org/lines/l1> <http://example.org/ns#servedBy> {s} ."),
+        "<location> <http://purl.org/dc/terms/title> \"Stations\" .".into(),
+        "<http://example.org/base/page> <http://ogp.me/ns#description> \"Railway stations\" .".into(),
+        "<http://example.org/base/page> <http://www.w3.org/1999/xhtml/vocab#license> <http://creativecommons.org/licenses/by/4.0/> .".into(),
+        "<http://example.org/base/page> <http://www.w3.org/ns/rdfa#usesVocabulary> <http://schema.org/> .".into(),
+        // `vocab=""` drops the vocabulary: `next` is the XHTML term again.
+        "<http://example.org/base/page> <http://www.w3.org/1999/xhtml/vocab#next> <http://example.org/base/page#n> .".into(),
+        // The RDFa 1.0 processor also runs, and takes `ex:code` for an IRI (no `xmlns:ex`).
+        format!("{s} <ex:code> \"BC\" ."),
+    ] {
+        has(&lines, &line);
+    }
+    // `inlist`: one list, in document order.
+    let stops: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains("<http://example.org/ns#stop>"))
+        .collect();
+    assert_eq!(stops.len(), 1, "{stops:?}");
+    let first = |v: &str| {
+        lines.iter().any(|l| {
+            l.ends_with(&format!(
+                "<http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"{v}\" ."
+            ))
+        })
+    };
+    assert!(first("Antwerp") && first("Mechelen"));
+    // A hanging `rel`: the station has one platform node, with two typed resources (with
+    // `typeof` and no `about`, `property` gives the new resource, not the text).
+    let platform: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.starts_with(&format!("{s} <http://example.org/ns#platform>")))
+        .collect();
+    assert_eq!(platform.len(), 1, "{platform:?}");
+    let node = platform[0].split(' ').nth(2).unwrap();
+    let numbers = lines
+        .iter()
+        .filter(|l| l.starts_with(&format!("{node} <http://example.org/ns#number> _:")))
+        .count();
+    assert_eq!(numbers, 2, "{lines:?}");
+    // `_:x` names one blank node.
+    let blank = lines
+        .iter()
+        .find(|l| l.starts_with(&format!("{s} <http://example.org/ns#blank>")))
+        .unwrap();
+    let x = blank.split(' ').nth(2).unwrap();
+    has(
+        &lines,
+        &format!("{x} <http://example.org/ns#label> \"X\" ."),
+    );
+    // Every literal is an xsd:string.
+    assert!(!lines.iter().any(|l| l.contains("^^") || l.contains("\"@")));
+}
+
+/// A page written for RDFa 1.0 (`xmlns:` prefixes): both processors give the same triples,
+/// and their blank nodes share labels, so the person is written once.
+#[test]
+fn rdfa_with_xmlns_prefixes() {
+    let lines = metadata("rdfa-1.0.html");
+    let book = "<http://example.org/book>";
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with(book))
+            .cloned()
+            .collect::<Vec<_>>(),
+        [
+            format!("{book} <http://purl.org/dc/elements/1.1/creator> \"Ann\" ."),
+            format!(
+                "{book} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://xmlns.com/foaf/0.1/Document> ."
+            ),
+            format!("{book} <http://xmlns.com/foaf/0.1/maker> <http://example.org/ann> ."),
+        ]
+    );
+    let people: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.ends_with("<http://xmlns.com/foaf/0.1/Person> ."))
+        .collect();
+    assert_eq!(people.len(), 1, "{lines:?}");
+}
+
+/// Microdata: `itemid`, `itemref`, nested items, several names in one `itemprop`, an
+/// absolute property IRI, the values of `a`, `meta`, `time` and `data`, text with a line
+/// break between blocks, and an item with no type (in `http://schema.org/`).
+#[test]
+fn microdata_items() {
+    let lines = metadata("microdata.html");
+    let s = "<http://example.org/stations/bc>";
+    for line in [
+        format!("<location> <http://www.w3.org/1999/xhtml/microdata#item> {s} ."),
+        format!(
+            "{s} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/TrainStation> ."
+        ),
+        format!("{s} <https://schema.org/name> \"Brussels-Central\" ."),
+        format!("{s} <https://schema.org/name> \"BXL-C\" ."),
+        format!("{s} <https://schema.org/alternateName> \"BXL-C\" ."),
+        format!("{s} <https://schema.org/description> \"A station\\nin the centre.\" ."),
+        format!("{s} <https://schema.org/url> <http://example.org/bc> ."),
+        format!("{s} <https://schema.org/identifier> \"BC\" ."),
+        format!("{s} <https://schema.org/openingDate> \"1952-10-04\" ."),
+        format!("{s} <https://schema.org/platforms> \"6\" ."),
+        format!("{s} <https://schema.org/telephone> \"+32 2 528 28 28\" ."),
+        format!("{s} <http://example.org/code> \"BC1\" ."),
+    ] {
+        has(&lines, &line);
+    }
+    let address = lines
+        .iter()
+        .find(|l| l.starts_with(&format!("{s} <https://schema.org/address>")))
+        .unwrap();
+    let a = address.split(' ').nth(2).unwrap();
+    has(
+        &lines,
+        &format!("{a} <https://schema.org/addressLocality> \"Brussels\" ."),
+    );
+    has(
+        &lines,
+        &format!(
+            "{a} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/PostalAddress> ."
+        ),
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.ends_with("<http://schema.org/name> \"untyped\" ."))
+    );
+    // Two top-level items: the nested one is not.
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.contains("microdata#item"))
+            .count(),
+        2
+    );
+}
+
+/// A page nested as deep as HTML may be, full of RDFa and Microdata, on a test thread's
+/// small stack.
+#[test]
+fn deep_metadata() {
+    let dir = tripletrail_testdir::tempdir("fx-html-deep");
+    let mut page = String::new();
+    for n in 0..500 {
+        page.push_str(&format!(
+            "<div itemscope itemprop=\"p\" vocab=\"http://e/\" typeof=\"T\" rel=\"r\" property=\"v{n}\">"
+        ));
+    }
+    page.push('x');
+    let path = dir.path().join("deep.html");
+    std::fs::write(&path, page).unwrap();
+    let graph = triplify(&format!("location={},html.metadata=true", path.display())).unwrap();
+    assert!(graph.len() > 1000, "{}", graph.len());
+}
+
 /// The values of `?v` for a pattern on an HTML source, or the error.
 fn values(options: &str, pattern: &str) -> Result<Vec<String>, String> {
     let fx = FxService::new(
@@ -202,7 +442,6 @@ fn selector_picks_elements() {
 #[test]
 fn unsupported_options_are_refused() {
     for (option, value, says) in [
-        ("html.metadata", "true", "html.metadata"),
         ("html.browser", "chromium", "html.browser"),
         ("html.parser", "lxml", "html.parser=lxml"),
         ("html.selector", "p:hover", ":hover"),
