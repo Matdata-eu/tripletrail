@@ -1,5 +1,5 @@
-// The five reading tools of the web UI as a user sees them (#40): Search, Map, Explore,
-// Describe and Query, in Chromium, on the guide's sample network. `TRIPLETRAIL_BIN` names the
+// The reading tools of the web UI as a user sees them (#40): Search, Map, Explore, Describe,
+// Query and Records (#81), in Chromium, on the guide's sample network. `TRIPLETRAIL_BIN` names the
 // `tripletrail` binary (`target/debug/tripletrail` of the workspace by default).
 
 import { test, before, after } from "node:test";
@@ -157,4 +157,39 @@ test("Query: a SELECT answers a table of results", async (t) => {
     return rows.length === 10 && rows[0].innerText;
   });
   assert.match(await first.jsonValue(), /ANT/);
+});
+
+test("Records: a class's records sort, filter and open as a form", async (t) => {
+  const page = await open(t);
+  await page.goto(base + "/$/ui/records/ds?class=Section");
+  const count = page.locator("#records-count");
+  await count.filter({ hasText: "12 records" }).waitFor();
+  assert.equal(await page.locator("#records-table .tabulator-row").count(), 12);
+  const classes = (await page.locator("#records-classes").innerText()).replace(/\s+/g, " ");
+  assert.match(classes, /Section 12/);
+  assert.match(classes, /Station 10/);
+  // Sorted by length, longest first (a second click on the header).
+  const length = page.locator('.tabulator-col[tabulator-field="lengthKm"] .tabulator-col-title');
+  const sorted = (dir) => page.waitForResponse((r) => r.url().includes("/search/results") && decodeURIComponent(r.url()).includes('"desc":' + dir));
+  let answer = sorted("false");
+  await length.click();
+  await answer;
+  answer = sorted("true");
+  await length.click();
+  await answer;
+  await page.waitForFunction(() => /S07/.test(document.querySelector("#records-table .tabulator-row")?.innerText || ""));
+  // A header filter: the sections faster than 200 km/h.
+  await page.locator('.tabulator-col[tabulator-field="maxSpeed"] input').pressSequentially(">200");
+  await count.filter({ hasText: /^1 record$/ }).waitFor();
+  assert.match(await page.getAttribute("#records-csv", "href"), /f=csv/);
+  // The record: a form of its values, its links open records here.
+  await page.locator("#records-table .tabulator-row a").first().click();
+  await page.locator(".records-record-head h2", { hasText: "S07" }).waitFor();
+  const form = (await page.locator("#records-record").innerText()).replace(/\s+/g, " ");
+  assert.match(form, /maxSpeed 300/);
+  assert.match(form, /from Leuven/);
+  assert.match(page.url(), /iri=https%3A%2F%2Fexample\.org%2Frail%23S07/);
+  await page.locator("#records-record a", { hasText: "Leuven" }).click();
+  await page.locator(".records-record-head h2", { hasText: "Leuven" }).waitFor();
+  assert.match(await page.locator("#records-incoming").innerText(), /S06/);
 });
