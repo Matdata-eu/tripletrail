@@ -79,6 +79,9 @@ const ITEMS_PARAMS: &[&str] = &[
     "filter",
     "filter-lang",
     "filter-crs",
+    "area",
+    "rel",
+    "dist",
 ];
 
 /// A CRS features are given or asked for in (OGC API – Features Part 2).
@@ -1712,6 +1715,9 @@ fn items(
     }
     if let Some(datetime) = params.get("datetime") {
         filter.push_str(&time_filter(&collection.time, datetime)?);
+    }
+    if let Some(area) = crate::area::area_filter(entry, view, collection, params, false)? {
+        filter.push_str(&area.sparql);
     }
     if let Some(cql) = params.get("filter") {
         let lang = cql2::Lang::of(params.get("filter-lang"))?;
