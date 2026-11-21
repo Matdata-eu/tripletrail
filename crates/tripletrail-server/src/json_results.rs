@@ -49,7 +49,7 @@ impl<W: Write> JsonSolutionsWriter<W> {
     }
 }
 
-fn write_term(out: &mut impl Write, term: TermRef<'_>) -> io::Result<()> {
+pub(crate) fn write_term(out: &mut impl Write, term: TermRef<'_>) -> io::Result<()> {
     match term {
         TermRef::NamedNode(n) => {
             out.write_all(b"{\"type\":\"uri\",\"value\":")?;
@@ -90,7 +90,7 @@ fn write_term(out: &mut impl Write, term: TermRef<'_>) -> io::Result<()> {
 }
 
 /// `s` as a JSON string.
-fn write_string(out: &mut impl Write, s: &str) -> io::Result<()> {
+pub(crate) fn write_string(out: &mut impl Write, s: &str) -> io::Result<()> {
     out.write_all(b"\"")?;
     let bytes = s.as_bytes();
     // Most values (IRIs, numbers, words) need no escaping: one test over the whole string,

@@ -91,6 +91,10 @@ version the rest of the workspace uses).
    when it is a node, as W3C `values_and_path` asks. Paths of one step or more from such a
    term still match nothing. Inside `GRAPH ?g` it is unchanged: the graphs enumerated are those that
    hold the term.
+12. **Solutions can carry another form of themselves** (#11, `src/model.rs`,
+   `QuerySolutionIter::with_attachment` and `attachment`): the id executor attaches its table
+   of term ids, from which the server writes SPARQL JSON, CSV and TSV without a `Term` per
+   cell. The iterator still gives every solution, so any other reader is unaffected.
 
 To move to a newer spareval: copy the new release over `src/`, apply the `tripletrail:` changes
 again, and run `cargo test -p tripletrail --test derived_datatypes`.

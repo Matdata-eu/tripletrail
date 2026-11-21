@@ -19,6 +19,8 @@ type Rows = Arc<[Vec<Option<Term>>]>;
 #[derive(Clone)]
 enum Cached {
     Boolean(bool),
+    /// An answer on term ids (#11), kept as it is.
+    Ids(Arc<crate::IdSolutions>),
     Solutions {
         variables: Arc<[Variable]>,
         rows: Rows,
@@ -90,7 +92,7 @@ const TERM_BYTES: usize = 40;
 /// Entries kept at most, whatever their size.
 const MAX_ENTRIES: usize = 10_000;
 
-fn term_bytes(t: &Term) -> usize {
+pub(crate) fn term_bytes(t: &Term) -> usize {
     TERM_BYTES
         + match t {
             Term::NamedNode(n) => n.as_str().len(),
@@ -244,6 +246,7 @@ impl ResultCache {
         self.hits.fetch_add(1, Ordering::Relaxed);
         Some(match entry.value.clone() {
             Cached::Boolean(b) => QueryResults::Boolean(b),
+            Cached::Ids(answer) => crate::direct::results(answer),
             Cached::Solutions { variables, rows } => solutions(variables, rows, 0),
         })
     }
@@ -297,6 +300,16 @@ impl ResultCache {
                 let bytes = ROW_BYTES + key_bytes(&key);
                 self.insert(key, generation, Cached::Boolean(b), bytes);
                 QueryResults::Boolean(b)
+            }
+            QueryResults::Solutions(solutions)
+                if let Some(answer) = solutions
+                    .attachment()
+                    .and_then(|a| Arc::clone(a).downcast::<crate::IdSolutions>().ok()) =>
+            {
+                // Already whole: kept as it is, and still written from its ids.
+                let bytes = key_bytes(&key) + ROW_BYTES + answer.bytes();
+                self.insert(key, generation, Cached::Ids(answer), bytes);
+                QueryResults::Solutions(solutions)
             }
             QueryResults::Solutions(solutions) => {
                 let variables: Arc<[Variable]> = solutions.variables().into();

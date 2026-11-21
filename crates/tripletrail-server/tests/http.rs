@@ -442,18 +442,20 @@ fn errors_and_timeouts() {
     assert!(metrics.lines().any(|l| l == memory), "{metrics}");
     // A timeout once the rows are being sent cuts the body, and the client sees it cut
     // (#549): no last chunk, the connection closed. Also in CSV and N-Triples, where a
-    // shorter body would read as a whole result. The client is not left waiting.
+    // shorter body would read as a whole result. The client is not left waiting. The
+    // evaluator streams its rows; the id executor (#11) has the whole answer before the first
+    // byte, so its timeout is a status instead.
     let agent = ureq::AgentBuilder::new()
         .timeout_read(Duration::from_secs(20))
         .build();
     for (query, accept, start) in [
         (
-            "SELECT * WHERE { ?a ?b ?c . ?d ?e ?f }",
+            "#pragma tt.executor spareval\nSELECT * WHERE { ?a ?b ?c . ?d ?e ?f }",
             "application/sparql-results+json",
             &b"{\"head\""[..],
         ),
         (
-            "SELECT * WHERE { ?a ?b ?c . ?d ?e ?f }",
+            "#pragma tt.executor spareval\nSELECT * WHERE { ?a ?b ?c . ?d ?e ?f }",
             "text/csv",
             b"a,b,c,d,e,f",
         ),

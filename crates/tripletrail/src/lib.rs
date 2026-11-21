@@ -14,6 +14,7 @@ pub mod complexity;
 mod cosine_order;
 mod direct;
 pub use cache::{CacheStatus, ResultCacheStats};
+pub use direct::IdSolutions;
 pub use hints::{Hints, without_defines};
 pub mod bind_join;
 mod count;
@@ -2672,12 +2673,9 @@ impl Engine {
                         cancelled: &|| self.is_cancelled(),
                         graph,
                     };
-                    if let Some((variables, rows)) = direct::answer(&query, &eval) {
+                    if let Some(answer) = direct::answer(&query, &eval) {
                         self.check_cancelled()?;
-                        return Ok(QueryResults::Solutions(QuerySolutionIter::from_tuples(
-                            variables,
-                            rows.into_iter().map(Ok),
-                        )));
+                        return Ok(direct::results(Arc::new(answer)));
                     }
                 }
                 query = rows::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
