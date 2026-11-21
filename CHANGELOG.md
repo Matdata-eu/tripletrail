@@ -9,6 +9,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Added
 
+- The Map page's **Tools** (#33): draw an area to filter every layer by (rectangle, polygon, circle, corridor along a line, or a feature's geometry with **Filter by it**) with a spatial relation, measure lengths with bearings and areas with perimeter on the sphere, and read or copy the coordinates under the pointer. The area goes into the page's link as `area`, `rel` and `dist`. See [the guide](docs/guide/10-maps-and-apis.md#draw-an-area-measure-and-read-coordinates).
 - Forms are a reader of the shapes (#80): `tts:Reader-Forms` (`?reader=forms`), so `tts:hiddenFrom` and `tts:onlyFor` keep a shape or a property from the record forms. The web UI draws forms from shapes with one renderer, `/$/ui/forms.js`, whose editors and viewers are looked up by `dash:editor` and `dash:viewer` and can be added to; the Shapes page's settings use it. See [the guide](docs/guide/10-maps-and-apis.md#keep-a-property-from-the-record-forms) and [shapes](docs/server.md#shapes).
 
 ### Fixed
