@@ -92,11 +92,24 @@ read from the checkpoint. A checkpoint saves the box of every geometry whose bin
 longer than 64 bytes (anything but a point or a short line) next to the records, so reading the
 boxes of a side doesn't read its records: for 33 million landuse polygons that is about 1 GB
 instead of about 30 GB. Pieces written before this keep reading the box from the record until
-they are written again. A geometry is parsed only when one of its boxes pairs
-(once per query, and a constant test of the FILTER parses its side's geometries), so a join of
-1.25 million tracks with 33 million landuse polygons parses the polygons near a track, not all
-of them (#754). This join doesn't read the R-tree, and so doesn't wait for the index to be
-built or loaded.
+they are written again. The join then runs in two passes (#2):
+
+1. The sweep reads the boxes of both sides and parses only the smaller side's geometries (the
+   probe side, kept in the store's cache as usual). A pair is a candidate when a part of the
+   probe comes near the other's box: a point, or the box of a segment of a line, grown by the
+   margin. A long or bent line's box covers many polygons it never comes near, which this
+   leaves out. A probe with an area keeps every pair whose boxes meet.
+2. The candidates are grouped by the larger side's geometry, in id order, and tested on every
+   core: each of those geometries is read once, in about the order the store keeps them, and
+   is not kept in the cache.
+
+So a join of 1.25 million tracks with 33 million landuse polygons reads only the polygons near
+a track, each once, and holds few of them at a time (#754). On a synthetic set of 8 million
+polygons and 308,000 lines (`cargo run --release -p tripletrail --example landuse_join`), the
+join answers in 23 to 26 s at 6 GB peak; before, it kept every polygon it tested and ran out of
+the machine's 15 GB. Beyond 64 million candidates, pairs are tested as the sweep finds them, as
+before. A constant test of the FILTER still parses its side's geometries first. This join
+doesn't read the R-tree, and so doesn't wait for the index to be built or loaded.
 
 ### Exact tests
 

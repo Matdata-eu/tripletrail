@@ -265,6 +265,72 @@ fn id_joins_do_not_need_the_index() {
     assert_eq!(sorted(&e, q), indexed);
 }
 
+/// A join of few lines against many more polygons, on term ids: lines whose boxes cover
+/// polygons they never come near, polygons they cross, and polygons within a distance (#2).
+/// The candidates come from the lines' segments and are tested polygon by polygon; the
+/// answers equal the full scan's.
+#[test]
+fn line_joins_on_ids_match_full_scan() {
+    let mut ttl = String::from(
+        "@prefix ex: <http://example.com/> .\n@prefix geo: <http://www.opengis.net/ont/geosparql#> .\n",
+    );
+    for i in 0..30 {
+        for j in 0..30 {
+            let (x, y) = (10.0 + i as f64 * 0.01, 60.0 + j as f64 * 0.01);
+            ttl += &format!(
+                "ex:a{i}_{j} a ex:Area ; geo:hasGeometry [ geo:asWKT \"POLYGON(({x} {y}, {x2} {y}, {x2} {y2}, {x} {y2}, {x} {y}))\"^^geo:wktLiteral ] .\n",
+                x2 = x + 0.006,
+                y2 = y + 0.006,
+            );
+        }
+    }
+    // L-shaped and diagonal lines, and a point.
+    for k in 0..12 {
+        let (x, y) = (10.0 + k as f64 * 0.023, 60.0 + k as f64 * 0.017);
+        ttl += &format!(
+            "ex:t{k} a ex:Track ; geo:hasGeometry [ geo:asWKT \"LINESTRING({x} {y}, {x2} {y}, {x2} {y2})\"^^geo:wktLiteral ] .\n\
+             ex:d{k} a ex:Track ; geo:hasGeometry [ geo:asWKT \"LINESTRING({x} {y2}, {x2} {y})\"^^geo:wktLiteral ] .\n",
+            x2 = x + 0.08,
+            y2 = y + 0.05,
+        );
+    }
+    ttl += "ex:p a ex:Track ; geo:hasGeometry [ geo:asWKT \"POINT(10.0503 60.0503)\"^^geo:wktLiteral ] .\n";
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let q = |f: &str| {
+        format!(
+            "SELECT ?t ?a WHERE {{ ?t a ex:Track ; geo:hasGeometry/geo:asWKT ?tw . \
+             ?a a ex:Area ; geo:hasGeometry/geo:asWKT ?aw FILTER({f}) }}"
+        )
+    };
+    for f in [
+        "geof:sfIntersects(?tw, ?aw)",
+        "geof:sfIntersects(?aw, ?tw)",
+        "geof:sfCrosses(?tw, ?aw)",
+        "geof:sfWithin(?tw, ?aw)",
+        "geof:distance(?tw, ?aw, uom:metre) < 150",
+        "st:ST_DWithinSphere(?tw, ?aw, 300)",
+    ] {
+        let n = check(&e, &q(f), true);
+        assert!(n > 0, "{f}");
+        let stats = e.last_spatial_stats();
+        assert!(
+            stats
+                .decisions
+                .iter()
+                .any(|d| d.to_string().contains("on term ids")),
+            "{f}: {:?}",
+            stats.decisions
+        );
+    }
+    check(
+        &e,
+        "SELECT (COUNT(*) AS ?n) WHERE { ?t a ex:Track ; geo:hasGeometry/geo:asWKT ?tw . \
+         ?a a ex:Area ; geo:hasGeometry/geo:asWKT ?aw FILTER(geof:sfIntersects(?tw, ?aw)) }",
+        true,
+    );
+}
+
 #[test]
 fn joins_match_full_scan() {
     let e = join_engine();

@@ -107,6 +107,9 @@ pub struct IdSide {
     /// boxes meet one of the other side (#754): reading every polygon of a large side, the
     /// landuse areas of Europe say, takes more memory and time than the store has.
     pub load: Arc<dyn Fn(TermId) -> Option<Arc<Geom>> + Send + Sync>,
+    /// Parses a geometry of the side without keeping it (the store's cache is left as it
+    /// is). The join reads the larger side so, once per geometry and in id order (#2).
+    pub read: Arc<dyn Fn(TermId) -> Option<Arc<Geom>> + Send + Sync>,
 }
 
 /// A geometry of an [`IdSide`]: its id, CRS and bounding box (west, south, east, north).
@@ -1163,15 +1166,39 @@ fn pairs_pattern(
     })
 }
 
-/// The pairs (places in their sides' `geometries`) of a probe and an other geometry whose
-/// boxes meet, the probe's grown by `margin`, that pass `accepts`: [`sweep_pairs`] on boxes
-/// alone, so only the geometries of pairs are parsed (#754).
+/// How a join refines its candidate pairs (see [`sweep_lazy`]).
+struct Refine<'a> {
+    /// Parses a geometry of the probe side, kept for the next pairs and queries.
+    load_probe: &'a (dyn Fn(TermId) -> Option<Arc<Geom>> + Send + Sync),
+    /// Parses a geometry of the other side, not kept.
+    read_other: &'a (dyn Fn(TermId) -> Option<Arc<Geom>> + Send + Sync),
+    /// The join's test, probe geometry first.
+    test: &'a (dyn Fn(&Geom, &Geom) -> bool + Sync),
+    cancelled: &'a (dyn Fn() -> bool + Sync),
+}
+
+/// Candidate pairs a join collects at most before testing them (16 bytes each while
+/// sweeping, 8 after): beyond, it tests pairs as the sweep finds them, keeping every parsed
+/// geometry until the join ends.
+const MAX_CANDIDATES: usize = 64 << 20;
+
+/// The pairs `(probe at, other at)` of geometries whose boxes meet (the probe's grown by
+/// `margin`) and that pass the test, in that order.
+///
+/// The sweep only reads boxes and the probe side's geometries (the smaller side): a pair is
+/// a candidate when a part of the probe (a point, or a segment of a line) comes near the
+/// other's box, which a long line's box alone overstates. The candidates are then tested
+/// grouped by the other side's geometry, in id order, on every core: each of those is read
+/// once, in about the order the store keeps them, and not kept (#2). Reading them as the
+/// sweep met them read the landuse polygons of OSM Europe at random and kept every one of
+/// them in memory, which left too little for the page cache.
 fn sweep_lazy(
     margin: Margin,
     probe: &[Lazy<'_>],
     other: &[Lazy<'_>],
     threads: usize,
     accepts: &(dyn Fn(&Lazy<'_>, &Lazy<'_>) -> bool + Sync),
+    refine: &Refine<'_>,
 ) -> Option<Vec<(u32, u32)>> {
     type Side<'a, 's> = (Vec<&'a Lazy<'s>>, Vec<sweep::Bbox>);
     let space = |crs: &Crs| match crs {
@@ -1195,10 +1222,106 @@ fn sweep_lazy(
     }
     let mut out = Vec::new();
     for ((pl, pb), (ol, ob)) in spaces.into_values() {
-        let found = sweep::join(&pb, &ob, threads, usize::MAX, &|i, j| accepts(pl[i], ol[j]))?;
-        out.extend(found.into_iter().map(|(i, j)| (pl[i].at, ol[j].at)));
+        let near = |i: usize, j: usize| {
+            if (refine.cancelled)() {
+                return false;
+            }
+            let p = pl[i];
+            p.geom(refine.load_probe)
+                .is_some_and(|g| reaches(margin, &p.geometry.crs, &g.geometry, &ob[j]))
+        };
+        let Some(candidates) = sweep::join(&pb, &ob, threads, MAX_CANDIDATES, &near) else {
+            // Too many candidates to hold: each pair is tested as the sweep finds it.
+            let found = sweep::join(&pb, &ob, threads, usize::MAX, &|i, j| accepts(pl[i], ol[j]))?;
+            out.extend(found.into_iter().map(|(i, j)| (pl[i].at, ol[j].at)));
+            continue;
+        };
+        // By the other side's geometry, in id order (`other` is sorted by id).
+        let mut candidates: Vec<(u32, u32)> = candidates
+            .into_iter()
+            .map(|(i, j)| (j as u32, i as u32))
+            .collect();
+        candidates.sort_unstable();
+        // Runs of one geometry of the other side, handed out in chunks of about even size.
+        let chunk = candidates.len().div_ceil(threads.max(1) * 16).max(1024);
+        let mut cuts = vec![0];
+        while let Some(&last) = cuts.last() {
+            let mut end = (last + chunk).min(candidates.len());
+            while end < candidates.len() && candidates[end].0 == candidates[end - 1].0 {
+                end += 1;
+            }
+            if end == last {
+                break;
+            }
+            cuts.push(end);
+        }
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let work = || {
+            let mut found = Vec::new();
+            loop {
+                let c = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if c + 1 >= cuts.len() || (refine.cancelled)() {
+                    return found;
+                }
+                let part = &candidates[cuts[c]..cuts[c + 1]];
+                for run in part.chunk_by(|x, y| x.0 == y.0) {
+                    let o = ol[run[0].0 as usize];
+                    let Some(other_geom) = (refine.read_other)(o.geometry.id) else {
+                        continue;
+                    };
+                    for &(_, i) in run {
+                        let p = pl[i as usize];
+                        if let Some(g) = p.geom(refine.load_probe)
+                            && (refine.test)(g, &other_geom)
+                        {
+                            found.push((p.at, o.at));
+                        }
+                    }
+                }
+            }
+        };
+        let parts: Vec<Vec<(u32, u32)>> = if threads <= 1 || cuts.len() <= 2 {
+            vec![work()]
+        } else {
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..threads.min(cuts.len() - 1))
+                    .map(|_| scope.spawn(work))
+                    .collect();
+                workers.into_iter().map(|w| w.join().unwrap()).collect()
+            })
+        };
+        out.extend(parts.into_iter().flatten());
     }
+    // In the same order whichever worker tested which pair.
+    out.sort_unstable();
     Some(out)
+}
+
+/// Whether a part of `g` (a point, or a segment of a line) comes within `margin` of the box
+/// `other`. A geometry with an area (or a part of one) may meet the box anywhere inside, so
+/// it always does when its own box does.
+fn reaches(margin: Margin, crs: &Crs, g: &geo::Geometry<f64>, other: &sweep::Bbox) -> bool {
+    use geo::Geometry as G;
+    let meets = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let b = margin.around(crs, [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]);
+        let (lo, hi) = (b.lower(), b.upper());
+        lo[0] <= other.1[0] && other.0[0] <= hi[0] && lo[1] <= other.1[1] && other.0[1] <= hi[1]
+    };
+    let line = |ls: &geo::LineString<f64>| match ls.0.as_slice() {
+        [p] => meets(p.x, p.y, p.x, p.y),
+        _ => ls
+            .lines()
+            .any(|l| meets(l.start.x, l.start.y, l.end.x, l.end.y)),
+    };
+    match g {
+        G::Point(p) => meets(p.x(), p.y(), p.x(), p.y()),
+        G::MultiPoint(m) => m.iter().any(|p| meets(p.x(), p.y(), p.x(), p.y())),
+        G::Line(l) => meets(l.start.x, l.start.y, l.end.x, l.end.y),
+        G::LineString(ls) => line(ls),
+        G::MultiLineString(m) => m.iter().any(line),
+        G::GeometryCollection(c) => c.iter().any(|g| reaches(margin, crs, g, other)),
+        _ => true,
+    }
 }
 
 fn sweep_pairs<'a, K: IndexKey + Sync>(
@@ -1685,10 +1808,10 @@ impl<'a> Rewriter<'a> {
             (&geoms_b, &geoms_a)
         };
         let probe_var = if probe_a { a } else { b };
-        let (load_probe, load_other) = if probe_a {
-            (&*side_a.load, &*side_b.load)
+        let (load_probe, load_other, read_other) = if probe_a {
+            (&*side_a.load, &*side_b.load, &*side_b.read)
         } else {
-            (&*side_b.load, &*side_a.load)
+            (&*side_b.load, &*side_a.load, &*side_a.read)
         };
         let ctx = self.ctx;
         let accepts = |p: &Lazy<'_>, o: &Lazy<'_>| {
@@ -1708,7 +1831,23 @@ impl<'a> Rewriter<'a> {
             })
         };
         let pairing = Instant::now();
-        let found = sweep_lazy(plan.margin, probe, other, threads, &accepts);
+        let test = |probe_geom: &Geom, other_geom: &Geom| {
+            plan.accepts(&|v: &Variable| {
+                if v == probe_var {
+                    probe_geom
+                } else {
+                    other_geom
+                }
+            })
+        };
+        let cancelled = || ctx.cancelled();
+        let refine = Refine {
+            load_probe,
+            read_other,
+            test: &test,
+            cancelled: &cancelled,
+        };
+        let found = sweep_lazy(plan.margin, probe, other, threads, &accepts, &refine);
         self.stats.pairing += pairing.elapsed();
         let Some(found) = found else {
             self.stats.lookup += start.elapsed();
@@ -3150,6 +3289,34 @@ pub fn knn(query: &Query) -> Option<Knn> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_reaches_a_box_only_near_its_segments() {
+        let crs = Crs::Other("http://example.org/plane".to_owned());
+        // An L-shaped line whose box covers (0, 0) to (10, 10).
+        let line: geo::Geometry<f64> =
+            geo::LineString::from(vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]).into();
+        let inside_corner: sweep::Bbox = ([1.0, 8.0], [2.0, 9.0]);
+        let on_segment: sweep::Bbox = ([4.0, -1.0], [5.0, 1.0]);
+        assert!(!reaches(Margin::None, &crs, &line, &inside_corner));
+        assert!(reaches(Margin::None, &crs, &line, &on_segment));
+        // Within the margin of the vertical segment.
+        let near: sweep::Bbox = ([8.5, 4.0], [9.0, 5.0]);
+        assert!(!reaches(Margin::None, &crs, &line, &near));
+        assert!(reaches(Margin::Planar(1.0), &crs, &line, &near));
+        // Points and one-point lines.
+        let point: geo::Geometry<f64> = geo::Point::new(1.5, 8.5).into();
+        assert!(reaches(Margin::None, &crs, &point, &inside_corner));
+        let one: geo::Geometry<f64> = geo::LineString::from(vec![(1.5, 8.5)]).into();
+        assert!(reaches(Margin::None, &crs, &one, &inside_corner));
+        // A polygon may meet the box anywhere inside: kept.
+        let square: geo::Geometry<f64> =
+            geo::Rect::new((0.0, 0.0), (10.0, 10.0)).to_polygon().into();
+        assert!(reaches(Margin::None, &crs, &square, &inside_corner));
+        let collection =
+            geo::Geometry::GeometryCollection(geo::GeometryCollection::from(vec![line, square]));
+        assert!(reaches(Margin::None, &crs, &collection, &inside_corner));
+    }
 
     #[test]
     fn variable_mentions_skip_iris_and_strings() {

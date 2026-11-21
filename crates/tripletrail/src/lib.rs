@@ -4451,6 +4451,7 @@ impl SpatialContext for Engine {
                 geometry: 0,
                 geometries: Vec::new(),
                 load: Arc::new(|_| None),
+                read: Arc::new(|_| None),
             });
         };
         let all = snapshot.join_ids(&compiled.triples, compiled.columns.len(), graph, &|| {
@@ -4497,12 +4498,14 @@ impl SpatialContext for Engine {
                 .collect()
         });
         let parse = snapshot.clone();
+        let read = snapshot.clone();
         Some(tripletrail_spatial::IdSide {
             variables,
             rows,
             geometry: 0,
             geometries,
             load: Arc::new(move |id| parse.geometry(id)),
+            read: Arc::new(move |id| read.geometry_transient(id)),
         })
     }
 
