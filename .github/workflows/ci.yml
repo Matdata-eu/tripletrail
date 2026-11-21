@@ -148,6 +148,9 @@ jobs:
       - name: JavaScript client
         working-directory: clients/js
         run: node --test
+      # The geometry of the Map page's tools: lengths, areas, bearings, WKT (#33).
+      - name: Map tools
+        run: node --test "crates/tripletrail-server/ui/test/*.test.js"
       # The five reading tools of the web UI in Chromium (#40). Playwright is installed here only,
       # never shipped.
       - name: Browser tests of the web UI

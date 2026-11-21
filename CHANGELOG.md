@@ -7,9 +7,17 @@ versions may change the store format and the API; the release notes say how to u
 
 ## [Unreleased]
 
+### Added
+
+- The Map page's **Tools** (#33): draw an area to filter every layer by (rectangle, polygon, circle, corridor along a line, or a feature's geometry with **Filter by it**) with a spatial relation, measure lengths with bearings and areas with perimeter on the sphere, and read or copy the coordinates under the pointer. The area goes into the page's link as `area`, `rel` and `dist`. See [the guide](docs/guide/10-maps-and-apis.md#draw-an-area-measure-and-read-coordinates).
+
 ### Fixed
 
 - Building the image for linux/amd64 and linux/arm64 together (the Release and Docker image workflows) no longer fails now and then with `failed to unpack package … File exists`: each architecture's build has its own crate cache.
+
+### Changed
+
+- More of one query runs on several cores (#4): the sorted joins of a basic graph pattern (chunks of rows, each walking the index on its own), `GROUP BY` of many rows (split by the hash of the key) and the `SUM`, `AVG`, `MIN`, `MAX` and `SAMPLE` of the groups. The answers, and their order, are those of one core. On 2M orders and 4 cores, a join of three patterns grouped by country went from 500 to 220 ms, a count over three patterns from 480 to 190 ms, and 200,000 customers' sums from 420 to 260 ms. Rows to sort for a join are sorted as (key, row) pairs, which also helps one core (570 → 470 ms). `--query-threads` sizes the pool, as before; see [the server options](docs/server.md#main-options).
 
 ## 0.1.0 - 2026-11-21
 
