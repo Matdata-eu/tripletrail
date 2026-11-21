@@ -485,8 +485,10 @@ pub(crate) fn route(
     // Facet filters of the collections, and with them the cache key's layer name.
     let single = *layer != "all";
     let mut filters: HashMap<&str, Filter> = HashMap::new();
+    // An area of another layer is joined only within the tile.
+    let window = tile_window(z, x, y);
     for c in &shown {
-        let scope = scope_filter(entry, view, c, &collections, params, false)?;
+        let scope = scope_filter(entry, view, c, &collections, Some(&window), params, false)?;
         let filter = facet_filter(c, params, single, None, &scope)?;
         if !filter.sparql.is_empty() || filter.color.is_some() {
             filters.insert(&c.id, filter);
@@ -801,12 +803,14 @@ const SCOPE_GRAPHS: usize = 100;
 /// - `area`, `rel` and `dist`: the features with a geometry in a relation to an area (#33,
 ///   [`crate::area`]).
 ///
+/// `window`: the tile's area (CRS84 WKT), which bounds the join of an `area=layer:{id}`.
 /// `many`: for counts over the whole collection rather than a tile's features.
 fn scope_filter(
     entry: &Entry,
     view: &View,
     collection: &Collection,
     layers: &[Collection],
+    window: Option<&str>,
     params: &Params,
     many: bool,
 ) -> Result<Scope, HttpError> {
@@ -827,7 +831,9 @@ fn scope_filter(
         ));
         sign(format!("bbox={window}"));
     }
-    if let Some(area) = crate::area::area_filter(entry, view, collection, layers, params, many)? {
+    if let Some(area) =
+        crate::area::area_filter(entry, view, collection, layers, window, params, many)?
+    {
         sparql.push_str(&area.sparql);
         sign(area.signature);
     }
@@ -893,14 +899,7 @@ pub(crate) fn layer_selection(
     params: &Params,
 ) -> Result<(String, String), HttpError> {
     let filter = facet_filter(collection, params, false, None, &Scope::default())?;
-    Ok((
-        format!(
-            "{} FILTER EXISTS {{ {} }}",
-            filter.sparql,
-            collection.geometry.pattern("?f", "?layerW")
-        ),
-        filter.signature,
-    ))
+    Ok((filter.sparql, filter.signature))
 }
 
 /// A range facet's bound as a SPARQL literal of its datatype: a number for numeric types,
@@ -1110,7 +1109,7 @@ fn facet_counts(
         " FILTER EXISTS {{ {} }}",
         collection.geometry.pattern("?f", "?w")
     );
-    let scope = scope_filter(entry, view, collection, layers, params, true)?;
+    let scope = scope_filter(entry, view, collection, layers, None, params, true)?;
     let all = facet_filter(collection, params, true, None, &scope)?;
     let number = |t: &Option<Term>| match t {
         Some(Term::Literal(l)) => l.value().parse::<u64>().unwrap_or(0),
@@ -1807,6 +1806,17 @@ fn map_views(collections: &[Collection]) -> Vec<serde_json::Value> {
 }
 
 /// The Web Mercator bounds of a tile: `(minx, miny, maxx, maxy)`, grown by `grow` of its width.
+/// The area tile `z/x/y` draws, with its buffer, as CRS84 WKT.
+fn tile_window(z: u32, x: u32, y: u32) -> String {
+    let grow = f64::from(BUFFER) / f64::from(EXTENT);
+    let (minx, miny, maxx, maxy) = bounds(z, x, y, grow);
+    let (west, south) = lon_lat(minx, miny);
+    let (east, north) = lon_lat(maxx, maxy);
+    format!(
+        "POLYGON(({west} {south}, {east} {south}, {east} {north}, {west} {north}, {west} {south}))"
+    )
+}
+
 fn bounds(z: u32, x: u32, y: u32, grow: f64) -> (f64, f64, f64, f64) {
     let size = 2.0 * HALF / f64::from(1u32 << z.min(31));
     let margin = size * grow;
@@ -1926,13 +1936,7 @@ fn group_tiles(
     timeout: Option<Duration>,
     view: &View,
 ) -> Result<Layers, HttpError> {
-    let grow = f64::from(BUFFER) / f64::from(EXTENT);
-    let (minx, miny, maxx, maxy) = bounds(z, x, y, grow);
-    let (west, south) = lon_lat(minx, miny);
-    let (east, north) = lon_lat(maxx, maxy);
-    let window = format!(
-        "POLYGON(({west} {south}, {east} {south}, {east} {north}, {west} {north}, {west} {south}))"
-    );
+    let window = tile_window(z, x, y);
     let mut classes: Vec<&NamedNode> = group.iter().map(|c| &c.class).collect();
     classes.sort();
     classes.dedup();

@@ -104,7 +104,8 @@ impl Rel {
 pub(crate) const LAYER: &str = "layer:";
 
 /// The spatial filter of `params` on `collection`'s features, or `None` without an `area`.
-/// `layers`: the collections an `area=layer:{id}` may name. `many`: the rest of the query
+/// `layers`: the collections an `area=layer:{id}` may name, and `window` (CRS84 WKT) the
+/// area a tile draws, which bounds the join with such a layer. `many`: the rest of the query
 /// keeps many features (counts over a whole class), rather than a few (a tile's, a page's);
 /// it decides how `disjoint` is tested.
 pub(crate) fn area_filter(
@@ -112,6 +113,7 @@ pub(crate) fn area_filter(
     view: &View,
     collection: &Collection,
     layers: &[Collection],
+    window: Option<&str>,
     params: &Params,
     many: bool,
 ) -> Result<Option<AreaFilter>, HttpError> {
@@ -136,7 +138,12 @@ pub(crate) fn area_filter(
         (_, None) => 0.0,
     };
     if let Some(id) = area.trim().strip_prefix(LAYER) {
-        return layer_filter(collection, layers, id.trim(), rel, dist, params, many).map(Some);
+        let on = LayerArea {
+            collection,
+            layers,
+            window,
+        };
+        return layer_filter(entry, view, &on, id.trim(), rel, dist, params).map(Some);
     }
     let geometry = area_geometry(entry, view, area.trim())?;
     let Term::Literal(literal) = wkt_literal(&geometry, &Crs::Crs84) else {
@@ -186,19 +193,31 @@ pub(crate) fn area_filter(
     Ok(Some(AreaFilter { sparql, signature }))
 }
 
+/// What an `area=layer:{id}` filters: the features of `collection`, among `layers`, within
+/// `window` when it is a tile's.
+struct LayerArea<'a> {
+    collection: &'a Collection,
+    layers: &'a [Collection],
+    window: Option<&'a str>,
+}
+
 /// `area=layer:{id}`: the features of `collection` with a geometry in relation `rel` to one of
 /// the features of collection `id` (with its own filters), other than themselves. The two
-/// geometries meet in a spatial join, which the spatial index answers.
+/// geometries meet in a spatial join, which the spatial index answers. The matching features
+/// are worked out once for the query, never per feature (`disjoint` takes them away with
+/// MINUS); in a tile, only those in its window, against the other layer's features near it.
 fn layer_filter(
-    collection: &Collection,
-    layers: &[Collection],
+    entry: &Entry,
+    view: &View,
+    on: &LayerArea<'_>,
     id: &str,
     rel: Rel,
     dist: f64,
     params: &Params,
-    many: bool,
 ) -> Result<AreaFilter, HttpError> {
-    let other = layers
+    let collection = on.collection;
+    let other = on
+        .layers
         .iter()
         .find(|c| c.id == id)
         .ok_or_else(|| HttpError::bad_request(format!("area=layer:{id}: no such layer")))?;
@@ -207,16 +226,41 @@ fn layer_filter(
         Rel::DWithin => format!("<{GEOF}distance>(?areaW, ?areaBW, <{METRE}>) <= {dist:?}"),
         _ => format!("<{GEOF}{}>(?areaW, ?areaBW)", rel.function()),
     };
+    // In a tile: its features, against the other layer's within reach of the window.
+    let (mine, theirs) = match on.window {
+        Some(window) => {
+            let reach = match rel {
+                Rel::DWithin => {
+                    crs84(&Literal::new_typed_literal(window, NamedNode::new_unchecked(WKT)).into())
+                        .map_or_else(|| window.to_owned(), |g| widened_box(&g, dist))
+                }
+                _ => window.to_owned(),
+            };
+            (
+                collection
+                    .geometry
+                    .near(entry, view, "?f", window)
+                    .pattern("?f", "?areaW"),
+                other
+                    .geometry
+                    .near(entry, view, "?areaB", &reach)
+                    .pattern("?areaB", "?areaBW"),
+            )
+        }
+        None => (
+            collection.geometry.pattern("?f", "?areaW"),
+            other.geometry.pattern("?areaB", "?areaBW"),
+        ),
+    };
+    // The other layer's features in a sub-select of their own, where `?f` is theirs (their
+    // filters are over `?f`); their geometries outside it, for the spatial join.
     let pairs = format!(
-        "{{ SELECT DISTINCT (?f AS ?areaB) WHERE {{ ?f a <{}> . {chosen} }} }} {} {} \
+        "{{ SELECT DISTINCT (?f AS ?areaB) WHERE {{ ?f a <{}> . {chosen} }} }} {theirs} {mine} \
          FILTER(?f != ?areaB && {test})",
         other.class.as_str(),
-        other.geometry.pattern("?areaB", "?areaBW"),
-        collection.geometry.pattern("?f", "?areaW"),
     );
     let sparql = match rel {
-        Rel::Disjoint if many => format!(" MINUS {{ SELECT DISTINCT ?f WHERE {{ {pairs} }} }}"),
-        Rel::Disjoint => format!(" FILTER NOT EXISTS {{ {pairs} }}"),
+        Rel::Disjoint => format!(" MINUS {{ SELECT DISTINCT ?f WHERE {{ {pairs} }} }}"),
         _ => format!(" {{ SELECT DISTINCT ?f WHERE {{ {pairs} }} }}"),
     };
     let mut signature = format!("area={LAYER}{id}?{chosen_key}&rel={}", rel.name());

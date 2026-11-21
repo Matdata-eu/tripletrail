@@ -3291,7 +3291,11 @@ same error at once. Other failures (a memory limit) are tried again on the next 
     area, read as the caller sees the data. Or it is `layer:{id}`, "select by location": the
     features of collection `{id}` with a geometry, as that collection's own filters keep them
     (`{id}.{key}=…`, `.min`, `.max`, `.text`; never the bare ones), each feature taken
-    against every one of them but itself. The two geometries meet in a spatial join. The
+    against every one of them but itself. The two geometries meet in a spatial join, worked
+out once per request: a tile joins its own features with the other layer's near it, and
+`disjoint` takes the matching features away all at once. The other layer's filters still
+run over that whole layer for each tile (about 130 ms a tile with 5,000 areas and 60,000
+points), so a large layer is best narrowed by its filters. The
     OGC API's items take that collection's `{id}.{key}` filters too; an unknown collection is
     `400`.
   - `rel` is one of `intersects` (the default), `within`, `contains`, `touches`, `crosses`,

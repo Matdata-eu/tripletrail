@@ -1749,7 +1749,9 @@ fn items(
     if let Some(datetime) = params.get("datetime") {
         filter.push_str(&time_filter(&collection.time, datetime)?);
     }
-    if let Some(area) = crate::area::area_filter(entry, view, collection, layers, params, false)? {
+    if let Some(area) =
+        crate::area::area_filter(entry, view, collection, layers, None, params, false)?
+    {
         filter.push_str(&area.sparql);
     }
     if let Some(cql) = params.get("filter") {
