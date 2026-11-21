@@ -5,6 +5,7 @@
 pub use crate::spreadsheet::sheet_cells;
 use crate::{FxConfig, FxError, Options};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// The file a location names (a path, or a `file:` URL), resolved against
 /// [`FxConfig::base`], if [`FxConfig::allowed`] lets it be read.
@@ -90,7 +91,26 @@ impl Source {
 
 /// Reads the source the options name: `content`, else `location`. The `charset` option may
 /// only be UTF-8 for now.
-pub fn read(config: &FxConfig, options: &Options) -> Result<Source, FxError> {
+/// The scheme of a file held in memory: `location=upload:NAME`.
+pub const UPLOAD: &str = "upload:";
+
+/// Files held in memory, by `upload:NAME` ([`crate::FxService::with_upload`]).
+#[derive(Clone, Default)]
+pub struct Uploads(pub(crate) Arc<std::collections::HashMap<String, Arc<[u8]>>>);
+
+impl Uploads {
+    fn get(&self, location: &str) -> Result<Option<&Arc<[u8]>>, FxError> {
+        if !location.starts_with(UPLOAD) {
+            return Ok(None);
+        }
+        self.0
+            .get(location)
+            .map(Some)
+            .ok_or_else(|| FxError::Option(format!("{location}: no such upload")))
+    }
+}
+
+pub fn read(config: &FxConfig, uploads: &Uploads, options: &Options) -> Result<Source, FxError> {
     if let Some(charset) = options.get("charset")
         && !charset.eq_ignore_ascii_case("utf-8")
         && !charset.eq_ignore_ascii_case("utf8")
@@ -101,7 +121,9 @@ pub fn read(config: &FxConfig, options: &Options) -> Result<Source, FxError> {
     }
     if let (Some(archive), Some(location)) = (options.get("from-archive"), options.get("location"))
     {
-        let bytes = if crate::remote::is_remote(archive) {
+        let bytes = if let Some(bytes) = uploads.get(archive)? {
+            bytes.to_vec()
+        } else if crate::remote::is_remote(archive) {
             crate::remote::fetch(&config.remote, archive, options)?.bytes
         } else {
             let path = resolve(config, archive)?;
@@ -130,6 +152,15 @@ pub fn read(config: &FxConfig, options: &Options) -> Result<Source, FxError> {
         (Some(content), _) => Ok(Source {
             bytes: content.as_bytes().to_vec(),
             location: None,
+            media_type: None,
+            remote: false,
+        }),
+        (None, Some(location)) if location.starts_with(UPLOAD) => Ok(Source {
+            bytes: uploads
+                .get(location)?
+                .map(|b| b.to_vec())
+                .unwrap_or_default(),
+            location: Some((location.to_owned(), PathBuf::from(location))),
             media_type: None,
             remote: false,
         }),

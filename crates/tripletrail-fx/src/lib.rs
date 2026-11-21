@@ -167,6 +167,8 @@ type EachSlice<'a> = &'a mut dyn FnMut(&[Quad]) -> Result<(), FxError>;
 pub struct FxService {
     config: Arc<FxConfig>,
     backend: Arc<dyn Backend>,
+    /// Files held in memory, read as `location=upload:NAME` ([`FxService::with_upload`]).
+    uploads: sources::Uploads,
 }
 
 /// Evaluates a SERVICE pattern (as a SELECT `query`) on the quads built for it. `fx` is the
@@ -221,7 +223,30 @@ impl FxService {
         Self {
             config: Arc::new(config),
             backend: Arc::new(backend),
+            uploads: sources::Uploads::default(),
         }
+    }
+
+    /// The same service, also reading `bytes` as `location=upload:NAME` (and as
+    /// `from-archive=upload:NAME`): a file sent to a server that reads no files of its own
+    /// (the Import page). `name` is the file's name, whose extension says its format unless
+    /// the options do; it may use letters, digits and `.-_` only.
+    pub fn with_upload(&self, name: &str, bytes: Arc<[u8]>) -> Result<Self, FxError> {
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        {
+            return Err(FxError::Option(format!(
+                "upload {name:?}: a name of letters, digits and .-_ only"
+            )));
+        }
+        let mut uploads = (*self.uploads.0).clone();
+        uploads.insert(format!("{}{name}", sources::UPLOAD), bytes);
+        Ok(Self {
+            uploads: sources::Uploads(Arc::new(uploads)),
+            ..self.clone()
+        })
     }
 
     /// Whether `table=` and `sql=` sources have a database to read.
@@ -542,6 +567,7 @@ impl FxService {
             && options.get("from-archive").is_none()
             && let Some(location) = options.get("location")
             && !location.contains("://")
+            && !location.starts_with(sources::UPLOAD)
         {
             let path = sources::resolve(&self.config, location)?;
             if path.is_dir() {
@@ -551,7 +577,7 @@ impl FxService {
                 return Ok(sink.quads);
             }
         }
-        let source = sources::read(&self.config, options)?;
+        let source = sources::read(&self.config, &self.uploads, options)?;
         let bytes = source.bytes();
         let location = source
             .location
@@ -583,7 +609,11 @@ impl FxService {
             Format::Gpx => features::gpx(bytes, options, &mut sink)?,
             Format::Shapefile => match &source.location {
                 // The reader opens the .shx and .dbf next to the .shp itself.
-                Some((_, path)) if options.get("from-archive").is_none() && !source.remote => {
+                Some((location, path))
+                    if options.get("from-archive").is_none()
+                        && !source.remote
+                        && !location.starts_with(sources::UPLOAD) =>
+                {
                     // The .shx and .dbf next to it are read under the same rules: a link
                     // there to a file outside the allowed directories is denied.
                     for ext in ["shx", "dbf"] {
