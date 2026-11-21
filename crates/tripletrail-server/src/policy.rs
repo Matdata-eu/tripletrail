@@ -272,7 +272,7 @@ mod tests {
             "{PREFIXES}
             ex:Open a sg:Policy ; sg:agent sg:Anyone ; sg:readAllGraphs true .
             ex:Staff a sg:Policy ; sg:agent sg:AuthenticatedAgent ; sg:readAllGraphs true .
-            ex:Writers a sg:Policy ; sg:group \"dim-assets\" ; sg:writeAllGraphs true .
+            ex:Writers a sg:Policy ; sg:group \"asset-team\" ; sg:writeAllGraphs true .
             ex:Jan a sg:Policy ; sg:agent <https://example.org/people/jan> ; sg:readAllGraphs false .
             ex:NotAPolicy sg:readAllGraphs true ."
         ))
@@ -288,7 +288,7 @@ mod tests {
         assert!(by("Staff").applies_to(Some("urn:x"), &[]));
         let writers = by("Writers");
         assert!(writers.write && writers.read);
-        assert!(writers.applies_to(Some("urn:x"), &["dim-assets".to_owned()]));
+        assert!(writers.applies_to(Some("urn:x"), &["asset-team".to_owned()]));
         assert!(!writers.applies_to(Some("urn:x"), &["other".to_owned()]));
         let jan = by("Jan");
         assert!(jan.applies_to(Some("https://example.org/people/jan"), &[]) && !jan.read);

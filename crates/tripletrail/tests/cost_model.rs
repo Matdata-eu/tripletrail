@@ -775,3 +775,35 @@ fn joins_on_ids_in_a_service_sub_select() {
     assert!(on_ids(&e.last_spatial_stats().decisions).is_some());
     assert_eq!(window, main);
 }
+
+/// With the union default graph, the estimates count every graph, as the query reads them
+/// (#89): data in named graphs only no longer looks empty, so a small window injects its
+/// candidates instead of leaving every geometry to the FILTER.
+#[test]
+fn the_union_default_graph_estimates_every_graph() {
+    let e = Engine::new_tripletrail();
+    let in_graph = |quads: Vec<Quad>, g: usize| -> Vec<Quad> {
+        let g = nn(format!("{EX}graph{g}"));
+        quads
+            .into_iter()
+            .map(|q| Quad::new(q.subject, q.predicate, q.object, g.clone()))
+            .collect()
+    };
+    e.load_quads(in_graph(grid("a", "Station", 400, 20, 0.0, 0.0, 1.0), 1))
+        .unwrap();
+    e.load_quads(in_graph(grid("b", "Station", 400, 20, 30.0, 0.0, 1.0), 2))
+        .unwrap();
+    e.set_union_default_graph(true);
+    let q = r#"SELECT ?x WHERE { ?x geo:asWKT ?w .
+        FILTER(geof:sfIntersects(?w, "POLYGON((2.5 2.5, 4.5 2.5, 4.5 4.5, 2.5 4.5, 2.5 2.5))"^^geo:wktLiteral)) }"#;
+    let (n, decisions) = check(&e, q);
+    assert_eq!(n, 4);
+    let (candidates, rows, inject) = constant(&decisions);
+    assert!(inject, "{decisions:?}");
+    assert_eq!(rows, 800.0, "{decisions:?}");
+    assert!(candidates < 20, "{decisions:?}");
+    assert_eq!(e.last_spatial_stats().skipped, 0);
+    // Without the union, the default graph is empty and the window answers nothing.
+    e.set_union_default_graph(false);
+    assert_eq!(check(&e, q).0, 0);
+}

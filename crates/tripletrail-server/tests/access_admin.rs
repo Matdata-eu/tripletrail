@@ -17,7 +17,7 @@ fn start(dir: &Path) -> String {
     let config = format!(
         r#"{{"auth": {{"anonymous": true, "apiKeys": [
             {{"sha256": "{}", "agent": "https://example.org/people/admin", "groups": ["tripletrail:admin"], "label": "ops"}},
-            {{"sha256": "{}", "agent": "https://example.org/people/contractor", "groups": ["dim-readers"], "expires": "2099-01-01"}}
+            {{"sha256": "{}", "agent": "https://example.org/people/contractor", "groups": ["asset-readers"], "expires": "2099-01-01"}}
         ]}}}}"#,
         hash("admin"),
         hash("contractor"),
@@ -26,17 +26,18 @@ fn start(dir: &Path) -> String {
     let rinf = Engine::new_tripletrail();
     rinf.load(RdfFormat::NTriples, &b"<urn:s> <urn:p> \"o\" .\n"[..])
         .unwrap();
-    let dim = Engine::new_tripletrail();
-    dim.load(
-        RdfFormat::TriG,
-        &br#"<urn:dim:release> { <urn:a> <urn:p> 1 . <urn:b> <urn:p> 2 }
-             <urn:dim:wip> { <urn:c> <urn:p> 3 }
-             <urn:meta> { <urn:dim:release> <http://purl.org/dc/terms/title> "Release" }"#[..],
-    )
-    .unwrap();
+    let assets = Engine::new_tripletrail();
+    assets
+        .load(
+            RdfFormat::TriG,
+            &br#"<urn:assets:release> { <urn:a> <urn:p> 1 . <urn:b> <urn:p> 2 }
+             <urn:assets:wip> { <urn:c> <urn:p> 3 }
+             <urn:meta> { <urn:assets:release> <http://purl.org/dc/terms/title> "Release" }"#[..],
+        )
+        .unwrap();
     let server = Server::bind(
         "127.0.0.1:0",
-        [("rinf".to_owned(), rinf), ("dim".to_owned(), dim)],
+        [("rinf".to_owned(), rinf), ("assets".to_owned(), assets)],
         Options {
             threads: 2,
             auth_config: Some(dir.join("guard.json")),
@@ -74,7 +75,7 @@ fn as_key(request: ureq::Request, key: &str) -> ureq::Request {
 }
 
 #[test]
-fn an_admin_opens_rinf_and_gives_dim_to_a_group() {
+fn an_admin_opens_rinf_and_gives_assets_to_a_group() {
     let dir = tripletrail_testdir::tempdir("access");
     let base = start(&dir);
     let get = |path: &str, key: &str| call(as_key(ureq::get(&format!("{base}{path}")), key), None);
@@ -107,7 +108,7 @@ fn an_admin_opens_rinf_and_gives_dim_to_a_group() {
         .iter()
         .map(|d| d["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["dim", "rinf"]);
+    assert_eq!(names, ["assets", "rinf"]);
     let keys = overview["keys"].as_array().unwrap();
     assert_eq!(keys[0]["label"], "ops");
     assert_eq!(keys[1]["expires"], "2099-01-01");
@@ -121,14 +122,14 @@ fn an_admin_opens_rinf_and_gives_dim_to_a_group() {
         .iter()
         .map(|g| g["name"].as_str().unwrap())
         .collect();
-    assert!(groups.contains(&"dim-readers") && groups.contains(&"tripletrail:admin"));
+    assert!(groups.contains(&"asset-readers") && groups.contains(&"tripletrail:admin"));
 
     // The graph matrix rows: graphs, counts and labels.
-    let (status, graphs) = get("/$/access/datasets/dim/graphs", "admin");
+    let (status, graphs) = get("/$/access/datasets/assets/graphs", "admin");
     assert_eq!(status, 200, "{graphs}");
     assert_eq!(
         graphs["graphs"][0],
-        json!({"graph": "urn:dim:release", "triples": 2, "label": "Release"})
+        json!({"graph": "urn:assets:release", "triples": 2, "label": "Release"})
     );
     assert_eq!(graphs["graphs"].as_array().unwrap().len(), 3);
 
@@ -153,14 +154,14 @@ fn an_admin_opens_rinf_and_gives_dim_to_a_group() {
     assert!(config.contains("policies/rinf.ttl"), "{config}");
     assert_eq!(ask("rinf", None, "ASK { ?s ?p ?o }").0, 200);
     // Policies are on: the KG, without any, is closed.
-    assert_eq!(ask("dim", Some("contractor"), "ASK {}").0, 403);
+    assert_eq!(ask("assets", Some("contractor"), "ASK {}").0, 403);
 
     // The KG: the contractors' group reads the release graph only.
     let contractors = json!({"id": "https://example.org/policies/Contractors",
-        "groups": ["dim-readers"], "readGraphs": ["urn:dim:release"]});
-    assert_eq!(put("dim", contractors.clone()).0, 200);
+        "groups": ["asset-readers"], "readGraphs": ["urn:assets:release"]});
+    assert_eq!(put("assets", contractors.clone()).0, 200);
     let (status, answer) = ask(
-        "dim",
+        "assets",
         Some("contractor"),
         "SELECT (COUNT(*) AS ?n) { ?s ?p ?o }",
     );
@@ -168,28 +169,28 @@ fn an_admin_opens_rinf_and_gives_dim_to_a_group() {
     assert_eq!(answer["results"]["bindings"][0]["n"]["value"], "2");
 
     // A comment and a policy written by hand survive a change made through the API.
-    let file = dir.join("policies/dim.ttl");
+    let file = dir.join("policies/assets.ttl");
     let text = std::fs::read_to_string(&file).unwrap();
     std::fs::write(
         &file,
         format!(
-            "# Kept by the asset team.\n{text}\n# Writers, by hand.\n<https://example.org/policies/Writers> a sg:Policy ; sg:group \"dim-assets\" ; sg:writeAllGraphs true .\n"
+            "# Kept by the asset team.\n{text}\n# Writers, by hand.\n<https://example.org/policies/Writers> a sg:Policy ; sg:group \"asset-team\" ; sg:writeAllGraphs true .\n"
         ),
     )
     .unwrap();
     let mut wider = contractors.clone();
-    wider["readGraphs"] = json!(["urn:dim:release", "urn:dim:wip"]);
-    assert_eq!(put("dim", wider).0, 200);
+    wider["readGraphs"] = json!(["urn:assets:release", "urn:assets:wip"]);
+    assert_eq!(put("assets", wider).0, 200);
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(text.contains("# Kept by the asset team.") && text.contains("# Writers, by hand."));
-    assert!(text.contains("sg:readGraph <urn:dim:wip>"), "{text}");
+    assert!(text.contains("sg:readGraph <urn:assets:wip>"), "{text}");
     let (_, overview) = get("/$/access", "admin");
-    let dim = &overview["datasets"][0];
-    assert_eq!(dim["ownPolicies"], true);
-    assert_eq!(dim["policies"].as_array().unwrap().len(), 2);
+    let assets = &overview["datasets"][0];
+    assert_eq!(assets["ownPolicies"], true);
+    assert_eq!(assets["policies"].as_array().unwrap().len(), 2);
     assert_eq!(
         ask(
-            "dim",
+            "assets",
             Some("contractor"),
             "SELECT (COUNT(*) AS ?n) { ?s ?p ?o }"
         )
@@ -198,21 +199,24 @@ fn an_admin_opens_rinf_and_gives_dim_to_a_group() {
     );
 
     // A policy that would not load changes nothing.
-    let (status, _) = put("dim", json!({"id": "https://example.org/policies/Nobody"}));
+    let (status, _) = put(
+        "assets",
+        json!({"id": "https://example.org/policies/Nobody"}),
+    );
     assert_eq!(status, 422);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
 
     // Removing a policy.
     let (status, _) = call(
         as_key(
-            ureq::delete(&format!("{base}/$/access/datasets/dim/policies"))
+            ureq::delete(&format!("{base}/$/access/datasets/assets/policies"))
                 .query("id", "https://example.org/policies/Contractors"),
             "admin",
         ),
         None,
     );
     assert_eq!(status, 204);
-    assert_eq!(ask("dim", Some("contractor"), "ASK {}").0, 403);
+    assert_eq!(ask("assets", Some("contractor"), "ASK {}").0, 403);
     assert!(
         std::fs::read_to_string(&file)
             .unwrap()
@@ -274,7 +278,7 @@ fn an_admin_creates_and_revokes_a_key() {
     let count = |key: &str| {
         call(
             as_key(
-                ureq::get(&format!("{base}/dim/query"))
+                ureq::get(&format!("{base}/assets/query"))
                     .query("query", "SELECT (COUNT(*) AS ?n) { GRAPH ?g { ?s ?p ?o } }"),
                 key,
             ),
@@ -303,7 +307,7 @@ fn an_admin_creates_and_revokes_a_key() {
 
     let (status, created) = post(
         json!({"label": "asset team", "agent": "https://example.org/people/assets",
-               "groups": ["dim-assets"], "datasets": ["dim"], "expires": "2099-12-31"}),
+               "groups": ["asset-team"], "datasets": ["assets"], "expires": "2099-12-31"}),
         "admin",
     );
     assert_eq!(status, 201, "{created}");
@@ -340,9 +344,9 @@ fn an_admin_creates_and_revokes_a_key() {
         .unwrap()
         .clone();
     assert_eq!(shown["label"], "asset team");
-    assert_eq!(shown["groups"], json!(["dim-assets"]));
+    assert_eq!(shown["groups"], json!(["asset-team"]));
     assert!(shown["lastUsed"].is_string(), "{shown}");
-    assert!(overview["groups"].to_string().contains("dim-assets"));
+    assert!(overview["groups"].to_string().contains("asset-team"));
 
     // Revoking: unknown ids are 404, and the key stops working at once.
     let delete = |id: &str| {
@@ -378,16 +382,16 @@ fn an_admin_views_a_dataset_as_someone_else() {
     let base = start(&dir);
     let (status, _) = call(
         as_key(
-            ureq::put(&format!("{base}/$/access/datasets/dim/policies")),
+            ureq::put(&format!("{base}/$/access/datasets/assets/policies")),
             "admin",
         ),
         Some(&json!({"id": "https://example.org/policies/Contractors",
-                     "groups": ["dim-readers"], "readGraphs": ["urn:dim:release"]})),
+                     "groups": ["asset-readers"], "readGraphs": ["urn:assets:release"]})),
     );
     assert_eq!(status, 200);
     let count = |key: &str, view: Option<(&str, &str)>| {
         let mut request = as_key(
-            ureq::get(&format!("{base}/dim/query"))
+            ureq::get(&format!("{base}/assets/query"))
                 .query("query", "SELECT (COUNT(*) AS ?n) { GRAPH ?g { ?s ?p ?o } }"),
             key,
         );
@@ -406,7 +410,7 @@ fn an_admin_views_a_dataset_as_someone_else() {
     };
     // The admin sees everything; viewing as a contractor, what the contractor sees.
     assert_eq!(count("admin", None), (200, Some("4".to_owned())));
-    let contractor = ("https://example.org/people/someone", "dim-readers");
+    let contractor = ("https://example.org/people/someone", "asset-readers");
     assert_eq!(
         count("admin", Some(contractor)),
         (200, Some("2".to_owned()))
@@ -422,7 +426,7 @@ fn an_admin_views_a_dataset_as_someone_else() {
         403
     );
     let request = as_key(
-        ureq::get(&format!("{base}/dim/query")).query("query", "ASK {}"),
+        ureq::get(&format!("{base}/assets/query")).query("query", "ASK {}"),
         "admin",
     )
     .set("X-TripleTrail-View-As", "anonymous");
@@ -459,8 +463,8 @@ fn every_change_is_kept_and_can_be_restored() {
     );
     assert_eq!(
         put(
-            "dim",
-            json!({"id": "urn:p:contractors", "groups": ["dim-readers"], "readGraphs": ["urn:dim:release"]})
+            "assets",
+            json!({"id": "urn:p:contractors", "groups": ["asset-readers"], "readGraphs": ["urn:assets:release"]})
         ),
         200
     );
@@ -475,7 +479,7 @@ fn every_change_is_kept_and_can_be_restored() {
     assert_eq!(
         changes,
         [
-            "Policy urn:p:contractors of dim written",
+            "Policy urn:p:contractors of assets written",
             "Policy urn:p:public of rinf written",
             "As found"
         ]
@@ -514,17 +518,17 @@ fn every_change_is_kept_and_can_be_restored() {
     let key = created["key"].as_str().unwrap().to_owned();
     // An operator edits a policy file by hand; the restore below undoes that too, so the
     // edited files are kept first.
-    let dim_file = dir.join("policies/dim.ttl");
-    let edited = std::fs::read_to_string(&dim_file)
+    let assets_file = dir.join("policies/assets.ttl");
+    let edited = std::fs::read_to_string(&assets_file)
         .unwrap()
-        .replace("urn:dim:release", "urn:dim:wip");
-    std::fs::write(&dim_file, &edited).unwrap();
+        .replace("urn:assets:release", "urn:assets:wip");
+    std::fs::write(&assets_file, &edited).unwrap();
     // What a restore of version 1 would change now, and no full key hashes.
     let (_, shown) = call(
         admin(ureq::get(&format!("{base}/$/access/history/1"))),
         None,
     );
-    assert!(shown["current"].to_string().contains("urn:dim:wip"));
+    assert!(shown["current"].to_string().contains("urn:assets:wip"));
     assert!(!shown.to_string().contains(&hash(&key)), "hashes are cut");
     assert!(shown.to_string().contains(&hash(&key)[..8]));
     let (status, reply) = call(
@@ -542,7 +546,7 @@ fn every_change_is_kept_and_can_be_restored() {
     // Without policies, the contractor reads every KG graph again.
     let (status, answer) = call(
         as_key(
-            ureq::get(&format!("{base}/dim/query"))
+            ureq::get(&format!("{base}/assets/query"))
                 .query("query", "SELECT (COUNT(*) AS ?n) { GRAPH ?g { ?s ?p ?o } }"),
             "contractor",
         ),
@@ -563,7 +567,7 @@ fn every_change_is_kept_and_can_be_restored() {
         None,
     );
     assert!(
-        kept["files"].to_string().contains("urn:dim:wip"),
+        kept["files"].to_string().contains("urn:assets:wip"),
         "the hand edit is kept"
     );
     // The files made after version 1 are gone, so the same changes can be made again.
@@ -588,16 +592,16 @@ fn updates_during_a_policy_swap_apply_whole_or_not_at_all() {
     let policy = |graphs: &[&str]| {
         let (status, reply) = call(
             as_key(
-                ureq::put(&format!("{base}/$/access/datasets/dim/policies")),
+                ureq::put(&format!("{base}/$/access/datasets/assets/policies")),
                 "admin",
             ),
             Some(&json!({"id": "https://example.org/policies/Editors",
-                         "groups": ["dim-readers"], "readAllGraphs": true, "writeGraphs": graphs})),
+                         "groups": ["asset-readers"], "readAllGraphs": true, "writeGraphs": graphs})),
         );
         assert_eq!(status, 200, "{reply}");
     };
-    let narrow = ["urn:dim:wip"];
-    let wide = ["urn:dim:wip", "urn:dim:release"];
+    let narrow = ["urn:assets:wip"];
+    let wide = ["urn:assets:wip", "urn:assets:release"];
     policy(&narrow);
     let swapping = AtomicBool::new(true);
     let started = std::time::Instant::now();
@@ -618,17 +622,17 @@ fn updates_during_a_policy_swap_apply_whole_or_not_at_all() {
                         // One operation over both graphs, or one per graph.
                         let update = if i % 2 == 0 {
                             format!(
-                                "INSERT DATA {{ GRAPH <urn:dim:wip> {{ <{s}> <urn:p> 1 }} \
-                                 GRAPH <urn:dim:release> {{ <{s}> <urn:p> 1 }} }}"
+                                "INSERT DATA {{ GRAPH <urn:assets:wip> {{ <{s}> <urn:p> 1 }} \
+                                 GRAPH <urn:assets:release> {{ <{s}> <urn:p> 1 }} }}"
                             )
                         } else {
                             format!(
-                                "INSERT DATA {{ GRAPH <urn:dim:wip> {{ <{s}> <urn:p> 1 }} }} ; \
-                                 INSERT DATA {{ GRAPH <urn:dim:release> {{ <{s}> <urn:p> 1 }} }}"
+                                "INSERT DATA {{ GRAPH <urn:assets:wip> {{ <{s}> <urn:p> 1 }} }} ; \
+                                 INSERT DATA {{ GRAPH <urn:assets:release> {{ <{s}> <urn:p> 1 }} }}"
                             )
                         };
                         let request =
-                            as_key(ureq::post(&format!("{base}/dim/update")), "contractor")
+                            as_key(ureq::post(&format!("{base}/assets/update")), "contractor")
                                 .set("Content-Type", "application/sparql-update");
                         let status = match request.send_string(&update) {
                             Ok(r) => r.status(),
@@ -656,7 +660,7 @@ fn updates_during_a_policy_swap_apply_whole_or_not_at_all() {
     });
     let (_, reply) = call(
         as_key(
-            ureq::get(&format!("{base}/dim/query")).query(
+            ureq::get(&format!("{base}/assets/query")).query(
                 "query",
                 "SELECT ?g ?s { GRAPH ?g { ?s <urn:p> 1 } FILTER(STRSTARTS(STR(?s), \"urn:w\")) }",
             ),
@@ -681,7 +685,7 @@ fn updates_during_a_policy_swap_apply_whole_or_not_at_all() {
         match status {
             200 => {
                 applied += 1;
-                assert_eq!(graphs, ["urn:dim:release", "urn:dim:wip"], "{s}");
+                assert_eq!(graphs, ["urn:assets:release", "urn:assets:wip"], "{s}");
             }
             403 => {
                 refused += 1;
@@ -708,7 +712,7 @@ fn with_review_a_second_admin_approves_each_change() {
         r#"{{"auth": {{"review": true, "apiKeys": [
             {{"sha256": "{}", "agent": "https://example.org/people/ann", "groups": ["tripletrail:admin"]}},
             {{"sha256": "{}", "agent": "https://example.org/people/bob", "groups": ["tripletrail:admin"]}},
-            {{"sha256": "{}", "agent": "https://example.org/people/eve", "groups": ["dim-readers"]}}
+            {{"sha256": "{}", "agent": "https://example.org/people/eve", "groups": ["asset-readers"]}}
         ]}}}}"#,
         hash("ann"),
         hash("bob"),
@@ -717,7 +721,7 @@ fn with_review_a_second_admin_approves_each_change() {
     std::fs::write(dir.join("guard.json"), config).unwrap();
     let server = Server::bind(
         "127.0.0.1:0",
-        [("dim".to_owned(), Engine::new_tripletrail())],
+        [("assets".to_owned(), Engine::new_tripletrail())],
         Options {
             threads: 2,
             auth_config: Some(dir.join("guard.json")),
@@ -727,15 +731,15 @@ fn with_review_a_second_admin_approves_each_change() {
     .unwrap();
     let base = format!("http://{}", server.address());
     server.spawn();
-    let policy = json!({"id": "urn:p:readers", "groups": ["dim-readers"], "readAllGraphs": true});
+    let policy = json!({"id": "urn:p:readers", "groups": ["asset-readers"], "readAllGraphs": true});
     // The policy file the change writes.
-    let written = || dir.join("policies").join("dim.ttl").exists();
+    let written = || dir.join("policies").join("assets.ttl").exists();
     assert!(!written());
 
     // Ann proposes: nothing changes yet.
     let (status, proposal) = call(
         as_key(
-            ureq::put(&format!("{base}/$/access/datasets/dim/policies")),
+            ureq::put(&format!("{base}/$/access/datasets/assets/policies")),
             "ann",
         ),
         Some(&policy),
@@ -745,7 +749,7 @@ fn with_review_a_second_admin_approves_each_change() {
     assert_eq!(proposal["by"], "https://example.org/people/ann");
     assert_eq!(
         proposal["description"],
-        "Policy urn:p:readers of dim written"
+        "Policy urn:p:readers of assets written"
     );
     let n = proposal["proposal"].as_u64().unwrap();
     assert!(!written());
@@ -753,7 +757,7 @@ fn with_review_a_second_admin_approves_each_change() {
     assert_eq!(
         call(
             as_key(
-                ureq::put(&format!("{base}/$/access/datasets/dim/policies")),
+                ureq::put(&format!("{base}/$/access/datasets/assets/policies")),
                 "ann"
             ),
             Some(&json!({"groups": ["x"]})),
@@ -794,7 +798,7 @@ fn with_review_a_second_admin_approves_each_change() {
     assert_eq!(
         history["versions"][0]["change"],
         format!(
-            "Policy urn:p:readers of dim written (proposal {n} by https://example.org/people/ann, approved)"
+            "Policy urn:p:readers of assets written (proposal {n} by https://example.org/people/ann, approved)"
         )
     );
     assert_eq!(
@@ -813,7 +817,7 @@ fn with_review_a_second_admin_approves_each_change() {
     assert!(made["key"].as_str().unwrap().starts_with("mg_"));
     let (status, plain) = call(
         as_key(ureq::post(&format!("{base}/$/access/keys")), "ann"),
-        Some(&json!({"agent": "https://example.org/people/reader", "groups": ["dim-readers"]})),
+        Some(&json!({"agent": "https://example.org/people/reader", "groups": ["asset-readers"]})),
     );
     assert_eq!(status, 201, "{plain}");
 
@@ -866,7 +870,7 @@ fn review_is_not_got_round_by_view_as_or_the_admin_token() {
     std::fs::write(dir.join("guard.json"), config).unwrap();
     let server = Server::bind(
         "127.0.0.1:0",
-        [("dim".to_owned(), Engine::new_tripletrail())],
+        [("assets".to_owned(), Engine::new_tripletrail())],
         Options {
             threads: 2,
             auth_config: Some(dir.join("guard.json")),

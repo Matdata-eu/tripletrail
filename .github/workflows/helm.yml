@@ -48,7 +48,7 @@ jobs:
           helm template t deploy/helm/tripletrail \
             --set adminToken.value=x --set updateToken.existingSecret=u \
             --set authConfig.enabled=true --set limits.enabled=true \
-            --set 'attach[0]=dim=/data/dim:ro' --set 'aliases[0]=kg=dim' \
+            --set 'attach[0]=assets=/data/assets:ro' --set 'aliases[0]=kg=assets' \
             --set ingress.enabled=true --set metrics.serviceMonitor.enabled=true \
             --set persistence.existingClaim=data > all.yaml
           helm template t deploy/helm/tripletrail --set persistence.enabled=false > minimal.yaml
