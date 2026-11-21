@@ -222,8 +222,10 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   memory.
 - `--threads` (4 by default) is the number of worker threads that answer requests.
   `--query-threads` (`TRIPLETRAIL_QUERY_THREADS`, 0 by default: as many as cores) is the size
-  of the pool that large joins, `OPTIONAL`, `MINUS` and `EXISTS` of one query run on; the
-  queries share it, and 1 keeps each query on its own thread. The SHACL rules of an `infer`
+  of the pool that large joins (the sorted joins of a basic graph pattern too), `OPTIONAL`,
+  `MINUS`, `EXISTS`, `FILTER`, `GROUP BY` and the aggregates of its groups run on, for one
+  query; the queries share it, and 1 keeps each query on its own thread. The answers, and
+  their order, are the same with any number. The SHACL rules of an `infer`
   step run on as many threads at once (#891); 1 runs them one at a time.
 - `--functions functions.ttl` (repeatable; `TRIPLETRAIL_FUNCTIONS`, comma-separated) loads
   SHACL-AF `sh:SPARQLFunction`s that the queries and updates of every dataset can call by their

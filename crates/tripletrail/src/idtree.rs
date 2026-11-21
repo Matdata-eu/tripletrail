@@ -2794,6 +2794,13 @@ pub(crate) fn group_rows(t: &Table, keys: &[Variable], max_groups: usize) -> Opt
         key.clear();
         key.extend(key_cols.iter().map(|c| c.map_or(UNBOUND, |c| row[c])));
     };
+    // A large table on several cores: split by key (#4).
+    if t.len() >= tripletrail_store::par::PARALLEL_ROWS
+        && tripletrail_store::par::query_threads() > 1
+    {
+        let (index, of) = partitioned_groups(t, &key_cols, max_groups)?;
+        return Some(grouped(index, &of, width));
+    }
     // Each chunk numbers its own groups, in the order they first come; its rows get the
     // number of their group.
     let parts = tripletrail_store::par::chunks(t.len(), |range| {
@@ -2817,10 +2824,15 @@ pub(crate) fn group_rows(t: &Table, keys: &[Variable], max_groups: usize) -> Opt
             .collect::<Option<_>>()?;
         of.extend(local_of.into_iter().map(|g| global[g as usize]));
     }
+    Some(grouped(index, &of, width))
+}
+
+/// The groups of `index`, whose rows are numbered by `of` (the group of each row).
+fn grouped(index: GroupIndex, of: &[u32], width: usize) -> Groups {
     // The rows of each group, in row order, one after the other.
     let groups = index.len();
     let mut starts = vec![0u32; groups + 1];
-    for &g in &of {
+    for &g in of {
         starts[g as usize + 1] += 1;
     }
     for g in 0..groups {
@@ -2832,12 +2844,108 @@ pub(crate) fn group_rows(t: &Table, keys: &[Variable], max_groups: usize) -> Opt
         rows[next[g as usize] as usize] = r as u32;
         next[g as usize] += 1;
     }
-    Some(Groups {
+    Groups {
         width,
         keys: index.keys,
         starts,
         rows,
+    }
+}
+
+/// The groups of the rows of `t` by the values of columns `key_cols` on several cores (#4),
+/// numbered as one pass in row order numbers them, and the group of each row: the rows split
+/// by the hash of their key into parts, one group index per part, so no key is in two parts.
+/// The groups of all parts are then numbered in the order of their first rows. `None` past
+/// `max_groups` groups.
+fn partitioned_groups(
+    t: &Table,
+    key_cols: &[Option<usize>],
+    max_groups: usize,
+) -> Option<(GroupIndex, Vec<u32>)> {
+    use tripletrail_store::par;
+    let width = key_cols.len();
+    let n = t.len();
+    let key_of = |r: usize, key: &mut Vec<TermId>| {
+        let row = t.row(r);
+        key.clear();
+        key.extend(key_cols.iter().map(|c| c.map_or(UNBOUND, |c| row[c])));
+    };
+    let hashes: Vec<u64> = par::chunks(n, |range| {
+        let mut key = Vec::with_capacity(width);
+        range
+            .map(|r| {
+                key_of(r, &mut key);
+                hash_ids(key.iter().copied())
+            })
+            .collect::<Vec<u64>>()
     })
+    .concat();
+    let parts = par::query_threads();
+    let part_of = |h: u64| (h >> 40) as usize % parts;
+    // Each part: its groups, the first row of each, and its rows with their group.
+    let built = par::chunks_sized(parts, 0, 1, |range| {
+        range
+            .map(|p| {
+                let mut index = GroupIndex::new(width);
+                let mut firsts: Vec<u32> = Vec::new();
+                let mut of: Vec<(u32, u32)> = Vec::new();
+                let mut key = Vec::with_capacity(width);
+                for (r, &h) in hashes.iter().enumerate() {
+                    if part_of(h) != p {
+                        continue;
+                    }
+                    key_of(r, &mut key);
+                    let g = index.find_or_insert_hashed(&key, h, max_groups)?;
+                    if g as usize == firsts.len() {
+                        firsts.push(r as u32);
+                    }
+                    of.push((r as u32, g));
+                }
+                Some((index, firsts, of))
+            })
+            .collect::<Option<Vec<_>>>()
+    });
+    let built: Vec<_> = built
+        .into_iter()
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+    let total: usize = built.iter().map(|(index, ..)| index.len()).sum();
+    if total > max_groups {
+        return None;
+    }
+    // Every group by its first row: the order one pass gives them.
+    let mut order: Vec<(u32, u32, u32)> = Vec::with_capacity(total);
+    for (p, (_, firsts, _)) in built.iter().enumerate() {
+        order.extend(
+            firsts
+                .iter()
+                .enumerate()
+                .map(|(g, &first)| (first, p as u32, g as u32)),
+        );
+    }
+    par::sort_unstable(&mut order);
+    let mut global: Vec<Vec<u32>> = built
+        .iter()
+        .map(|(index, ..)| vec![0; index.len()])
+        .collect();
+    let mut index = GroupIndex::new(width);
+    index.keys.reserve(total * width);
+    index.chain.reserve(total);
+    for (number, &(_, p, g)) in order.iter().enumerate() {
+        global[p as usize][g as usize] = number as u32;
+        index.keys.extend_from_slice(built[p as usize].0.key(g));
+        // The numbers are all `index` is read for after this (`len` and `key`).
+        index.chain.push(END);
+    }
+    let mut of = vec![0u32; n];
+    for (p, (_, _, rows)) in built.iter().enumerate() {
+        for &(r, g) in rows {
+            of[r as usize] = global[p][g as usize];
+        }
+    }
+    Some((index, of))
 }
 
 /// The groups of a table, in the order they first come, without an allocation per group.
@@ -2894,10 +3002,17 @@ impl GroupIndex {
 
     /// The number of the group of `key`, a new one for a new key. `None` past `max_groups`.
     fn find_or_insert(&mut self, key: &[TermId], max_groups: usize) -> Option<u32> {
-        let head = self
-            .heads
-            .entry(hash_ids(key.iter().copied()))
-            .or_insert(END);
+        self.find_or_insert_hashed(key, hash_ids(key.iter().copied()), max_groups)
+    }
+
+    /// [`GroupIndex::find_or_insert`] of a key whose hash is `hash`.
+    fn find_or_insert_hashed(
+        &mut self,
+        key: &[TermId],
+        hash: u64,
+        max_groups: usize,
+    ) -> Option<u32> {
+        let head = self.heads.entry(hash).or_insert(END);
         let mut g = *head;
         while g != END {
             let at = g as usize * self.width;
