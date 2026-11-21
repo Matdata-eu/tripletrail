@@ -213,6 +213,139 @@ fn check_executor(engine: &Engine) {
     }
 }
 
+/// `BIND` and `SELECT (expr AS ?v)` (#11): copies, constants and numbers computed on ids, as
+/// the terms the evaluator gives; errors unbound. `ids` says whether the id executor must
+/// answer it (else it may leave it to the evaluator).
+const BINDS: &[(&str, bool)] = &[
+    ("SELECT ?s ?y WHERE { ?s ex:val ?x BIND(?x AS ?y) }", true),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:val ?x } BIND(?x AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?k ?l WHERE { ?s a ex:C1 BIND(ex:k AS ?k) BIND(\"text\"@en AS ?l) }",
+        true,
+    ),
+    ("SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x + 1 AS ?y) }", true),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:d ?x BIND(?x * 1.5 AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:f ?x BIND(?x * 2.5e0 AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x ; ex:d ?d BIND(-?x - ?d AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:d ?x BIND(ABS(?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x ; ex:f ?f BIND(?x * ?f AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(?nope + 1 AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } BIND(?x * 2 AS ?y) }",
+        true,
+    ),
+    ("SELECT ?s (?x * 3 AS ?y) WHERE { ?s ex:n ?x }", true),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x + 1 AS ?y) FILTER(?y > 3) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:f ?x ; ex:n ?n BIND(?x * ?n AS ?y) FILTER(?y > 50000 && ?y < 900000) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:d ?x BIND(?x * 1.21 AS ?y) FILTER(?y != 2.42 || BOUND(?x)) }",
+        true,
+    ),
+    (
+        "SELECT DISTINCT ?y WHERE { ?s ex:d ?x BIND(?x * 0 AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT DISTINCT ?y WHERE { ?s ex:f ?x BIND(?x * 0 AS ?y) }",
+        true,
+    ),
+    // Left to the evaluator: an order on a computed value, values the ids don't decide, a
+    // division, a string function, an overflow.
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x * 2 AS ?y) } ORDER BY DESC(?y) ?s LIMIT 9",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x * 2 AS ?y) FILTER(BOUND(?y)) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(?x + 1 AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x / 2 AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(UCASE(?l) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x + 9223372036854775807 AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:huge ?x BIND(?x + 1 AS ?y) }",
+        false,
+    ),
+];
+
+#[test]
+fn binds_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, data().as_bytes()).unwrap();
+    // Numbers of each kind, negative, zero and large ones among them.
+    let mut numbers = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..400_i64 {
+        let n = (i - 200) * 37;
+        // Decimals and doubles in the forms the store inlines (no trailing zero, no exponent).
+        numbers.push_str(&format!(
+            "ex:s{i} ex:n {n} ; ex:d {}.{} ; ex:f \"{n}.5\"^^<http://www.w3.org/2001/XMLSchema#double> .\n",
+            n / 7,
+            i % 9 + 1,
+        ));
+    }
+    numbers.push_str("ex:big ex:huge 9223372036854775000 .\n");
+    engine.load(RdfFormat::Turtle, numbers.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    for &(q, on_ids) in BINDS {
+        let ordered_query = q.contains("ORDER BY");
+        let run = |executor: &str| {
+            let q = format!("#pragma tt.executor {executor}\n{prefix} {q}");
+            if ordered_query {
+                ordered(&engine, &q)
+            } else {
+                rows(&engine, &q)
+            }
+        };
+        assert_eq!(run("ids"), run("spareval"), "{q}");
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        if on_ids {
+            assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+        }
+    }
+}
+
 #[test]
 fn the_id_executor_answers_as_the_evaluator() {
     let engine = Engine::new_tripletrail();

@@ -587,7 +587,7 @@ fn exists_patterns(e: &mut Expression, f: &mut dyn FnMut(&mut GraphPattern)) {
     }
 }
 
-fn expression_children(e: &mut Expression, f: &mut dyn FnMut(&mut Expression)) {
+pub(crate) fn expression_children(e: &mut Expression, f: &mut dyn FnMut(&mut Expression)) {
     use Expression as E;
     match e {
         E::NamedNode(_) | E::Literal(_) | E::Variable(_) | E::Bound(_) | E::Exists(_) => {}
@@ -620,7 +620,7 @@ fn expression_children(e: &mut Expression, f: &mut dyn FnMut(&mut Expression)) {
     }
 }
 
-fn expression_children_ref<'a>(e: &'a Expression, f: &mut dyn FnMut(&'a Expression)) {
+pub(crate) fn expression_children_ref<'a>(e: &'a Expression, f: &mut dyn FnMut(&'a Expression)) {
     use Expression as E;
     match e {
         E::NamedNode(_) | E::Literal(_) | E::Variable(_) | E::Bound(_) | E::Exists(_) => {}

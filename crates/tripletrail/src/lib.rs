@@ -851,7 +851,7 @@ fn geo_evaluator() -> SparqlEvaluator {
 static EXECUTOR_IDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether the id executor runs this query: its `#pragma tt.executor`, else the default.
-fn executor_ids() -> bool {
+pub(crate) fn executor_ids() -> bool {
     Hints::current()
         .executor_ids
         .unwrap_or_else(|| EXECUTOR_IDS.load(Ordering::Relaxed))
