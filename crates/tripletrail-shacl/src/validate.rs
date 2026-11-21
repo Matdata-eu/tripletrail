@@ -3,7 +3,7 @@
 use crate::ShaclError;
 use crate::graph::DataGraph;
 use crate::path::{Path, dedup};
-use crate::report::{ShapeCount, ValidationResult, core_component, fill_messages};
+use crate::report::{ShapeCount, ValidationResult, core_component, fill_messages, template_names};
 use crate::shapes::{
     Component, KIND_BLANK, KIND_IRI, KIND_LITERAL, Shape, ShapeId, Shapes, Target,
 };
@@ -229,12 +229,24 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// The variables the messages a result of `check` reports name (`{$x}`, `{?x}`): the
+    /// shape's own `sh:message`, else the check's.
+    fn wanted(&self, check: &crate::shapes::SparqlCheck) -> Vec<String> {
+        let shape = self.shapes.get(check.shape);
+        template_names(if shape.messages.is_empty() {
+            &check.messages
+        } else {
+            &shape.messages
+        })
+    }
+
     /// Runs SPARQL check `k` on `foci` and keeps whether each passes.
     fn run_check(&self, k: u32, foci: &[&Term]) {
         if foci.is_empty() {
             return;
         }
         let check = &self.shapes.checks[k as usize];
+        let wanted = self.wanted(check);
         let runner = self.runner();
         let mut results: Vec<(Term, bool)> = Vec::with_capacity(foci.len());
         {
@@ -283,9 +295,8 @@ impl<'a> Validator<'a> {
             for (f, v) in &pairs {
                 if failed.contains(f) || !passing.contains(&(f.clone(), v.clone())) {
                     ok.insert(f, false);
-                    let mut bindings = constants(check);
-                    bindings.push(("this".to_owned(), f.clone()));
-                    bindings.push(("value".to_owned(), v.clone()));
+                    let bindings =
+                        pick(&wanted, constants(check).chain([("this", f), ("value", v)]));
                     rows.entry((k, f.clone()))
                         .or_default()
                         .push((Some(v.clone()), None, bindings));
@@ -330,9 +341,10 @@ impl<'a> Validator<'a> {
                                 _ => None,
                             };
                             violating.insert(focus.clone());
-                            let mut bindings = constants(check);
-                            bindings
-                                .extend(s.iter().map(|(v, t)| (v.as_str().to_owned(), t.clone())));
+                            let bindings = pick(
+                                &wanted,
+                                constants(check).chain(s.iter().map(|(v, t)| (v.as_str(), t))),
+                            );
                             rows.entry((k, focus.clone()))
                                 .or_default()
                                 .push((value, path, bindings));
@@ -370,8 +382,10 @@ impl<'a> Validator<'a> {
             _ => {
                 let check = &self.shapes.checks[k as usize];
                 let shape = self.shapes.get(check.shape);
-                let mut bindings = constants(check);
-                bindings.push(("this".to_owned(), focus.clone()));
+                let bindings = pick(
+                    &self.wanted(check),
+                    constants(check).chain([("this", focus)]),
+                );
                 vec![(shape.path.is_none().then(|| focus.clone()), None, bindings)]
             }
         }
@@ -978,12 +992,25 @@ impl<'a> Validator<'a> {
 }
 
 /// The constants a SPARQL check's query is run with (a component's parameters and
-/// `$currentShape`), as message bindings.
-fn constants(check: &crate::shapes::SparqlCheck) -> Vec<(String, Term)> {
-    check
-        .query
-        .constants
-        .iter()
-        .map(|(v, t)| (v.as_str().to_owned(), t.clone()))
-        .collect()
+/// `$currentShape`), which messages may name too.
+fn constants(check: &crate::shapes::SparqlCheck) -> impl Iterator<Item = (&str, &Term)> {
+    check.query.constants.iter().map(|(v, t)| (v.as_str(), t))
+}
+
+/// The bindings of a result that its messages name: none when no message has a template,
+/// so a check with plain messages keeps nothing per failing row.
+fn pick<'t>(
+    wanted: &[String],
+    bindings: impl Iterator<Item = (&'t str, &'t Term)>,
+) -> Vec<(String, Term)> {
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let mut kept: Vec<(String, Term)> = Vec::new();
+    for (name, term) in bindings {
+        if wanted.iter().any(|w| w == name) && !kept.iter().any(|(n, _)| n == name) {
+            kept.push((name.to_owned(), term.clone()));
+        }
+    }
+    kept
 }

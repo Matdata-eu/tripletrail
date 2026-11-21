@@ -195,6 +195,29 @@ pub(crate) fn fill_messages<'a>(
     )
 }
 
+/// The names of the variables `messages` name as `{$x}` or `{?x}`, each once.
+pub(crate) fn template_names(messages: &[Term]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for m in messages {
+        let Term::Literal(l) = m else { continue };
+        let mut rest = l.value();
+        while let Some(at) = rest.find('{') {
+            let after = &rest[at + 1..];
+            rest = after;
+            let Some(tail) = after.strip_prefix('$').or_else(|| after.strip_prefix('?')) else {
+                continue;
+            };
+            if let Some(end) = tail.find('}') {
+                let name = &tail[..end];
+                if !names.iter().any(|n| n == name) {
+                    names.push(name.to_owned());
+                }
+            }
+        }
+    }
+    names
+}
+
 fn fill(template: &str, bindings: &[(String, Term)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;

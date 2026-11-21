@@ -909,3 +909,16 @@ fn messages_are_filled_in_from_the_solution() {
         ]
     );
 }
+
+/// Only the variables a message names are kept for it, and none for plain messages.
+#[test]
+fn messages_name_the_variables_they_need() {
+    use crate::report::template_names;
+    use oxigraph::model::{Literal, Term};
+    let m = |s: &str| Term::from(Literal::new_simple_literal(s));
+    assert!(template_names(&[m("self link"), m("{ not a variable }")]).is_empty());
+    assert_eq!(
+        template_names(&[m("{$this} has {?value} and {$this} again"), m("{?label")]),
+        ["this", "value"]
+    );
+}
