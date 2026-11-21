@@ -21,6 +21,8 @@ pub(crate) struct Common {
     pub null_string: Option<String>,
     /// `trim-strings`.
     pub trim: bool,
+    /// The location's IRI, when the source has one (the document IRI of `html.metadata`).
+    pub location: Option<String>,
 }
 
 /// Collects the triples of one source as quads: in the default graph, and in the named

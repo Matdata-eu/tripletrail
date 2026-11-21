@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html prefix="ex: http://example.org/ns#">
+<head>
+  <title property="dc:title">Stations</title>
+  <base href="http://example.org/base/page#frag">
+  <link rel="license" href="http://creativecommons.org/licenses/by/4.0/">
+  <meta property="og:description" content="Railway stations">
+</head>
+<body vocab="http://schema.org/">
+  <div typeof="TrainStation" about="#brussels">
+    <span property="name">Brussels-Central</span>
+    <span property="ex:code" datatype="xsd:string">BC</span>
+    <a rel="containedInPlace" href="/cities/brussels">Brussels</a>
+    <a rev="ex:servedBy" href="http://example.org/lines/l1">Line 1</a>
+    <p rel="ex:platform">
+      <span typeof="ex:Platform" property="ex:number">1</span>
+      <span typeof="ex:Platform" property="ex:number">2</span>
+    </p>
+    <ol>
+      <li property="ex:stop" inlist>Antwerp</li>
+      <li property="ex:stop" inlist>Mechelen</li>
+    </ol>
+    <div property="ex:nested">Some <b>bold</b> text</div>
+    <img property="image" src="pic.png">
+    <span property="ex:blank" resource="_:x"></span>
+    <span about="_:x" property="ex:label">X</span>
+  </div>
+  <div vocab="">
+    <a rel="next" href="#n">next</a>
+  </div>
+</body>
+</html>
