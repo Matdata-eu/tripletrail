@@ -1896,6 +1896,16 @@ fn the_web_ui_and_its_embedded_matgui() {
             .unwrap()
             .contains("TripleTrailMap")
     );
+    // The map's tools (#33), loaded before the map.
+    let index = get(&base, "/$/ui/map/kg").unwrap().into_string().unwrap();
+    assert!(index.find("/$/ui/map-tools.js").unwrap() < index.find("/$/ui/map.js").unwrap());
+    assert!(
+        get(&base, "/$/ui/map-tools.js")
+            .unwrap()
+            .into_string()
+            .unwrap()
+            .contains("TripleTrailMapTools")
+    );
     // The Explore page (#226): its page, with the start and opened nodes in the query.
     let page = get(&base, "/$/ui/explore/kg?iri=urn%3Aa&open=urn%3Ab")
         .unwrap()

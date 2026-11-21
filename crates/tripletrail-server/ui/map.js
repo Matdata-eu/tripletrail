@@ -44,6 +44,7 @@ window.TripleTrailMap = (function () {
     zoomIn: '<circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21M11 8v6M8 11h6"/>',
     extent: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="9" y="9" width="6" height="6" rx="1"/>',
     layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+    tools: '<path d="M3 17.5L17.5 3 21 6.5 6.5 21z"/><path d="M7 13.5l2 2M10 10.5l2 2M13 7.5l2 2"/>',
   };
   /** How the values of a boolean facet read. */
   const YES_NO = Object.assign(Object.create(null), { true: "yes", false: "no" });
@@ -51,6 +52,7 @@ window.TripleTrailMap = (function () {
   let lib = null;
   let map = null;
   let shown = null; // the dataset on the map
+  let tools = null; // the map's tools (map-tools.js): the area drawn, measuring
   let preview = null; // the id of proposed shapes it is drawn with (/{ds}/tiles/preview/{id}), or null
   /** A path under the dataset's tiles, or under the preview's. */
   const tilesPath = (rest) => (preview ? "tiles/preview/" + preview + "/" : "tiles/") + rest;
@@ -152,7 +154,7 @@ window.TripleTrailMap = (function () {
     state.defaultBasemap = first;
     useBasemap(style, basemaps.find((b) => b.key === state.basemap));
     const tiles = style.sources.tripletrail.tiles[0];
-    const q = filterQuery(state.chosen, state.colors);
+    const q = filterQuery(state.chosen, state.colors, state.area);
     if (q) style.sources.tripletrail.tiles = [tiles + "?" + q];
     for (const l of style.layers) {
       if (l.source === "tripletrail" && state.hidden.has(l["source-layer"])) l.layout = { ...(l.layout || {}), visibility: "none" };
@@ -171,8 +173,12 @@ window.TripleTrailMap = (function () {
     });
     loaded = false;
     map.once("load", () => { loaded = true; });
+    // The tools: an area to filter by (in the link as area, rel and dist), measuring.
+    tools = window.TripleTrailMapTools ? window.TripleTrailMapTools.panel({ map, ui, icon, getArea: () => state.area, setArea: (area) => apply({ area }) }) : null;
+    if (tools) map.once("load", () => tools.attach());
     map.addControl(new lib.NavigationControl(), "top-right");
     map.addControl(mapButtons(name, basemaps, state), "top-right");
+    if (tools) map.addControl(tools.control, "top-right");
     // Fullscreen takes the layer list and the detail panel along.
     map.addControl(new lib.FullscreenControl({ container: canvas.parentElement }), "top-right");
     map.addControl(new lib.ScaleControl(), "bottom-left");
@@ -188,7 +194,7 @@ window.TripleTrailMap = (function () {
           map.setPaintProperty(id, property, c.color);
         }
       }
-      const q = filterQuery(state.chosen, state.colors);
+      const q = filterQuery(state.chosen, state.colors, state.area);
       map.getSource("tripletrail").setTiles([tiles + (q ? "?" + q : "")]);
       writeState(state);
       legend(layers, collections, name, tiles, state);
@@ -210,10 +216,11 @@ window.TripleTrailMap = (function () {
     });
     const pickable = () => [...ids].filter((id) => map.getLayer(id) && map.getLayoutProperty(id, "visibility") !== "none");
     map.on("mousemove", (e) => {
+      if (tools && tools.busy()) return;
       const hits = map.queryRenderedFeatures(box(e.point, 3), { layers: pickable() });
       map.getCanvas().style.cursor = hits.length ? "pointer" : "";
     });
-    map.on("click", (e) => pick(name, e, collections, pickable()));
+    map.on("click", (e) => { if (!(tools && tools.click(e))) pick(name, e, collections, pickable()); });
     searchBox(name, find, found, collections);
     if (!positioned) fit(name);
     // The link's open feature (`feature=IRI`), beside the map again.
@@ -405,13 +412,22 @@ window.TripleTrailMap = (function () {
     else for (const end of ["min", "max"]) if (choice[end] !== "") q.append(prefix + key + "." + end, choice[end]);
   }
 
-  /** The filters of all collections as the `all` tiles take them, and the facets the
-   *  collections are coloured by (`color.{id}={key}`). */
-  function filterQuery(chosen, colors) {
+  /** The filters of all collections as the `all` tiles take them, the facets the
+   *  collections are coloured by (`color.{id}={key}`), and the area they are filtered by. */
+  function filterQuery(chosen, colors, area) {
     const q = new URLSearchParams();
     for (const [id, keys] of Object.entries(chosen)) for (const [key, choice] of Object.entries(keys)) appendChoice(q, id + ".", key, choice);
     for (const [id, key] of Object.entries(colors || {})) q.append("color." + id, key);
+    appendArea(q, area);
     return q.toString();
+  }
+
+  /** The area filter, {area, rel, dist} or null, as the tiles, facets and OGC API take it. */
+  function appendArea(q, area) {
+    if (!area || !area.area) return;
+    q.set("area", area.area);
+    if (area.rel && area.rel !== "intersects") q.set("rel", area.rel);
+    if (area.rel === "dwithin") q.set("dist", String(area.dist));
   }
 
   /** The hidden layers and the filters of the page's link: {hidden: Set of ids, chosen:
@@ -448,13 +464,18 @@ window.TripleTrailMap = (function () {
         if (set) set.add(value);
       }
     }
-    return { hidden, chosen, colors, view: params.get("view") || "", basemap: params.get("basemap") || "" };
+    // The area: dist only with rel=dwithin, as the server takes them.
+    const at = (params.get("area") || "").trim();
+    const rel = (params.get("rel") || "intersects").trim().toLowerCase();
+    const dist = Number(params.get("dist"));
+    const area = !at ? null : rel === "dwithin" ? (dist >= 0 ? { area: at, rel, dist } : null) : { area: at, rel };
+    return { hidden, chosen, colors, area, view: params.get("view") || "", basemap: params.get("basemap") || "" };
   }
 
   /** Writes the hidden layers, filters and colourings into the page's link, keeping the
    *  map's hash. */
-  function writeState({ hidden, chosen, colors, view, basemap, defaultBasemap }) {
-    const q = new URLSearchParams(filterQuery(chosen, colors));
+  function writeState({ hidden, chosen, colors, area, view, basemap, defaultBasemap }) {
+    const q = new URLSearchParams(filterQuery(chosen, colors, area));
     if (hidden.size) q.set("hide", [...hidden].join(","));
     if (view) q.set("view", view);
     if (basemap && basemap !== defaultBasemap) q.set("basemap", basemap);
@@ -498,10 +519,11 @@ window.TripleTrailMap = (function () {
 
   /** The collection's features in the OGC API, filtered as on the map: `f=html` for a page,
    *  `f=json` for a GIS. */
-  function ogcItems(ds, c, keys, f) {
+  function ogcItems(ds, c, keys, f, area) {
     const q = new URLSearchParams({ f });
     const filter = cql(keys);
     if (filter) q.set("filter", filter);
+    appendArea(q, area);
     return new URL(service(ds, "ogc/collections/" + encodeURIComponent(c.id) + "/items?" + q), location.href).href;
   }
 
@@ -519,7 +541,7 @@ window.TripleTrailMap = (function () {
     const colors = state.colors;
     const append = appendChoice;
     const refilter = () => {
-      const q = filterQuery(chosen, colors);
+      const q = filterQuery(chosen, colors, state.area);
       const source = map && map.getSource("tripletrail");
       if (source) source.setTiles([tiles + (q ? "?" + q : "")]);
       writeState(state);
@@ -594,6 +616,7 @@ window.TripleTrailMap = (function () {
         for (const [key, choice] of Object.entries(chosen[c.id] || {})) append(params, "", key, choice);
         // The colouring, for the counts of its legend.
         if (colors[c.id]) params.set("color", colors[c.id]);
+        appendArea(params, state.area);
         panel.replaceChildren(el("p", { class: "muted small" }, "Counting…"));
         let out;
         try {
@@ -691,7 +714,7 @@ window.TripleTrailMap = (function () {
           load();
         };
         const copy = async () => {
-          const url = ogcItems(ds, c, chosen[c.id], "json");
+          const url = ogcItems(ds, c, chosen[c.id], "json", state.area);
           try {
             await navigator.clipboard.writeText(url);
             ui.toast("Copied the GeoJSON link of " + c.title + (filtered ? ", filtered" : "") + ": open it in QGIS or another GIS.");
@@ -729,7 +752,7 @@ window.TripleTrailMap = (function () {
           colourBy,
           el("div", { class: "map-facet-tools" },
             filtered ? el("button", { class: "btn small", type: "button", onclick: () => { delete chosen[c.id]; refilter(); load(); } }, "Clear filters") : null,
-            el("a", { class: "btn small", href: ogcItems(ds, c, chosen[c.id], "html"), target: "_blank", rel: "noopener", title: "These features in the OGC API – Features" }, "OGC API"),
+            el("a", { class: "btn small", href: ogcItems(ds, c, chosen[c.id], "html", state.area), target: "_blank", rel: "noopener", title: "These features in the OGC API – Features" }, "OGC API"),
             el("button", { class: "btn small", type: "button", onclick: copy, title: "Copy the OGC API link of these features, as GeoJSON, for a GIS" }, "Copy GIS link"),
             c.class ? el("a", { class: "btn small", href: "#", title: "Find " + c.title + " in the area the map shows, with conditions on any property, on the Search page",
               onclick: (e) => { e.preventDefault(); location.href = searchArea(ds, c); } }, "Search this area") : null,
@@ -864,6 +887,8 @@ window.TripleTrailMap = (function () {
         el("a", { class: "btn small", href: describeUrl(ds, iri), target: "_blank", rel: "noopener" }, "Open page"),
         el("a", { class: "btn small", href: "/$/ui/explore/" + encodeURIComponent(ds) + "?iri=" + encodeURIComponent(iri), "data-route": true,
           title: "Walk the graph from this feature" }, "Explore"),
+        tools ? el("button", { type: "button", class: "btn small", title: "Filter the map by this feature's geometry (the Tools panel sets how)",
+          onclick: (e) => tools.useFeature(iri, e.target.closest(".map-detail-head").querySelector("strong").textContent) }, "Filter by it") : null,
         close),
       frame);
     panel.hidden = false;
@@ -989,7 +1014,9 @@ window.TripleTrailMap = (function () {
 
   /** Called when another page opens: the map stops. */
   function leave() {
+    // Removing the map removes its controls, the tools' key listener with them.
     if (map) { map.remove(); map = null; }
+    tools = null;
     shown = null;
   }
 

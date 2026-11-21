@@ -31,9 +31,13 @@ a geometry: here Station and Section.
 - **Zoom to all the data**, under the zoom buttons, fits the map to every layer; the button
   under it picks the **base map**: OpenStreetMap, the same in grey (so coloured features stand
   out), none, and any the server adds. The last button goes fullscreen, with the layer list.
+- **Tools**, the ruler under the base map button, draws an area that every layer is filtered
+  by, measures lengths and areas, and shows the coordinates under the pointer: see
+  [Draw an area, measure and read coordinates](#draw-an-area-measure-and-read-coordinates).
 - The feature open beside the map is outlined in navy.
-- The page's link keeps the view, the filters, hidden layers, the base map and the feature
-  open beside the map (`feature=IRI`), so it can be shared: **Share** in the top bar copies it.
+- The page's link keeps the view, the filters, hidden layers, the base map, the area and the
+  feature open beside the map (`feature=IRI`), so it can be shared: **Share** in the top bar
+  copies it.
 
 The map fetches its background from OpenStreetMap, which then learns where viewers look. For
 private data, or heavy use, start the server with `--map-tiles` naming your own tile server,
@@ -555,6 +559,53 @@ curl -s 'http://localhost:7878/ds/tiles/facets?collection=Station&collection=Sec
 "features":12
 "features":22
 ```
+
+### Draw an area, measure and read coordinates
+
+The Map page's **Tools** button opens a panel with three parts.
+
+**Filter by an area** draws an area, and every layer then shows only the features in it,
+their filters count only those, and a layer's **OGC API**, **Copy GIS link** and **Query**
+take the area along:
+
+- **Rectangle**: two opposite corners;
+- **Polygon**: its corners; click the first again, double-click or press Enter to close it;
+- **Circle**: the centre, then a point on the edge;
+- **Corridor**: a line, and the features within the **Distance** of it (250 m unless set).
+
+**Keep the features whose geometry** picks the relation (`rel`): meets the area (the default),
+lies within it, contains it, touches its edge, crosses it, overlaps it, lies outside it, or is
+within a distance of it. **Filter by it**, beside a feature open next to the map, takes that
+feature's geometry as the area, for the stations within 2 km of a station, say. **Copy WKT**
+copies a drawn area, **Clear area** shows every feature again. Esc stops a drawing and
+Backspace takes its last point back.
+
+The area goes into the page's link and into the map's requests as the parameters of
+[Filter by a spatial relation to an area](#filter-by-a-spatial-relation-to-an-area): a
+rectangle or polygon as a `POLYGON`, a circle as its centre with `rel=dwithin` and its radius
+as `dist`, a corridor as its `LINESTRING` with `rel=dwithin`, and a feature by its IRI. A
+circle of 2 km round Brussels-Central, and a corridor 500 m either side of a line from
+Brussels to the east:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/tiles/facets/Station?area=POINT(4.3571%2050.8455)&rel=dwithin&dist=2000' | grep -o '"features":[0-9]*'
+curl -s 'http://localhost:7878/ds/tiles/facets/Section?area=LINESTRING(4.35%2050.86,%204.48%2050.90)&rel=dwithin&dist=500' | grep -o '"features":[0-9]*'
+```
+
+<!-- test: output -->
+```text
+"features":3
+"features":3
+```
+
+**Measure** draws a line, with its length and each leg's length and bearing ("43.0 km · 90°
+E"), or an area, with its size and perimeter. Lengths and areas are on the Earth's sphere,
+not on the flat map, so they hold far from the equator too. A measurement stays on the map
+until the next one, or **Clear**; it does not filter anything.
+
+**Coordinates** shows the latitude and longitude under the pointer, and **Copy a point**
+copies the next point clicked as WKT (`POINT(4.3571 50.8455)`), for a query or a GIS.
 
 ### Count the classes of a coloured map
 
