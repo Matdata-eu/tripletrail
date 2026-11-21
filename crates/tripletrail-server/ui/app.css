@@ -768,3 +768,8 @@ body[data-page=workbench] main { max-width: none; padding: 8px 12px; }
   .records, .records:has(.records-record:not([hidden])) { grid-template-columns: 1fr; height: auto; }
   .records-table { min-height: 400px; }
 }
+.records .tabulator .tabulator-header .tabulator-col.tabulator-frozen, .records .tabulator .tabulator-footer { background: var(--surface-2); color: var(--text-2); border-color: var(--border); }
+.records .tabulator .tabulator-row .tabulator-cell.tabulator-frozen { background: inherit; }
+.records .tabulator .tabulator-footer .tabulator-page { background: var(--surface); color: var(--text-2); border-color: var(--border); }
+.records .tabulator .tabulator-footer .tabulator-page.active { color: var(--text); font-weight: 600; }
+@media (hover: hover) and (pointer: fine) { .records .tabulator .tabulator-header .tabulator-col.tabulator-sortable.tabulator-col-sorter-element:hover { background-color: var(--surface-3); color: var(--text); } }

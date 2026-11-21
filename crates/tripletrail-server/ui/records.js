@@ -44,7 +44,8 @@ window.TripleTrailRecords = (function () {
       l.rel = "stylesheet";
       l.href = href;
       l.onload = l.onerror = resolve;
-      document.head.append(l);
+      // Before the page's own stylesheet, so that its colours (light and dark) win.
+      document.head.insertBefore(l, document.querySelector('link[rel="stylesheet"]'));
     }));
   }
   const tabulator = () => Promise.all([script(VENDOR + "tabulator/tabulator.min.js"), css(VENDOR + "tabulator/tabulator.min.css")]);
@@ -110,7 +111,7 @@ window.TripleTrailRecords = (function () {
   /** The keys a grid shows: those with values to show in a cell (not geometries or objects),
    *  and not the label, which the first column shows. */
   const columnsOf = (c) => c.properties
-    .filter((p) => p.kind !== "geometry" && p.kind !== "object" && !(c.label && p.path === "<" + c.label + ">"))
+    .filter((p) => p.kind !== "geometry" && p.kind !== "object" && !(c.label && (p.path === c.label || p.path === "<" + c.label + ">")))
     .slice(0, MAX_COLUMNS);
 
   /** A header filter's text as a search condition for a key of `kind`: numbers take `>5`,
