@@ -300,6 +300,16 @@ every column or key. Edit the query, **Preview** the triples it makes, and **Add
 puts them in the named graph you give. **Download query** saves the query as a lift query that
 reads the file by its name, to run later with `tripletrail lift`.
 
+**Draft with AI**, under the query, has your AI service write the query for you: say what
+the file should become ("one station per row, with its name and position"), or nothing, and
+**Draft**. The model gets the file's first triples, the query on the page and the dataset's
+shapes, so it uses the dataset's classes and properties, and it runs its query with
+**Preview** on the whole file until it works. Its query replaces the one on the page, and the
+page previews it; **Back to the previous query** undoes that. The service, key and model are
+the Workbench's (AI tab, **Key and model…**). The sample and the shapes go from your browser
+to that service, never through the server, and nothing is written until you **Add to the
+graph**.
+
 The file is kept in the server's memory for an hour, never on its disk, and the query can read
 only that file. Only someone who may write to the dataset can import (with `--update-token`,
 that token). The page uses the server's import API, which you can call yourself. Start a
