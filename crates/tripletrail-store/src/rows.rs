@@ -14,40 +14,73 @@ use std::sync::{Arc, OnceLock};
 /// thousand agents' filters from each holding every target.
 #[derive(Debug)]
 pub struct SharedHidden {
-    ids: FxHashSet<u64>,
-    /// A key for `ids`, made once.
+    ids: Ids,
+    len: usize,
+    /// A key for the ids, made once.
     key: u64,
+}
+
+/// The ids of a [`SharedHidden`]: a bitmap over their range when they are dense enough (term
+/// ids of one kind are numbered in order, so the targets of a class usually are), else a set.
+#[derive(Debug)]
+enum Ids {
+    Bits { base: u64, words: Vec<u64> },
+    Set(FxHashSet<u64>),
 }
 
 impl SharedHidden {
     pub fn new(ids: impl IntoIterator<Item = u64>) -> Self {
         use std::hash::{Hash, Hasher};
-        let ids: FxHashSet<u64> = ids.into_iter().collect();
-        let mut sorted: Vec<u64> = ids.iter().copied().collect();
+        let mut sorted: Vec<u64> = ids.into_iter().collect();
         sorted.sort_unstable();
+        sorted.dedup();
         let mut h = std::collections::hash_map::DefaultHasher::new();
         sorted.hash(&mut h);
+        let len = sorted.len();
+        let ids = match (sorted.first(), sorted.last()) {
+            // At most 64 bits per id: no larger than the set's 16 bytes.
+            (Some(&lo), Some(&hi)) if (hi - lo) / 64 <= len as u64 * 2 => {
+                let mut words = vec![0u64; ((hi - lo) / 64 + 1) as usize];
+                for id in sorted {
+                    let d = id - lo;
+                    words[(d / 64) as usize] |= 1 << (d % 64);
+                }
+                Ids::Bits { base: lo, words }
+            }
+            _ => Ids::Set(sorted.into_iter().collect()),
+        };
         Self {
             ids,
+            len,
             key: h.finish(),
         }
     }
 
+    #[inline]
     pub fn contains(&self, id: u64) -> bool {
-        self.ids.contains(&id)
+        match &self.ids {
+            Ids::Bits { base, words } => id
+                .checked_sub(*base)
+                .and_then(|d| words.get((d / 64) as usize).map(|w| w >> (d % 64) & 1 == 1))
+                .unwrap_or(false),
+            Ids::Set(set) => set.contains(&id),
+        }
     }
 
     pub fn len(&self) -> usize {
-        self.ids.len()
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.ids.is_empty()
+        self.len == 0
     }
 
-    /// Roughly the heap bytes of the set (8 bytes and a hash slot each).
+    /// Roughly the heap bytes of the ids.
     pub fn heap_size(&self) -> usize {
-        self.ids.capacity() * 16
+        match &self.ids {
+            Ids::Bits { words, .. } => words.capacity() * 8,
+            Ids::Set(set) => set.capacity() * 16,
+        }
     }
 }
 
@@ -55,14 +88,62 @@ impl SharedHidden {
 #[derive(Clone, Debug)]
 struct Shared {
     hidden: Arc<SharedHidden>,
-    shown: FxHashSet<u64>,
+    /// Sorted.
+    shown: Vec<u64>,
+    /// `shown` as bits aligned with the hidden bitmap, when there are more than a few: almost
+    /// every quad of the targets asks, and a search of a list for each was half the scan.
+    mask: Option<Vec<u64>>,
     references: bool,
 }
 
+/// Shown resources up to this many are looked for in their list; more get a bitmap.
+const FEW_SHOWN: usize = 16;
+
 impl Shared {
+    fn new(hidden: Arc<SharedHidden>, mut shown: Vec<u64>, references: bool) -> Self {
+        shown.retain(|&id| hidden.contains(id));
+        shown.sort_unstable();
+        shown.dedup();
+        let mut shared = Self {
+            hidden,
+            shown,
+            mask: None,
+            references,
+        };
+        shared.index();
+        shared
+    }
+
+    fn index(&mut self) {
+        self.mask = None;
+        if self.shown.len() > FEW_SHOWN
+            && let Ids::Bits { base, words } = &self.hidden.ids
+        {
+            let mut mask = vec![0u64; words.len()];
+            for &id in &self.shown {
+                let d = id - base;
+                mask[(d / 64) as usize] |= 1 << (d % 64);
+            }
+            self.mask = Some(mask);
+        }
+    }
+
     #[inline]
     fn hides(&self, id: u64) -> bool {
-        self.hidden.contains(id) && !self.shown.contains(&id)
+        if !self.hidden.contains(id) {
+            return false;
+        }
+        match &self.mask {
+            Some(mask) => {
+                let Ids::Bits { base, .. } = &self.hidden.ids else {
+                    unreachable!("a mask is made for a bitmap only")
+                };
+                let d = id - base;
+                mask[(d / 64) as usize] >> (d % 64) & 1 == 0
+            }
+            None if self.shown.len() <= FEW_SHOWN => !self.shown.contains(&id),
+            None => self.shown.binary_search(&id).is_err(),
+        }
     }
 }
 
@@ -132,19 +213,12 @@ impl RowFilter {
         shown: impl IntoIterator<Item = u64>,
         references: bool,
     ) {
-        let shown: FxHashSet<u64> = shown
-            .into_iter()
-            .filter(|&id| hidden.contains(id))
-            .collect();
         self.fingerprint.take();
         if hidden.is_empty() {
             return;
         }
-        self.shared.push(Shared {
-            hidden,
-            shown,
-            references,
-        });
+        self.shared
+            .push(Shared::new(hidden, shown.into_iter().collect(), references));
     }
 
     /// Roughly the heap bytes of this filter's own sets (shared sets not counted).
@@ -156,7 +230,7 @@ impl RowFilter {
             + self
                 .shared
                 .iter()
-                .map(|s| s.shown.capacity() * 16)
+                .map(|s| s.shown.capacity() * 8 + s.mask.as_ref().map_or(0, |m| m.capacity() * 8))
                 .sum::<usize>()
     }
 
@@ -232,11 +306,12 @@ impl RowFilter {
             self.quads.retain(|q| !gone(&q[0]));
         }
         for shared in &mut self.shared {
-            for &r in resources {
-                if shared.hidden.contains(r) {
-                    shared.shown.insert(r);
-                }
-            }
+            shared
+                .shown
+                .extend(resources.iter().filter(|&&r| shared.hidden.contains(r)));
+            shared.shown.sort_unstable();
+            shared.shown.dedup();
+            shared.index();
         }
     }
 
@@ -259,9 +334,10 @@ impl RowFilter {
     /// Whether the quad `[s, p, o, g]` is hidden.
     #[inline]
     pub fn hides(&self, q: &[u64; 4]) -> bool {
-        self.subjects.contains(&q[0])
-            || self.objects.contains(&q[2])
-            || self.predicates.contains(&q[1])
+        // Empty sets are skipped: a lookup in one still hashes the key.
+        (!self.subjects.is_empty() && self.subjects.contains(&q[0]))
+            || (!self.objects.is_empty() && self.objects.contains(&q[2]))
+            || (!self.predicates.is_empty() && self.predicates.contains(&q[1]))
             || (!self.subject_predicates.is_empty()
                 && self.subject_predicates.contains(&(q[0], q[1])))
             || (!self.quads.is_empty() && self.quads.contains(q))
@@ -316,9 +392,7 @@ impl RowFilter {
         }
         graphs.hash(&mut h);
         for shared in &self.shared {
-            let mut shown: Vec<u64> = shared.shown.iter().copied().collect();
-            shown.sort_unstable();
-            (shared.hidden.key, shown, shared.references).hash(&mut h);
+            (shared.hidden.key, &shared.shown, shared.references).hash(&mut h);
         }
         h.finish()
     }
@@ -390,6 +464,24 @@ mod tests {
         assert!(plain.hides(&[2, 9, 9, 0]));
         assert!(!plain.hides(&[9, 9, 2, 0]), "references are not hidden");
         assert!(plain.merged(&RowFilter::new()).hides(&[1, 9, 9, 0]));
+        // Many shown resources (a bitmap of them), dense and sparse hidden sets.
+        for step in [1, 1000] {
+            let hidden = Arc::new(SharedHidden::new((0..500).map(|i| 10 + i * step)));
+            let mut many = RowFilter::new();
+            many.hide_shared(hidden, (0..100).map(|i| 10 + i * 3 * step), false);
+            for i in 0..500 {
+                let id = 10 + i * step;
+                assert_eq!(
+                    many.hides(&[id, 9, 9, 0]),
+                    i % 3 != 0 || i >= 300,
+                    "{step} {i}"
+                );
+            }
+            assert!(!many.hides(&[5, 9, 9, 0]));
+            assert!(!many.hides(&[10 + 500 * step, 9, 9, 0]));
+            many.forget(&[10 + step]);
+            assert!(!many.hides(&[10 + step, 9, 9, 0]));
+        }
     }
 
     /// A merged filter hides what either hides, and a graph restriction hides the quads of
