@@ -272,6 +272,11 @@ fn decimal_division_keeps_24_fraction_digits_as_jena() {
         ),
         ("0.000000000000000001 / 3", d("0.000000000000000000333333")),
         ("1.0 / 0.0", "-".into()),
+        // A divisor of any size (the scaled value above 3.4e37).
+        (
+            "1 / 99999999999999999999.000000000000000001",
+            d("0.00000000000000000001"),
+        ),
         // A long quotient is still a number: arithmetic reads it at 18 fraction digits.
         ("(1.0 / 3.0) * 3", d("0.999999999999999999")),
         ("(2.0 / 3.0) + 0", d("0.666666666666666667")),

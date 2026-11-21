@@ -865,13 +865,17 @@ pub fn decimal_divide(a: Decimal, b: Decimal) -> Option<ExpressionTerm> {
     let mut remainder = n % d;
     let mut digits = Vec::with_capacity(count);
     for _ in 0..count {
-        let Some(r) = remainder.checked_mul(10) else {
-            // A divisor this large (above 3.4 * 10^19 after reduction) is beyond the long
-            // division here: the evaluator's own division, 18 fraction digits.
-            return Some(ExpressionTerm::DecimalLiteral(a.checked_div(b)?));
-        };
-        digits.push(u8::try_from(r / d).ok()?);
-        remainder = r % d;
+        // 10 * remainder by ten additions, each below 2 * d <= 2^128, so any divisor fits.
+        let (mut digit, mut r) = (0_u8, 0_u128);
+        for _ in 0..10 {
+            r += remainder;
+            if r >= d {
+                r -= d;
+                digit += 1;
+            }
+        }
+        digits.push(digit);
+        remainder = r;
     }
     // Half to even; an expansion that does not end is never exactly half way.
     if !ends && remainder > d - remainder {
