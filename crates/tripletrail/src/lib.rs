@@ -3623,8 +3623,8 @@ impl Engine {
     /// alone again (the default). A query with `FROM`, a query given its own dataset and an
     /// update operation with `USING` keep theirs. Inserts and deletes without `GRAPH` still go
     /// to the real default graph. The spatial rewrite and the planner work as on the default
-    /// graph; the nearest-neighbour shortcut, the range index and the parallel aggregates are
-    /// left out on the union.
+    /// graph, the rewrite's estimates counting every graph (#89); the nearest-neighbour
+    /// shortcut, the range index and the parallel aggregates are left out on the union.
     pub fn set_union_default_graph(&self, union: bool) {
         self.spatial
             .union_default_graph
@@ -4307,11 +4307,13 @@ impl SpatialContext for Engine {
             NamedNodePattern::NamedNode(n) => Some(n.clone()),
             NamedNodePattern::Variable(_) => None,
         };
+        // Under the union default graph, the default graph the query reads is every graph
+        // (#89): estimating from the real one, often empty, left every window to the FILTER.
         let n = self.estimate_triples(
             term(&pattern.subject)?.as_ref(),
             predicate.as_ref(),
             term(&pattern.object)?.as_ref(),
-            all_graphs,
+            all_graphs || self.union_default_graph(),
         )?;
         Some(n as f64)
     }
