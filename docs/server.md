@@ -192,9 +192,12 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   whose pattern runs on term ids (#11). `ids` answers it straight from the id tables (triple
   patterns, joins, `OPTIONAL`, `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, the filters on ids,
   `ORDER BY` of variables, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
-  only the terms of the answer, each once; anything else still goes to the evaluator. On
-  133k orders, a three-pattern join returning every row took 340 ms and takes 164 ms, and an
-  `OPTIONAL` 129 → 16 ms. The answers are the same; `spareval` stays the default until the
+  only the terms of the answer, each once, on the query threads; anything else still goes to
+  the evaluator. SPARQL JSON, CSV and TSV answers are written from the ids: each distinct term
+  is written once and copied into the rows where it occurs (the bytes are those of the usual
+  writers); other formats, and a `--max-rows` budget, get the solutions as terms. The result
+  cache keeps such an answer as it is. On 133k orders, a three-pattern join returning every
+  row took 333 ms as CSV and takes 88 ms (JSON 402 → 119 ms), and an `OPTIONAL` 180 → 15 ms. The answers are the same; `spareval` stays the default until the
   test suites agree under `ids` too. A query picks its own with `#pragma tt.executor`. In the
   library, `Engine::set_default_executor_ids`.
 - `--memory-limit` (`TRIPLETRAIL_MEMORY_LIMIT`, e.g. `32G`; also on `tripletrail load`) is the

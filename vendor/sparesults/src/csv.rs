@@ -142,7 +142,7 @@ impl InnerCsvSolutionsSerializer {
     }
 }
 
-fn write_csv_term<'a>(output: &mut String, term: impl Into<TermRef<'a>>) {
+pub fn write_csv_term<'a>(output: &mut String, term: impl Into<TermRef<'a>>) {
     match term.into() {
         TermRef::NamedNode(uri) => output.push_str(uri.as_str()),
         TermRef::BlankNode(bnode) => {
@@ -294,7 +294,7 @@ impl InnerTsvSolutionsSerializer {
     }
 }
 
-fn write_tsv_term<'a>(output: &mut String, term: impl Into<TermRef<'a>>) {
+pub fn write_tsv_term<'a>(output: &mut String, term: impl Into<TermRef<'a>>) {
     match term.into() {
         TermRef::NamedNode(node) => {
             output.push('<');

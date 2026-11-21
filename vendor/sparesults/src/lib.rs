@@ -27,3 +27,7 @@ pub use crate::parser::{
 pub use crate::serializer::TokioAsyncWriterSolutionsSerializer;
 pub use crate::serializer::{QueryResultsSerializer, WriterSolutionsSerializer};
 pub use crate::solution::QuerySolution;
+/// tripletrail: one term as the CSV and TSV writers write it, for writers of solutions kept in
+/// another form (#11).
+#[doc(hidden)]
+pub use crate::csv::{write_csv_term, write_tsv_term};

@@ -79,6 +79,8 @@ impl<'a> From<SliceQueryResultsParserOutput<'a>> for QueryResults<'a> {
 pub struct QuerySolutionIter<'a> {
     variables: Arc<[Variable]>,
     iter: Box<dyn Iterator<Item = Result<QuerySolution, QueryEvaluationError>> + 'a>,
+    // tripletrail: the same solutions in another form, for a writer that knows it.
+    attachment: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl<'a> QuerySolutionIter<'a> {
@@ -90,7 +92,21 @@ impl<'a> QuerySolutionIter<'a> {
         Self {
             variables,
             iter: Box::new(iter.into_iter()),
+            attachment: None,
         }
+    }
+
+    /// tripletrail: the same solutions in another form (TripleTrail's table of term ids), which
+    /// a writer that knows it can write without iterating. The iterator gives them all too.
+    #[must_use]
+    pub fn with_attachment(mut self, attachment: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        self.attachment = Some(attachment);
+        self
+    }
+
+    /// tripletrail: see [`Self::with_attachment`].
+    pub fn attachment(&self) -> Option<&Arc<dyn std::any::Any + Send + Sync>> {
+        self.attachment.as_ref()
     }
 
     /// Construct a new iterator of solutions from an ordered list of solution variables and an iterator of solution tuples
@@ -152,6 +168,7 @@ impl<'a, R: Read + 'a> From<ReaderSolutionsParser<R>> for QuerySolutionIter<'a> 
             iter: Box::new(
                 parser.map(|r| r.map_err(|e| QueryEvaluationError::Unexpected(e.into()))),
             ),
+            attachment: None,
         }
     }
 }
@@ -164,6 +181,7 @@ impl<'a> From<SliceSolutionsParser<'a>> for QuerySolutionIter<'a> {
             iter: Box::new(
                 parser.map(|r| r.map_err(|e| QueryEvaluationError::Unexpected(e.into()))),
             ),
+            attachment: None,
         }
     }
 }
