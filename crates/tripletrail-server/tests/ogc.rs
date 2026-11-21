@@ -2424,6 +2424,119 @@ fn facets_and_tiles_by_area_graph_and_text() {
     assert_eq!(again, every);
 }
 
+/// Facets of several collections in one request (#92): each one's counts, and the facets they
+/// share summed over them, under the same filters.
+#[test]
+fn facets_of_several_collections_at_once() {
+    let mut ttl = String::from(
+        "@prefix ex: <http://example.com/> .\n\
+         @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+         @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    // Four stations and six sections, both with a country and a length; stations a kind.
+    for i in 0..4 {
+        let country = if i < 3 { "BE" } else { "NL" };
+        ttl.push_str(&format!(
+            "ex:s{i} a ex:Station ; ex:country ex:{country} ; ex:length {} ; ex:kind ex:halt ;\n\
+             \x20 ex:opened \"2020-0{}-01\"^^xsd:date ;\n\
+             \x20 geo:hasGeometry [ geo:asWKT \"POINT(4.{i} 50.8)\"^^geo:wktLiteral ] .\n",
+            i * 10,
+            i + 2
+        ));
+    }
+    for i in 0..6 {
+        let country = if i < 1 { "BE" } else { "NL" };
+        ttl.push_str(&format!(
+            "ex:l{i} a ex:Section ; ex:country ex:{country} ; ex:length {} ;\n\
+             \x20 ex:opened \"2019-0{m}-01\"^^xsd:date ;\n\
+             \x20 geo:hasGeometry [ geo:asWKT \"LINESTRING(4.{i} 50.8, 4.{i} 50.9)\"^^geo:wktLiteral ] .\n",
+            100 + i * 50,
+            m = i + 1
+        ));
+    }
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let base = start(engine);
+    let facets = |query: &str| get(&format!("{base}/kg/tiles/facets?{query}")).2;
+    let both = facets("collection=Station&collection=Section");
+    assert_eq!(both["features"], 10, "{both}");
+    let ids: Vec<&str> = both["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["collection"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["Station", "Section"]);
+    assert_eq!(both["collections"][1]["features"], 6);
+    let shared = |out: &Value, key: &str| -> Value {
+        out["shared"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["key"] == key)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    // Country: summed, most first.
+    let country = shared(&both, "country");
+    assert_eq!(
+        country["values"],
+        json!([
+            { "value": "http://example.com/NL", "label": null, "count": 6 },
+            { "value": "http://example.com/BE", "label": null, "count": 4 }
+        ]),
+        "{both}"
+    );
+    assert_eq!(country["collections"], json!(["Station", "Section"]));
+    // Length: one span over both.
+    let length = shared(&both, "length");
+    assert_eq!(
+        (
+            length["min"].as_f64(),
+            length["max"].as_f64(),
+            length["count"].as_u64()
+        ),
+        (Some(0.0), Some(350.0), Some(10))
+    );
+    // Dates: one span over both, compared as dates (stations 2020-02..05, sections 2019-01..06).
+    let opened = shared(&both, "opened");
+    assert_eq!(
+        (
+            opened["min"].as_str(),
+            opened["max"].as_str(),
+            opened["count"].as_u64()
+        ),
+        (Some("2019-01-01"), Some("2020-05-01"), Some(10)),
+        "{both}"
+    );
+    // A facet of one collection only is in its own answer, not shared.
+    assert!(shared(&both, "kind").is_null());
+    // A bare filter applies to every collection with that facet.
+    let nl = facets("collection=Station&collection=Section&country=http%3A%2F%2Fexample.com%2FNL");
+    assert_eq!(nl["features"], 6);
+    // One collection's own filter, to it alone.
+    let mixed = facets(
+        "collection=Station&collection=Section&Section.country=http%3A%2F%2Fexample.com%2FBE",
+    );
+    assert_eq!(
+        (
+            mixed["collections"][0]["features"].as_u64(),
+            mixed["collections"][1]["features"].as_u64()
+        ),
+        (Some(4), Some(1))
+    );
+    // And the scope filters (#92) too.
+    assert_eq!(
+        facets("collection=Station&collection=Section&bbox=4.05,50,4.15,51")["features"],
+        2
+    );
+    assert_eq!(get(&format!("{base}/kg/tiles/facets")).0, 400);
+    assert_eq!(
+        get(&format!("{base}/kg/tiles/facets?collection=Nope")).0,
+        404
+    );
+}
+
 /// The legend of a map coloured by a range (#92): each colour class with the features drawn
 /// in it under the filters, by each feature's highest number, as the tiles colour them.
 #[test]
