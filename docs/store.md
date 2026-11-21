@@ -126,11 +126,14 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   ends, `*` between two free variables, or other path expressions are left to the evaluator.
   `ORDER BY ?a DESC(?b) ... LIMIT n` (with `OFFSET`, `DISTINCT` or `REDUCED`) over a pattern
   the tables cover is ordered on ids too: IRIs and simple strings by their string ranks
-  (#171), integers and booleans by value, unbound values first, and only the first
+  (#171), integers and booleans by value, inline doubles, decimals, dates and date-times by
+  the order key of their ids (#64), unbound values first, and only the first
   `OFFSET + LIMIT` rows are read back (the evaluator orders those few again). A column with
-  blank nodes, other literals or two kinds of literals is left to the evaluator, as are
+  blank nodes, other literals or two kinds of literals (an integer and a double, a date and
+  a date-time, date-times with and without a time zone) is left to the evaluator, as are
   order expressions other than variables. On 300 k labels, `ORDER BY ?label LIMIT 10`
-  1.1 s → 11 ms, `SELECT DISTINCT ?t ... ORDER BY ?t LIMIT 10` 1.0 s → 12 ms.
+  1.1 s → 11 ms, `SELECT DISTINCT ?t ... ORDER BY ?t LIMIT 10` 1.0 s → 12 ms. The top 50 of
+  133 k double amounts 54 → 17 ms, and with a three-pattern join 319 → 34 ms.
 - **Geometries.** Geometry literals (`geo:wktLiteral`, `geoJSONLiteral`, `gmlLiteral`,
   `kmlLiteral`, H3 cell lists) get their own term kind. They are parsed the first time
   something asks for them (`Snapshot::geometry(id)`, the spatial index) and then kept by term

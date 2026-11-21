@@ -220,3 +220,74 @@ fn double_sums_are_rounded_once() {
         ]
     );
 }
+
+/// The solutions of `query` in their order, decimals and doubles by value (Oxigraph's store
+/// keeps them in canonical form).
+fn ordered(engine: &Engine, query: &str) -> Vec<String> {
+    let QueryResults::Solutions(solutions) = engine.query(query).unwrap() else {
+        panic!("not a SELECT")
+    };
+    solutions
+        .map(|s| {
+            let s = s.unwrap();
+            s.iter()
+                .map(|(v, t)| match t {
+                    oxigraph::model::Term::Literal(l)
+                        if l.datatype() == oxigraph::model::vocab::xsd::DECIMAL
+                            || l.datatype() == oxigraph::model::vocab::xsd::DOUBLE =>
+                    {
+                        let value = l.value().parse::<f64>().unwrap();
+                        format!("{v}={value}^^{}", l.datatype())
+                    }
+                    t => format!("{v}={t}"),
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect()
+}
+
+/// `ORDER BY` of inline numbers and dates under a `LIMIT` is ordered on ids (#64): the same
+/// rows in the same order as the evaluator, also with `OFFSET`, `DESC`, a second key, unbound
+/// values, and columns that mix kinds (left to the evaluator).
+#[test]
+fn top_rows_of_numbers_and_dates_match_the_evaluator() {
+    let (ours, reference) = engines();
+    for p in [
+        "ex:int", "ex:dec", "ex:dbl", "ex:num", "ex:date", "ex:when", "ex:mixed",
+    ] {
+        for (order, slice) in [
+            ("DESC(?v) ?s", "LIMIT 7"),
+            ("?v ?s", "LIMIT 5 OFFSET 3"),
+            ("DESC(?v) DESC(?s)", "LIMIT 40"),
+            ("?c DESC(?v) ?s", "LIMIT 12"),
+        ] {
+            for q in [
+                format!("{P}SELECT ?s ?v WHERE {{ ?s {p} ?v ; a ?c }} ORDER BY {order} {slice}"),
+                format!(
+                    "{P}SELECT ?s ?v WHERE {{ ?s a ?c OPTIONAL {{ ?s {p} ?v FILTER(?v != 0) }} }} ORDER BY {order} {slice}"
+                ),
+                // Equal values of different kinds (`7` and `"7"^^xsd:int`) tie in any order.
+                if ["ex:mixed", "ex:num"].contains(&p) {
+                    String::new()
+                } else {
+                    format!(
+                        "{P}SELECT DISTINCT ?v WHERE {{ ?s {p} ?v ; a ?c }} ORDER BY DESC(?v) {slice}"
+                    )
+                },
+            ] {
+                if q.is_empty() {
+                    continue;
+                }
+                assert_eq!(ordered(&ours, &q), ordered(&reference, &q), "{q}");
+            }
+        }
+    }
+    // Doubles are ordered on ids: the plan reads the first rows from a result table.
+    let plan = ours
+        .explain(&format!(
+            "{P}SELECT ?s ?v WHERE {{ ?s ex:dbl ?v }} ORDER BY DESC(?v) LIMIT 5"
+        ))
+        .unwrap();
+    assert!(plan.contains("urn:tripletrail:table:"), "{plan}");
+}
