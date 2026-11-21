@@ -153,7 +153,22 @@
     return (2 * metres) / perPixel;
   }
 
-  const geometry = { distance, bearing, destination, length, ringArea, perimeter, circle, toWkt, fromWkt, fmtLength, fmtArea, fmtBearing, fmtPoint, bandWidth };
+  /** The EPSG code a viewer typed, as the CRS IRI `geof:transform` takes; null when it is
+   *  none (CRS84) or no code (1 to 6 digits, after an optional "EPSG:"). */
+  function epsgIri(text) {
+    const m = /^\s*(?:EPSG:)?(\d{1,6})\s*$/i.exec(String(text || ""));
+    return m ? "http://www.opengis.net/def/crs/EPSG/0/" + Number(m[1]) : null;
+  }
+
+  /** A projected point's WKT (`<CRS> POINT(x y)`) as "x y" to the centimetre, or null. */
+  function fmtProjected(wkt) {
+    const m = /POINT\s*\(\s*(-?[\d.eE+-]+)\s+(-?[\d.eE+-]+)\s*\)/i.exec(String(wkt || ""));
+    if (!m) return null;
+    const r = (v) => { const n = Number(v); return Math.abs(n) >= 1000 ? n.toFixed(2) : String(Math.round(n * 1e6) / 1e6); };
+    return r(m[1]) + " " + r(m[2]);
+  }
+
+  const geometry = { epsgIri, fmtProjected, distance, bearing, destination, length, ringArea, perimeter, circle, toWkt, fromWkt, fmtLength, fmtArea, fmtBearing, fmtPoint, bandWidth };
 
   /** The relations a feature's geometry can have to the area, as `rel` takes them. */
   const RELATIONS = [
@@ -188,7 +203,7 @@
   const END = "Backspace takes the last point back, Esc stops.";
 
   /** The tools' map control and panel. `ctx`: {map, ui, icon(name), getArea(), setArea(area
-   *  or null), layers: [{id, title}]}, the area being {area, rel, dist}. Returns {control, attach(), click(e),
+   *  or null), layers: [{id, title}], sparql(query): the dataset's answer as SPARQL JSON}, the area being {area, rel, dist}. Returns {control, attach(), click(e),
    *  busy(), useFeature(iri, label), refresh()}. */
   function panel(ctx) {
     const { map, ui } = ctx;
@@ -204,6 +219,12 @@
     let pointer = null;
     let liveResults = null;
     let liveCoords = null;
+    let liveProjected = null;
+    /** The EPSG code coordinates are also shown and copied in, as typed ("" for none), kept
+     *  in this browser. */
+    const EPSG_KEY = "tripletrail-map-epsg";
+    let epsg = (() => { try { return localStorage.getItem(EPSG_KEY) || ""; } catch (e) { return ""; } })();
+    let projecting = null;
 
     const wrap = el("div", { class: "maplibregl-ctrl maplibregl-ctrl-group map-ctrl map-tools-wrap" });
     const box = el("div", { class: "map-tools card", id: "map-tools", role: "region", "aria-label": "Map tools", hidden: true });
@@ -246,8 +267,10 @@
       const p = lngLat(e);
       const { kind, pts } = mode;
       if (kind === "point") {
-        ui.copyText(geometry.toWkt({ type: "Point", coordinates: p }), "Point");
+        const wkt = geometry.toWkt({ type: "Point", coordinates: p });
         stop();
+        if (!geometry.epsgIri(epsg)) ui.copyText(wkt, "Point");
+        else project(p).then((w) => ui.copyText(w, "Point")).catch((err) => ui.toast(err.message || String(err), "bad"));
         return true;
       }
       // A double-click's second click lands on the point just put.
@@ -403,6 +426,25 @@
       if (box.hidden) return;
       if (liveCoords) liveCoords.textContent = pointer ? geometry.fmtPoint(pointer) : "–";
       if (liveResults) liveResults.replaceChildren(...results());
+      // The pointer in the EPSG code, once it rests: the server transforms it.
+      if (liveProjected && pointer && geometry.epsgIri(epsg)) {
+        clearTimeout(projecting);
+        const at = pointer;
+        projecting = setTimeout(() => {
+          project(at).then((w) => {
+            if (liveProjected && at === pointer) liveProjected.textContent = geometry.fmtProjected(w) || "–";
+          }).catch(() => { if (liveProjected) liveProjected.textContent = "–"; });
+        }, 200);
+      }
+    }
+    /** Point `p` in the EPSG code, as WKT with its CRS first, by the server's geof:transform. */
+    async function project(p) {
+      const crs = geometry.epsgIri(epsg);
+      const wkt = geometry.toWkt({ type: "Point", coordinates: p });
+      const out = await ctx.sparql(`SELECT (<http://www.opengis.net/def/function/geosparql/transform>("${wkt}"^^<http://www.opengis.net/ont/geosparql#wktLiteral>, <${crs}>) AS ?w) {}`);
+      const b = out && out.results && out.results.bindings && out.results.bindings[0];
+      if (!b || !b.w) throw new Error("EPSG:" + epsg.replace(/^EPSG:/i, "") + ": no such CRS, or the point is outside it");
+      return b.w.value;
     }
 
     /** What the area is, in words. */
@@ -444,6 +486,7 @@
       const close = el("button", { type: "button", class: "icon-btn close", title: "Close the tools", "aria-label": "Close the tools", onclick: () => { show(false); toggle.focus(); } }, "✕");
       liveResults = el("div", { class: "map-tools-results", "aria-live": "polite" });
       liveCoords = el("span", { class: "mono" }, pointer ? geometry.fmtPoint(pointer) : "–");
+      liveProjected = el("span", { class: "mono" }, "–");
       const wkt = a && !IS_IRI.test(a.area) && !LAYER.test(a.area) ? a.area : null;
       const inLayer = a && LAYER.exec(a.area);
       const layers = ctx.layers || [];
@@ -480,7 +523,16 @@
         el("section", {},
           el("h4", {}, "Coordinates"),
           el("p", { class: "small" }, "Pointer ", liveCoords, el("span", { class: "muted" }, " (latitude, longitude)")),
-          el("div", { class: "map-tools-row" }, tool("point", "Copy a point", "Click the map to copy that point as WKT"))),
+          ctx.sparql ? el("label", { class: "map-tools-rel small" }, "Also in EPSG ", el("input", { type: "text", inputmode: "numeric", class: "map-tools-dist", value: epsg,
+            placeholder: "e.g. 31370", "aria-label": "EPSG code to show and copy coordinates in", onchange: (e) => {
+              const v = e.target.value.trim();
+              if (v && !geometry.epsgIri(v)) { ui.toast("An EPSG code: digits, such as 31370.", "bad"); e.target.value = epsg; return; }
+              epsg = v;
+              try { if (v) localStorage.setItem(EPSG_KEY, v); else localStorage.removeItem(EPSG_KEY); } catch (err) { /* this page still has it */ }
+              fill();
+            } })) : "",
+          geometry.epsgIri(epsg) ? el("p", { class: "small" }, "EPSG:" + epsg.replace(/^EPSG:/i, "") + " ", liveProjected, el("span", { class: "muted" }, " (x, y)")) : "",
+          el("div", { class: "map-tools-row" }, tool("point", "Copy a point", "Click the map to copy that point as WKT" + (geometry.epsgIri(epsg) ? ", in the EPSG code" : "")))),
         mode ? el("p", { class: "map-tools-hint small", role: "status" }, HINTS[mode.kind] + (mode.kind === "point" || mode.kind === "rect" || mode.kind === "circle" ? " Esc stops." : " " + END)) : "");
       live();
     }

@@ -13,6 +13,7 @@ versions may change the store format and the API; the release notes say how to u
 - Select by location (#33): `area=layer:{id}` takes the features of another collection, as its own filters (`{id}.{key}=…`) keep them, as the area of the tiles, facets and OGC API items; the Map page's Tools offer it as **Or the features of**.
 - **Draft with AI** on the Import page (#20): your AI service (the Workbench's key and model) writes the `CONSTRUCT` from the file's first triples, the dataset's shapes and what you ask for, and checks it with previews on the file until it runs. Its query replaces the one on the page, which it previews, and **Back to the previous query** undoes that. The sample goes from the browser to the AI service only. See [the guide](docs/guide/07-lifting.md#import-a-file-in-the-web-ui).
 - Forms are a reader of the shapes (#80): `tts:Reader-Forms` (`?reader=forms`), so `tts:hiddenFrom` and `tts:onlyFor` keep a shape or a property from the record forms. The web UI draws forms from shapes with one renderer, `/$/ui/forms.js`, whose editors and viewers are looked up by `dash:editor` and `dash:viewer` and can be added to; the Shapes page's settings use it. See [the guide](docs/guide/10-maps-and-apis.md#keep-a-property-from-the-record-forms) and [shapes](docs/server.md#shapes).
+- The Map page's Tools show and copy the coordinates under the pointer in an EPSG code as well (#33), transformed by the server.
 
 ### Fixed
 

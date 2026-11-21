@@ -89,6 +89,13 @@ window.TripleTrailMap = (function () {
     return r.json();
   }
   const service = (ds, path) => "/" + encodeURIComponent(ds) + "/" + path;
+  /** A query's answer from the dataset, as SPARQL JSON, with the caller's headers. */
+  async function sparqlJson(ds, query) {
+    const r = await fetch(service(ds, "sparql"), { method: "POST", body: new URLSearchParams({ query }),
+      headers: { Accept: "application/sparql-results+json", ...headers() } });
+    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    return r.json();
+  }
 
   async function render(shared, args) {
     ui = shared;
@@ -175,7 +182,8 @@ window.TripleTrailMap = (function () {
     map.once("load", () => { loaded = true; });
     // The tools: an area to filter by (in the link as area, rel and dist), measuring.
     tools = window.TripleTrailMapTools ? window.TripleTrailMapTools.panel({ map, ui, icon, getArea: () => state.area, setArea: (area) => apply({ area }),
-      layers: collections.map((c) => ({ id: c.id, title: c.title })) }) : null;
+      layers: collections.map((c) => ({ id: c.id, title: c.title })),
+      sparql: (query) => sparqlJson(name, query) }) : null;
     if (tools) map.once("load", () => tools.attach());
     map.addControl(new lib.NavigationControl(), "top-right");
     map.addControl(mapButtons(name, basemaps, state), "top-right");

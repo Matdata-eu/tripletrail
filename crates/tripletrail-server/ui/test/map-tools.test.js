@@ -61,3 +61,12 @@ test("a band's width on the map", () => {
   close(g.bandWidth(500, 0), 1000 / (40075016.686 / 512), 1e-9, "on the equator");
   close(g.bandWidth(500, 60), 2 * g.bandWidth(500, 0), 1e-9, "twice as wide at 60°");
 });
+
+test("EPSG codes and projected points", () => {
+  assert.strictEqual(g.epsgIri("31370"), "http://www.opengis.net/def/crs/EPSG/0/31370");
+  assert.strictEqual(g.epsgIri(" epsg:3857 "), "http://www.opengis.net/def/crs/EPSG/0/3857");
+  for (const bad of ["", "CRS84", "1234567", "31370; DROP", "EPSG:"]) assert.strictEqual(g.epsgIri(bad), null, bad);
+  assert.strictEqual(g.fmtProjected("<http://www.opengis.net/def/crs/EPSG/0/31370> POINT(149179.3617754487 170566.12911798153)"), "149179.36 170566.13");
+  assert.strictEqual(g.fmtProjected("POINT(4.1234567 50.5)"), "4.123457 50.5");
+  assert.strictEqual(g.fmtProjected("LINESTRING(0 0, 1 1)"), null);
+});
