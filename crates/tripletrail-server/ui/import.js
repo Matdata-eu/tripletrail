@@ -108,7 +108,14 @@ window.TripleTrailImport = (function () {
           el("label", {}, "Into graph ", el("input", { id: "imp-graph", type: "text", size: 40, value: graph, "aria-label": "Graph IRI" })),
           el("button", { class: "btn primary", type: "button", onclick: run }, "Add to the graph"),
           el("button", { class: "btn", type: "button", onclick: download, title: "Save the query to run with tripletrail lift, reading the file by its name" }, "Download query"),
-          el("span", { class: "muted small", id: "imp-status", role: "status" }))),
+          el("span", { class: "muted small", id: "imp-status", role: "status" })),
+        el("details", { class: "imp-ai", id: "imp-ai" }, el("summary", {}, "Draft with AI"),
+          el("p", { class: "muted small" }, "Your AI service writes the query from a sample of the file and the dataset's shapes, and checks it by previewing it on the file. The sample and the shapes go from this browser to that service, with your key."),
+          el("div", { class: "sb-actions" },
+            el("input", { id: "imp-ai-ask", type: "text", size: 60, placeholder: "What should it become? (optional, e.g. one station per row, with its name and position)", "aria-label": "What the query should make" }),
+            el("button", { class: "btn", type: "button", id: "imp-ai-go", onclick: draft }, "Draft"),
+            el("button", { class: "btn", type: "button", id: "imp-ai-back", hidden: true, onclick: back }, "Back to the previous query")),
+          el("div", { class: "muted small", id: "imp-ai-log", role: "status" }))),
       el("div", { class: "card imp-card", id: "imp-out", hidden: true }));
   }
 
@@ -151,6 +158,85 @@ window.TripleTrailImport = (function () {
     out.hidden = false;
   }
 
+  // "Draft with AI" (#20): the model writes the CONSTRUCT from a sample of the file and the
+  // dataset's shapes, previewing it on the file until it runs, through the user's own AI
+  // service (ai.js). It writes nothing: the query lands in the editor, and the previous one
+  // stays a click away.
+  const SH = "http://www.w3.org/ns/shacl#";
+  const SYSTEM = `You write a SPARQL CONSTRUCT query that turns an uploaded file into RDF for a TripleTrail dataset.
+- The file is read through Facade-X: the draft query's SERVICE <x-sparql-anything:...> clause reads it (location=upload:NAME). Keep that clause and its options as they are; change only the CONSTRUCT template and the patterns and BINDs inside the WHERE.
+- In Facade-X a file is a tree: fx:root is the document, containers are blank nodes, rdf:_1, rdf:_2... are positions (rows of a CSV, items of a list), and xyz: properties are the keys (CSV column names, JSON keys) with literal values. The sample shows the file's own triples.
+- Use the classes and properties of the dataset's shapes (get_shapes; with a class IRI, one class's node shape) where they fit, with their datatypes. Make IRIs for the things from a key's value with BIND(IRI(CONCAT(...)) AS ?x), never blank nodes for things that have an id. Never invent prefixes you do not declare.
+- Check the query with preview, which runs it on the whole file and answers how many triples it makes and the first ones, or the error. Fix what it reports and check again.
+- Answer with the whole query, with all its prefixes, in one fenced block (\`\`\`sparql), then one or two sentences on what it makes. Answer in the user's language.`;
+  let previous = null, aiAbort = null;
+
+  async function draft() {
+    const AI = window.TripleTrailAI;
+    const c = AI && AI.connection();
+    const log = $("imp-ai-log");
+    if (!c) {
+      log.replaceChildren("Set up an AI service first: ", el("a", { href: UI + "workbench", "data-route": "" }, "Workbench, AI tab, “Key and model…”"), ".");
+      return;
+    }
+    if (aiAbort) { aiAbort.abort(); return; }
+    const go = $("imp-ai-go");
+    const u = upload;
+    const tools = [
+      { name: "preview", description: "Runs a CONSTRUCT on the whole uploaded file, writing nothing. Answers how many triples it makes and the first 40, as N-Triples, or the error.",
+        parameters: { type: "object", properties: { query: { type: "string", description: "The whole CONSTRUCT query" } }, required: ["query"] },
+        run: async ({ query: q }) => {
+          const lines = (await send("POST", base() + "/" + u.id + "/preview", String(q || ""), "application/n-triples")).split("\n").filter(Boolean);
+          return lines.length + " triples" + (lines.length ? ":\n" + lines.slice(0, 40).join("\n") : ". The patterns match nothing in the file: compare them with the sample.");
+        } },
+      { name: "get_shapes", description: "The SHACL shapes of the dataset the file goes into, as Turtle: those its readers use now. 'class' (an IRI) keeps only that class's node shape and its property shapes.",
+        parameters: { type: "object", properties: { class: { type: "string", description: "Optional class IRI" } } },
+        run: async ({ class: cls }) => {
+          const path = "/$/datasets/" + encodeURIComponent(ds) + "/shapes";
+          if (!cls) return send("GET", path, null, "text/turtle");
+          const iri = String(cls).replace(/[<>"\s]/g, "");
+          return send("POST", path + "/sparql", `CONSTRUCT { ?s ?p ?o } WHERE { ?shape <${SH}targetClass> <${iri}> . { BIND(?shape AS ?s) ?s ?p ?o } UNION { ?shape <${SH}property> ?s . ?s ?p ?o } }`, "text/turtle");
+        } },
+    ];
+    const ask = $("imp-ai-ask").value.trim();
+    const messages = [
+      { role: "system", content: SYSTEM },
+      { role: "user", content: `File: ${u.name} (${u.bytes} bytes${u.options ? ", options " + u.options : ""}).\n\nIts Facade-X triples${u.truncated ? " (the first ones)" : ""}:\n${u.tree.slice(0, 12000)}\n\nThe query now:\n\`\`\`sparql\n${query()}\n\`\`\`\n\n${ask || "Map it to the dataset's classes and properties where they fit."}` },
+    ];
+    aiAbort = new AbortController();
+    go.textContent = "Stop";
+    log.className = "muted small";
+    log.textContent = "Asking " + c.label + "…";
+    try {
+      const answer = await AI.converse(c, messages, tools, {
+        signal: aiAbort.signal, maxSteps: 8,
+        onStep: (kind, d) => { log.textContent = d.name === "preview" ? "Checking the query on the file…" : "Reading the dataset's shapes…"; },
+      });
+      const blocks = [...answer.matchAll(/```(?:sparql|rq)?\s*\n([\s\S]*?)```/g)].map((m) => m[1].trim());
+      const found = blocks.reverse().find((b) => /\bCONSTRUCT\b/i.test(b));
+      if (!found) { log.textContent = answer || "The model gave no query."; return; }
+      previous = query();
+      $("imp-query").value = found;
+      $("imp-ai-back").hidden = false;
+      log.textContent = answer.replace(/```[\s\S]*?```/g, "").trim();
+      await preview();
+    } catch (e) {
+      if (e && e.name === "AbortError") { log.textContent = "Stopped."; return; }
+      log.className = "error small";
+      log.textContent = e.message;
+    } finally {
+      aiAbort = null;
+      go.textContent = "Draft";
+    }
+  }
+
+  function back() {
+    if (previous === null) return;
+    $("imp-query").value = previous;
+    previous = null;
+    $("imp-ai-back").hidden = true;
+  }
+
   /** The query as a lift query: it reads the file by its name instead of the upload. */
   function download() {
     const text = query().split("location=upload:" + upload.name).join("location=" + upload.name)
@@ -162,6 +248,8 @@ window.TripleTrailImport = (function () {
 
   /** Tells the server to drop the file now rather than in an hour. */
   function forget() {
+    previous = null;
+    if (aiAbort) aiAbort.abort();
     if (!upload || !ds) { upload = null; return; }
     const path = base() + "/" + upload.id;
     upload = null;

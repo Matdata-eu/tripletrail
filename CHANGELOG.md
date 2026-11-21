@@ -10,6 +10,7 @@ versions may change the store format and the API; the release notes say how to u
 ### Added
 
 - The Map page's **Tools** (#33): draw an area to filter every layer by (rectangle, polygon, circle, corridor along a line, or a feature's geometry with **Filter by it**) with a spatial relation, measure lengths with bearings and areas with perimeter on the sphere, and read or copy the coordinates under the pointer. The area goes into the page's link as `area`, `rel` and `dist`. See [the guide](docs/guide/10-maps-and-apis.md#draw-an-area-measure-and-read-coordinates).
+- **Draft with AI** on the Import page (#20): your AI service (the Workbench's key and model) writes the `CONSTRUCT` from the file's first triples, the dataset's shapes and what you ask for, and checks it with previews on the file until it runs. Its query replaces the one on the page, which it previews, and **Back to the previous query** undoes that. The sample goes from the browser to the AI service only. See [the guide](docs/guide/07-lifting.md#import-a-file-in-the-web-ui).
 
 ### Fixed
 

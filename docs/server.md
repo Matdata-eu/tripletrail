@@ -2625,6 +2625,15 @@ locations are refused. A file is forgotten an hour after it was last used, and t
 at most 16 files and 256 MiB, forgetting the least recently used first; then a request for it
 answers 404.
 
+The page's **Draft with AI** (#20) asks the user's AI service (the Workbench's connection, see
+[the AI tab](#workbench)) for the `CONSTRUCT`, from the upload's `tree`, the query on the page
+and an optional request. The model's tools are `preview` (the endpoint above, answering the
+number of triples and the first 40, or the error) and `get_shapes` (`GET
+/$/datasets/{ds}/shapes`, or one class's node shape with its property shapes through
+`…/shapes/sparql`). The page takes the last fenced query of the answer, keeps the previous
+one for **Back to the previous query**, and previews it. Requests go from the browser to the
+AI service only; the server only answers the previews and the shapes, under the user's token.
+
 ## Linked Data
 
 With `--base-iri DATASET=PREFIX`, the IRIs of a dataset dereference: a `GET` of a URL that
