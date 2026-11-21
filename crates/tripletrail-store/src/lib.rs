@@ -241,6 +241,36 @@ impl Inner {
             Some(parse_wkt_literal_uncached(&term))
         })
     }
+
+    /// The parsed geometry of a stored geometry literal, without keeping it: the one already
+    /// parsed if there is one, else decoded or parsed for this caller only. A join that reads
+    /// millions of polygons once each (#2) would otherwise keep them all in memory.
+    fn geometry_transient(&self, id: TermId) -> Option<Arc<Geom>> {
+        if id.kind() != Kind::Geometry {
+            return None;
+        }
+        let o = id.payload() as u32;
+        if o == 0 {
+            return None;
+        }
+        if let Some(g) = self.geometries.peek(o) {
+            return g;
+        }
+        if let Some(g) = self.geometries.saved(o) {
+            return Some(Arc::new(g));
+        }
+        let term = {
+            let dict = self.dict.read_unpoisoned();
+            if o as usize > dict.len() {
+                return None;
+            }
+            if let Some(g) = dict.geometry_record(o).and_then(geobin::decode) {
+                return Some(Arc::new(g));
+            }
+            dict.term(o)
+        };
+        parse_wkt_literal_uncached(&term)
+    }
 }
 
 /// What one commit changed (see [`Store::touched_between`]).
@@ -3791,6 +3821,12 @@ impl Snapshot {
     /// The parsed geometry of a geometry literal in the store, parsed on first use.
     pub fn geometry(&self, id: TermId) -> Option<Arc<Geom>> {
         self.inner.geometry(id)
+    }
+
+    /// The parsed geometry of a geometry literal in the store, without keeping it in the
+    /// store's cache (one already there is returned).
+    pub fn geometry_transient(&self, id: TermId) -> Option<Arc<Geom>> {
+        self.inner.geometry_transient(id)
     }
 
     fn quad_ids(&self, quad: QuadRef<'_>) -> Option<[u64; 4]> {
