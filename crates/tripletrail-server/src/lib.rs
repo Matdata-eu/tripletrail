@@ -37,6 +37,7 @@ mod describe_view;
 pub mod fuseki_config;
 mod geometry_ways;
 mod id_results;
+mod import;
 #[doc(hidden)]
 pub mod jena_binary;
 #[doc(hidden)]
@@ -2008,6 +2009,9 @@ fn route(
             [ds, "search", ..] if registry.resolve(ds).is_some() => {
                 (registry.resolve(ds).unwrap(), "search")
             }
+            [ds, "import", ..] if registry.resolve(ds).is_some() => {
+                (registry.resolve(ds).unwrap(), "import")
+            }
             [ds, service] if SERVICES.contains(service) && registry.resolve(ds).is_some() => {
                 (registry.resolve(ds).unwrap(), *service)
             }
@@ -2314,6 +2318,17 @@ fn route(
                 segments[0],
                 timeout,
                 &view,
+            );
+        }
+        "import" => {
+            return import::route(
+                state,
+                request,
+                &segments[2..],
+                &params,
+                context,
+                engine,
+                read_only,
             );
         }
         "tiles" if method == Method::Post && segments.get(2..) == Some(&["preview"][..]) => {

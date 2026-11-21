@@ -4672,6 +4672,7 @@ dependencies = [
  "rustls",
  "serde_json",
  "sha2",
+ "spargebra",
  "tar",
  "tiny_http",
  "tripletrail",

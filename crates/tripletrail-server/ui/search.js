@@ -37,7 +37,7 @@
   // The dataset of the page's path (query/kg, map/kg, datasets/kg), if any.
   const fromPath = () => {
     const [page, arg] = location.pathname.slice(UI.length).split("/");
-    return ["query", "map", "search", "datasets", "shapes"].includes(page) && arg ? decodeURIComponent(arg) : null;
+    return ["query", "map", "search", "datasets", "shapes", "import"].includes(page) && arg ? decodeURIComponent(arg) : null;
   };
   async function loadDatasets() {
     try {
