@@ -222,8 +222,10 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   memory.
 - `--threads` (4 by default) is the number of worker threads that answer requests.
   `--query-threads` (`TRIPLETRAIL_QUERY_THREADS`, 0 by default: as many as cores) is the size
-  of the pool that large joins, `OPTIONAL`, `MINUS` and `EXISTS` of one query run on; the
-  queries share it, and 1 keeps each query on its own thread. The SHACL rules of an `infer`
+  of the pool that large joins (the sorted joins of a basic graph pattern too), `OPTIONAL`,
+  `MINUS`, `EXISTS`, `FILTER`, `GROUP BY` and the aggregates of its groups run on, for one
+  query; the queries share it, and 1 keeps each query on its own thread. The answers, and
+  their order, are the same with any number. The SHACL rules of an `infer`
   step run on as many threads at once (#891); 1 runs them one at a time.
 - `--functions functions.ttl` (repeatable; `TRIPLETRAIL_FUNCTIONS`, comma-separated) loads
   SHACL-AF `sh:SPARQLFunction`s that the queries and updates of every dataset can call by their
@@ -2622,6 +2624,15 @@ name (so a lift query that names the file runs as it is), and `from-archive` of 
 locations are refused. A file is forgotten an hour after it was last used, and the server keeps
 at most 16 files and 256 MiB, forgetting the least recently used first; then a request for it
 answers 404.
+
+The page's **Draft with AI** (#20) asks the user's AI service (the Workbench's connection, see
+[the AI tab](#workbench)) for the `CONSTRUCT`, from the upload's `tree`, the query on the page
+and an optional request. The model's tools are `preview` (the endpoint above, answering the
+number of triples and the first 40, or the error) and `get_shapes` (`GET
+/$/datasets/{ds}/shapes`, or one class's node shape with its property shapes through
+`…/shapes/sparql`). The page takes the last fenced query of the answer, keeps the previous
+one for **Back to the previous query**, and previews it. Requests go from the browser to the
+AI service only; the server only answers the previews and the shapes, under the user's token.
 
 ## Linked Data
 
