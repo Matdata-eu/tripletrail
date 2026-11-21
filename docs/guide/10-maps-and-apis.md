@@ -623,7 +623,22 @@ not on the flat map, so they hold far from the equator too. A measurement stays 
 until the next one, or **Clear**; it does not filter anything.
 
 **Coordinates** shows the latitude and longitude under the pointer, and **Copy a point**
-copies the next point clicked as WKT (`POINT(4.3571 50.8455)`), for a query or a GIS.
+copies the next point clicked as WKT (`POINT(4.3571 50.8455)`), for a query or a GIS. With an
+EPSG code in **Also in EPSG** (31370 for the Belgian Lambert 72, say; the browser remembers
+it), the panel also shows the point in that CRS, and copies it there as a `geo:wktLiteral`
+with the CRS first. The server transforms it, as `geof:transform` does in a query:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/ds/sparql -H 'Accept: text/csv' --data-urlencode \
+  'query=SELECT (<http://www.opengis.net/def/function/geosparql/transform>("POINT(4.3571 50.8455)"^^<http://www.opengis.net/ont/geosparql#wktLiteral>, <http://www.opengis.net/def/crs/EPSG/0/31370>) AS ?w) {}'
+```
+
+<!-- test: output -->
+```text
+w
+<http://www.opengis.net/def/crs/EPSG/0/31370> POINT(149179.3617754487 170566.12911798153)
+```
 
 ### Count the classes of a coloured map
 
