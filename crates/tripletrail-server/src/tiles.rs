@@ -453,6 +453,9 @@ pub(crate) fn route(
 const MAX_FILTER_VALUES: usize = 1_000;
 /// Values of one facet counted at most (the most frequent).
 const FACET_VALUES: usize = 50;
+/// The most classes a map coloured by a range draws: the web UI's colours for them.
+const RANGE_CLASSES: usize = 8;
+
 const LABELS: &str =
     "<http://www.w3.org/2000/01/rdf-schema#label>|<http://www.w3.org/2004/02/skos/core#prefLabel>";
 
@@ -466,6 +469,8 @@ struct Filter {
     /// coloured by it, and whether it is a range facet (its features' highest number, not
     /// their least value).
     color: Option<(String, bool)>,
+    /// The key of the facet the map is coloured by, when it is one.
+    color_key: Option<String>,
     /// Whether a computed facet (`tts:select`) is among the filters or is the colour: queries
     /// that read it get at most [`COMPUTED_TIMEOUT`], as the facet's own counts do.
     computed: bool,
@@ -612,10 +617,76 @@ fn facet_filter(
             }
             out.signature.push_str(&format!("color={key}"));
             out.color = Some((facet.bind("?f", "?v"), facet.range));
+            out.color_key = Some(key.clone());
             out.computed |= facet.select.is_some();
         }
     }
     Ok(out)
+}
+
+/// The classes a map coloured by a range facet draws, low to high, the last with no bound:
+/// the shape's `tts:colorClasses` when they are 2 to [`RANGE_CLASSES`], else up to that many
+/// of one round width over the values from `min` to `max`, as the web UI's map makes them.
+fn color_classes(
+    shape: &[(Option<f64>, Option<String>)],
+    min: Option<f64>,
+    max: Option<f64>,
+) -> Vec<(Option<f64>, Option<String>)> {
+    let last = shape.len().saturating_sub(1);
+    let mut classes: Vec<(Option<f64>, Option<String>)> = shape
+        .iter()
+        .enumerate()
+        .filter(|(i, (up_to, _))| *i == last || up_to.is_some())
+        .map(|(_, k)| k.clone())
+        .collect();
+    if classes.len() < 2 || classes.len() > RANGE_CLASSES {
+        classes.clear();
+        if let (Some(min), Some(max)) = (min, max)
+            && min < max
+        {
+            let raw = (max - min) / 5.0;
+            let power = 10f64.powf(raw.log10().floor());
+            let width = [1.0, 2.0, 2.5, 5.0, 10.0]
+                .iter()
+                .map(|m| m * power)
+                .find(|w| *w >= raw)
+                .unwrap_or(raw);
+            let mut up = (min / width).floor() * width + width;
+            while up < max && classes.len() < RANGE_CLASSES - 1 {
+                // Twelve digits, as the UI rounds them: 0.1 + 0.2 is 0.3.
+                let rounded = format!("{up:.11e}").parse().unwrap_or(up);
+                classes.push((Some(rounded), None));
+                up += width;
+            }
+        }
+        classes.push((None, None));
+    }
+    if let Some(k) = classes.last_mut() {
+        k.0 = None;
+    }
+    classes
+}
+
+/// The SELECT expressions that count the features whose highest number `?m` is in each of
+/// `classes` (each up to its bound, inclusive, above the one before).
+fn class_sums(classes: &[(Option<f64>, Option<String>)]) -> String {
+    let bound = |i: usize| classes[i].0.map(|n| format!("{n:?}"));
+    (0..classes.len())
+        .map(|i| {
+            let above = i
+                .checked_sub(1)
+                .and_then(bound)
+                .map(|b| format!("?m > {b}"));
+            let up_to = bound(i).map(|b| format!("?m <= {b}"));
+            let test = match (above, up_to) {
+                (Some(a), Some(u)) => format!("{a} && {u}"),
+                (Some(t), None) | (None, Some(t)) => t,
+                (None, None) => "true".to_owned(),
+            };
+            format!("(SUM(IF({test}, 1, 0)) AS ?class{i})")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The filters of every collection besides its facets (#92), as SPARQL over `?f` and their
@@ -1057,7 +1128,28 @@ fn facet_counts(
             if let Some(n) = facet.color_by {
                 out["colorBy"] = n.into();
             }
-            if !facet.classes.is_empty() {
+            if all.color_key.as_deref() == Some(facet.key.as_str()) {
+                // The map is coloured by it: its legend, with the features drawn in each class.
+                let (min, max) = (out["min"].as_f64(), out["max"].as_f64());
+                let classes = color_classes(&facet.classes, min, max);
+                // Each feature in the class of its highest number, as its tiles colour it.
+                let query = format!(
+                    "SELECT {} WHERE {{ {{ SELECT ?f (MAX(?v) AS ?m) WHERE {{ \
+                       ?f a <{class}> .{}{}{drawn} FILTER(isNumeric(?v)) }} GROUP BY ?f }} }}",
+                    class_sums(&classes),
+                    facet.bind("?f", "?v"),
+                    all.sparql,
+                );
+                let rows = run(&query)?;
+                let counts: Vec<u64> = (0..classes.len())
+                    .map(|i| rows.first().map_or(0, |r| number(&r[i])))
+                    .collect();
+                out["classes"] = classes
+                    .iter()
+                    .zip(counts)
+                    .map(|((up_to, label), n)| json!({ "upTo": up_to, "label": label, "count": n }))
+                    .collect();
+            } else if !facet.classes.is_empty() {
                 out["classes"] = facet
                     .classes
                     .iter()

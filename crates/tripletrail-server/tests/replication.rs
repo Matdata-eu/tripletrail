@@ -219,7 +219,22 @@ fn a_follower_keeps_up_with_its_leader() {
         update(&leader, "ds", &format!("INSERT DATA {{ {last} }}")),
         200
     );
-    wait_for(&follower, "rep", 80);
+    // The burst can reach the follower over two reads of the leader, so 80 triples may be
+    // seen before its end (79 and one burst triple not yet deleted): wait for the last one.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ureq::get(&format!("{follower}/rep/query"))
+        .query("query", &format!("ASK {{ {last} }}"))
+        .call()
+        .ok()
+        .and_then(|r| serde_json::from_str::<Value>(&r.into_string().ok()?).ok())
+        .is_some_and(|v| v["boolean"] == true)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the burst's last triple never came"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(count(&follower, "rep"), 80);
     assert_eq!(
         update(&leader, "ds", &format!("DELETE DATA {{ {last} }}")),

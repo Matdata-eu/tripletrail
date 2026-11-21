@@ -471,6 +471,27 @@ curl -s 'http://localhost:7878/ds/tiles/facets?collection=Station&collection=Sec
 "features":22
 ```
 
+### Count the classes of a coloured map
+
+With `color={key}` naming a range facet, as the map's **Colour by** sends it, that facet comes
+with its `classes`: the colours its key shows, each with the `count` of features drawn in it
+under the filters (a feature by its highest number, as its tiles colour it). They are the
+shape's `tts:colorClasses`, else up to eight of one round width over the values, as the map
+makes them. The sections by length, 2 to 64 km, in classes of 20 km:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/tiles/facets/Section?color=lengthKm' | grep -o '"classes":\[[^]]*\]'
+```
+
+<!-- test: output -->
+```text
+"classes":[{"count":3,"label":null,"upTo":20.0},{"count":5,"label":null,"upTo":40.0},{"count":3,"label":null,"upTo":60.0},{"count":1,"label":null,"upTo":null}]
+```
+
+The features with no number, drawn grey, are `features` less the classes' counts. A values facet
+needs nothing more: its `values` already count the features of each colour.
+
 ## The REST API
 
 `/ds/api/v1` is a JSON API for developers: one list per class, records by id, with an OpenAPI
