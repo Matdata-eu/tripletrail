@@ -479,6 +479,30 @@ impl Handle {
         shapes::install_folder(&self.state, &entry, dir)
     }
 
+    /// Makes the map of the dataset `name` ahead of its first visitor (#92, `serve`, unless
+    /// `--no-warm-up`): its collections and their unfiltered facet counts, kept in the caches
+    /// requests read. Takes as long as the first map request would; answers what was done.
+    pub fn warm_map(&self, name: &str) -> Result<String, String> {
+        let entry = self
+            .state
+            .registry
+            .read_unpoisoned()
+            .datasets
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("no dataset {name}"))?;
+        let started = std::time::Instant::now();
+        let (collections, failed) = tiles::warm(&self.state, &entry).map_err(|e| e.1)?;
+        let mut done = format!(
+            "map ready: {collections} collections and their facets in {:.1} s",
+            started.elapsed().as_secs_f64()
+        );
+        if !failed.is_empty() {
+            done.push_str(&format!("; facets that failed: {}", failed.join("; ")));
+        }
+        Ok(done)
+    }
+
     /// Warnings about the names from before the rename to TripleTrail that the dataset `name`
     /// still uses (#955): in the shape files of its shapes folder, and as the names of its
     /// graphs. Each names the file or graph and how to carry it over.

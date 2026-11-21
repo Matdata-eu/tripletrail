@@ -846,6 +846,10 @@ struct ServeArgs {
     /// updates and uploads answer 405.
     #[arg(long, env = "TRIPLETRAIL_READ_ONLY")]
     read_only: bool,
+    /// Do not make each dataset's map (its collections and unfiltered facet counts) in the
+    /// background once the datasets are open; the first map request makes it instead.
+    #[arg(long, env = "TRIPLETRAIL_NO_WARM_UP")]
+    no_warm_up: bool,
     /// Serve a dataset directory (written by `tripletrail load`, tripletrail's Engine.save, or a
     /// snapshot) as NAME: NAME=DIR, or NAME=DIR:ro to open it read-only. Repeat for several.
     #[arg(
@@ -1962,6 +1966,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         packs,
         location,
         read_only,
+        no_warm_up,
         attach,
         aliases,
         union_default_graph,
@@ -2515,6 +2520,19 @@ fn serve(args: ServeArgs) -> Result<()> {
             Ok(names) => {
                 handle.set_starting(false);
                 eprintln!("serving datasets: {}", names.join(", "));
+                // The map of each, one after the other, as the first visitor would wait for
+                // it (#92): the profile and the facet queries, kept in the caches.
+                if !no_warm_up {
+                    let (handle, names) = (handle.clone(), names.clone());
+                    std::thread::spawn(move || {
+                        for name in &names {
+                            match handle.warm_map(name) {
+                                Ok(done) => eprintln!("{name}: {done}"),
+                                Err(e) => eprintln!("{name}: the map was not made ahead: {e}"),
+                            }
+                        }
+                    });
+                }
                 // Shapes and graphs a data directory from before the rename still holds (#955).
                 for name in &names {
                     for warning in handle.old_names(name) {

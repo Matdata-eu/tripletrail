@@ -235,6 +235,40 @@ pub(crate) fn preview_files(
         .ok_or_else(|| HttpError(404, "No such preview: it may have expired".to_owned()))
 }
 
+/// Makes the map's collections and the unfiltered facets of each ahead of the first visitor
+/// (#92): the profile behind the collections and the first facet queries take seconds to
+/// minutes on a large dataset, which the first map request would otherwise wait for. Their
+/// results stay in the collection and result caches, as a request's would. Answers how many
+/// collections were counted, and the failures (a facet query that times out, say), which do
+/// not stop the others.
+pub(crate) fn warm(state: &State, entry: &Entry) -> Result<(usize, Vec<String>), HttpError> {
+    if data_version(state, entry).is_none() {
+        return Err(HttpError(
+            400,
+            "its store keeps no map caches (only TripleTrail's store does)".to_owned(),
+        ));
+    }
+    let (collections, made_for) = collections_for(state, entry, Reader::Map)?;
+    // The OGC API's collections are made from the same profile: cheap once it is cached.
+    collections_for(state, entry, Reader::OgcFeatures)?;
+    let version = made_for.filter(|v| Some(*v) == data_version(state, entry));
+    let none = Params(Vec::new());
+    let mut failed = Vec::new();
+    for c in collections.iter() {
+        if let Err(e) = facet_counts(
+            entry,
+            c,
+            &none,
+            state.options.timeout,
+            &View::default(),
+            version,
+        ) {
+            failed.push(format!("{}: {}", c.id, e.1));
+        }
+    }
+    Ok((collections.len(), failed))
+}
+
 /// Whether `id` has the form of a preview's id (128 random bits in hex).
 fn is_preview_id(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())
