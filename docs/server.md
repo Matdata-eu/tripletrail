@@ -3069,6 +3069,15 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   API's property filters. A range takes `{key}.min` and `{key}.max` (either may be left out),
   read as the facet's `sh:datatype` (numbers, or dates and times), and keeps the features with
   a value within it. A filtered collection's tiles are made and kept apart.
+- `/{ds}/tiles/facets?collection=A&collection=B` counts several collections in one request
+  (#92, up to 64): `collections` holds each one's answer, as `/{ds}/tiles/facets/{id}` gives
+  it; `features` their sum; and `shared` the facets whose key more than one of them has,
+  with `collections` naming them. A shared values facet adds up the counts of each value (its
+  50 most frequent kept, `more` when any collection had more), a range takes the lowest `min`,
+  the highest `max` and the sum of `count`, and a text facet is listed as such. A facet of
+  different kinds in different collections is not shared. Filters work as on one collection: a
+  bare `{key}=value` on each collection that has the facet, `{collection}.{key}=value` on that
+  one only. A feature of two of the classes is counted in each.
 - Three filters apply to every collection, on the facets and on the tiles alike (#92), with
   the same names on `all` tiles: `bbox=minLon,minLat,maxLon,maxLat` (CRS84) keeps the features
   with a geometry that meets the box, read through the spatial index as the OGC API's `bbox`;
