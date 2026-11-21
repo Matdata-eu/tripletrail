@@ -2873,6 +2873,77 @@ fn select_by_location_takes_another_layers_features() {
     assert_eq!(code, 400);
 }
 
+/// A tile with `area=layer:{id}` gives each feature the same answer as the items, in every
+/// tile it crosses: a road a degree long crosses a link drawn between two points
+/// (`tts:lineBetween`) in one place only, far outside most of the tiles that draw the road.
+#[test]
+fn select_by_location_answers_a_long_feature_alike_in_every_tile() {
+    let dir = tripletrail_testdir::tempdir("ogc-layer-long");
+    let ttl = "@prefix ex: <http://example.org/> .\n\
+               @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+               ex:p1 a ex:Point ; geo:asWKT \"POINT(10.5 50.0)\"^^geo:wktLiteral .\n\
+               ex:p2 a ex:Point ; geo:asWKT \"POINT(10.5 50.1)\"^^geo:wktLiteral .\n\
+               ex:link1 a ex:Link ; ex:from ex:p1 ; ex:to ex:p2 .\n\
+               ex:road1 a ex:Road ; geo:asWKT \"LINESTRING(10.0 50.05, 11.0 50.05)\"^^geo:wktLiteral .\n\
+               ex:road2 a ex:Road ; geo:asWKT \"LINESTRING(10.0 50.3, 11.0 50.3)\"^^geo:wktLiteral .\n";
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 4,
+            admin_token: Some("t".to_owned()),
+            location: Some(dir.join("data")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let link = "@prefix ex: <http://example.org/> .\n\
+                @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+                @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+                ex:LinkShape a sh:NodeShape ; sh:targetClass ex:Link ; tts:key \"link\" ;\n\
+                  tts:geometry [ sh:order 0 ; sh:path ( geo:hasGeometry geo:asWKT ) ] ,\n\
+                    [ sh:order 1 ; tts:lineBetween ( ( ex:from geo:asWKT ) ( ex:to geo:asWKT ) ) ] .\n";
+    ureq::put(&format!("{base}/$/datasets/kg/shapes/files/Link.ttl"))
+        .set("Authorization", "Bearer t")
+        .send_string(link)
+        .unwrap();
+    let (code, _, page) = get(&format!(
+        "{base}/kg/ogc/collections/Road/items?area=layer:link&f=json"
+    ));
+    assert_eq!(code, 200, "{page}");
+    assert_eq!(page["numberReturned"], 1, "{page}");
+    assert!(
+        page["features"][0]["id"]
+            .as_str()
+            .unwrap()
+            .ends_with("road1")
+    );
+    // The tiles along road1, from its west end to its east end, at two zooms.
+    for z in [12u32, 14] {
+        let n = f64::from(1u32 << z);
+        let y =
+            ((1.0 - 50.05f64.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n) as u32;
+        for lon in [10.1, 10.3, 10.5, 10.7, 10.95] {
+            let x = ((lon + 180.0) / 360.0 * n) as u32;
+            let at = format!("{base}/kg/tiles/Road/{z}/{x}/{y}.mvt?area=layer:link");
+            let (code, near) = tile(&at);
+            assert_eq!(code, 200, "{at}");
+            assert!(holds(&near, "http://example.org/road1"), "{at}");
+            let (code, outside) = tile(&format!("{at}&rel=disjoint"));
+            assert_eq!(code, 200, "{at}&rel=disjoint");
+            assert!(
+                !holds(&outside, "http://example.org/road1"),
+                "{at}&rel=disjoint"
+            );
+        }
+    }
+}
+
 /// `area=layer:{id}&rel=disjoint` works out the matching features once, not once per feature
 /// of a tile or a page: on 2,500 stations and 400 zones a tile and a page of items answer well
 /// inside the server's timeout (per feature, they took minutes).
