@@ -3572,8 +3572,8 @@ fn run() -> Result<()> {
 }
 
 /// The `--map-basemap` values; empty lines are skipped. The attribution is the rest of the
-/// value after the URL, so it may hold a `|` itself; a last field that is a number is the
-/// maxzoom.
+/// value after the URL, so it may hold a `|` itself; a last field of one or two digits is the
+/// maxzoom (a longer number, such as a year, stays part of the credit).
 fn read_basemaps(values: &[String]) -> Result<Vec<tripletrail_server::Basemap>> {
     let mut basemaps = Vec::new();
     for value in values.iter().map(|v| v.trim()).filter(|v| !v.is_empty()) {
@@ -3593,7 +3593,7 @@ fn read_basemaps(values: &[String]) -> Result<Vec<tripletrail_server::Basemap>> 
         let mut maxzoom = tripletrail_server::Basemap::DEFAULT_MAXZOOM;
         if let Some((credit, last)) = attribution.rsplit_once('|')
             && let last = last.trim()
-            && !last.is_empty()
+            && (1..=2).contains(&last.len())
             && last.bytes().all(|b| b.is_ascii_digit())
         {
             maxzoom = match last.parse() {
@@ -3969,9 +3969,14 @@ mod tests {
             (s("Aerial"), s(url), s("© A | © B"), 19)
         );
         assert_eq!(one(&format!("Aerial|{url}|© A | © B|16")).2, "© A | © B");
+        // A year at the end of a credit stays the credit's.
+        assert_eq!(
+            one(&format!("Aerial|{url}|© Example | 2024")),
+            (s("Aerial"), s(url), s("© Example | 2024"), 19)
+        );
         for bad in [
             format!("Aerial|{url}|© Example|25"),
-            format!("Aerial|{url}|x|999"),
+            format!("Aerial|{url}|x|99"),
         ] {
             let e = read_basemaps(&[bad]).unwrap_err().to_string();
             assert!(e.contains("MAXZOOM is a zoom from 0 to 24"), "{e}");
