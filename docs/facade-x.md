@@ -75,7 +75,7 @@ first). URLs are read only under the prefixes `remote` allows (`--allow-url`, se
 | Shapefile | `.shp` (with its `.shx` and `.dbf`) | TripleTrail's own: one container per record (`<root>#feature<n>`), attributes as keys typed by their dBase type, and `geo:hasGeometry` to `<feature>/geometry` with `geo:asWKT`; set `geo.crs` for its CRS |
 | KML | `.kml`, `application/vnd.google-earth.kml+xml` | TripleTrail's own: one feature per `Placemark`, with `name`, `description` and its `ExtendedData` as keys, and its geometry as for Shapefile |
 | GPX | `.gpx`, `application/gpx+xml` | TripleTrail's own: one feature per waypoint, route and track, its simple child elements as keys, and its geometry as for Shapefile |
-| Archive | `.zip`, `.tar`, `.tar.gz`, `.tgz`, `application/zip`, `application/x-tar`, `application/x-compressed-tar` | the root's slots are the names of the entries, directories included, in archive order |
+| Archive | `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz2`, `application/zip`, `application/x-tar`, `application/x-compressed-tar`, `application/x-bzip-compressed-tar` | the root's slots are the names of the entries, directories included, in archive order |
 | Folder | a `location` that is a directory | the root's slots are the `file:` URLs of the directory and of every file and directory below it |
 
 ### HTML
@@ -265,7 +265,8 @@ SERVICE <x-sparql-anything:location=data.zip,archive.matches=.*csv> {
     ?row ?p ?o } }
 ```
 
-Archives compressed with bzip2 (`.tar.bz2`, `.tbz2`) are not supported.
+Tar archives may be compressed with gzip (`.tar.gz`, `.tgz`) or bzip2 (`.tar.bz2`, `.tbz2`). A
+bzip2 or gzip file that is not a tar archive (`data.csv.bz2`) is not read, as in SPARQL Anything.
 
 Spreadsheets, as SPARQL Anything (which reads only `.xls` and `.xlsx`): each sheet is a
 graph named `<root><sheet name>` with its own `fx:Root` (the default graph holds all sheets).

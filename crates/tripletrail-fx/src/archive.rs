@@ -1,8 +1,8 @@
 //! Archives and folders, as SPARQL Anything sees them: a list of names. A zip or tar archive
-//! (also gzip-compressed: `.tar.gz`, `.tgz`) gives the root one slot per entry, directories
-//! included, in archive order; a folder gives one per file and directory below it (itself
-//! first) as `file:` URLs. `archive.matches` keeps the names a regular expression matches
-//! in full (Java's `String.matches`; look-around is not supported).
+//! (also compressed: `.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz2`) gives the root one slot per
+//! entry, directories included, in archive order; a folder gives one per file and directory
+//! below it (itself first) as `file:` URLs. `archive.matches` keeps the names a regular
+//! expression matches in full (Java's `String.matches`; look-around is not supported).
 //!
 //! `from-archive=<archive>` reads `location` from inside that archive instead of from the
 //! file system, so the names a listing gives can be triplified in a nested SERVICE.
@@ -19,10 +19,12 @@ pub(crate) enum Kind {
     Zip,
     Tar,
     TarGz,
+    TarBz2,
 }
 
 impl Kind {
-    /// The kind a file name or `archive-format` names: `zip`, `tar`, `tar.gz`, `tgz`.
+    /// The kind a file name or `archive-format` names: `zip`, `tar`, `tar.gz`, `tgz`,
+    /// `tar.bz2`, `tbz2`.
     pub(crate) fn from_name(name: &str) -> Result<Option<Self>, FxError> {
         let name = name.to_ascii_lowercase();
         Ok(Some(if name.ends_with("zip") {
@@ -31,9 +33,12 @@ impl Kind {
             Kind::TarGz
         } else if name.ends_with("tar") {
             Kind::Tar
-        } else if name.ends_with("tar.bz2") || name.ends_with("tbz2") || name.ends_with("bz2") {
+        } else if name.ends_with("tar.bz2") || name.ends_with("tbz2") {
+            Kind::TarBz2
+        } else if name.ends_with("bz2") {
+            // SPARQL Anything reads a bzip2 file only as a tar archive, as for gzip.
             return Err(FxError::Unsupported(
-                "bzip2-compressed archives (use .tar.gz or .zip)".into(),
+                "a bzip2-compressed file that is not a tar archive (.tar.bz2)".into(),
             ));
         } else {
             return Ok(None);
@@ -48,7 +53,7 @@ const MAX_ENTRY_BYTES: u64 = 4 << 30;
 /// The most names a listing of an archive or folder gives.
 const MAX_NAMES: usize = 1_000_000;
 
-/// The most bytes a `.tar.gz` listing decompresses: a listing reads through every entry.
+/// The most bytes a `.tar.gz` or `.tar.bz2` listing decompresses: a listing reads through every entry.
 const MAX_LISTED_BYTES: u64 = 16 << 30;
 
 /// A reader that fails once it has given `left` bytes.
@@ -121,13 +126,22 @@ fn names(bytes: &[u8], kind: Kind) -> Result<Vec<String>, FxError> {
                 .collect()
         }
         Kind::Tar => tar_names(bytes, kind),
-        Kind::TarGz => tar_names(
+        Kind::TarGz | Kind::TarBz2 => tar_names(
             Limited {
-                inner: flate2::read::GzDecoder::new(bytes),
+                inner: decompressed(bytes, kind),
                 left: MAX_LISTED_BYTES,
             },
             kind,
         ),
+    }
+}
+
+/// The tar stream of an archive: its bytes, or them decompressed.
+fn decompressed(bytes: &[u8], kind: Kind) -> Box<dyn Read + '_> {
+    match kind {
+        Kind::TarGz => Box::new(flate2::read::GzDecoder::new(bytes)),
+        Kind::TarBz2 => Box::new(crabz2::reader(bytes)),
+        Kind::Zip | Kind::Tar => Box::new(bytes),
     }
 }
 
@@ -156,13 +170,8 @@ pub(crate) fn entry(bytes: &[u8], kind: Kind, name: &str) -> Result<Vec<u8>, FxE
             let file = archive.by_name(name).map_err(|_| missing())?;
             read_capped(file, &mut out, kind, name)?;
         }
-        Kind::Tar | Kind::TarGz => {
-            let reader: Box<dyn Read + '_> = if kind == Kind::TarGz {
-                Box::new(flate2::read::GzDecoder::new(bytes))
-            } else {
-                Box::new(bytes)
-            };
-            let mut archive = tar::Archive::new(reader);
+        Kind::Tar | Kind::TarGz | Kind::TarBz2 => {
+            let mut archive = tar::Archive::new(decompressed(bytes, kind));
             let mut found = false;
             for e in archive.entries().map_err(|e| error(kind, e))? {
                 let e = e.map_err(|e| error(kind, e))?;

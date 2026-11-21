@@ -758,6 +758,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabz2"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f77ccd2dfd6403f3ff2c5764e49471f390c2a3700777a15bebd88c9606292bd"
+
+[[package]]
 name = "crc"
 version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4559,6 +4565,7 @@ name = "tripletrail-fx"
 version = "0.1.0-rc.2"
 dependencies = [
  "calamine",
+ "crabz2",
  "csv",
  "flate2",
  "html5ever",

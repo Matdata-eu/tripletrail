@@ -69,6 +69,48 @@ WKT literal. The same works for JSON (`xyz:` and the key), XML, YAML, Excel and 
 spreadsheets, HTML, Markdown, shapefiles, KML, GPX and archives: see
 [sources and options](../facade-x.md#sources-and-options).
 
+## Files inside an archive
+
+Exports often arrive packed. A query can read a file from inside a zip or tar archive, also
+one compressed with gzip (`.tar.gz`) or bzip2 (`.tar.bz2`), without unpacking it first:
+`from-archive` names the archive and `location` the file in it. Pack the CSV file, and save
+a second query as `packed/stations.rq`:
+
+<!-- test: run -->
+```sh
+tar -cjf stations.tar.bz2 stations.csv
+mkdir -p packed
+```
+
+<!-- test: file packed/stations.rq -->
+```sparql
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX fx:   <http://sparql.xyz/facade-x/ns/>
+PREFIX xyz:  <http://sparql.xyz/facade-x/data/>
+CONSTRUCT { ?station rdfs:label ?name }
+WHERE {
+  SERVICE <x-sparql-anything:location=stations.csv,from-archive=stations.tar.bz2,csv.headers=true> {
+    ?row xyz:code ?code ; xyz:name ?name .
+  }
+  BIND(fx:entity("https://example.org/rail#", ?code) AS ?station)
+}
+```
+
+<!-- test: run -->
+```sh
+tripletrail lift packed/ --output packed.nt
+grep Charleroi packed.nt
+```
+
+<!-- test: output contains -->
+```text
+<https://example.org/rail#CRL> <http://www.w3.org/2000/01/rdf-schema#label> "Charleroi-Central" .
+```
+
+Without `location`, the archive itself is the source, and its root lists the names of the
+entries, so a nested `SERVICE` can read each one; see
+[sources and options](../facade-x.md#sources-and-options).
+
 ## Links and comments in a spreadsheet
 
 A spreadsheet cell can hold more than its value: a hyperlink, or a comment someone left on

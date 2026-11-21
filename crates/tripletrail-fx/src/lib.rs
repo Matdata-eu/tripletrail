@@ -749,6 +749,7 @@ fn format_of_media(media: &str) -> Result<Format, FxError> {
             "application/zip" => Ok(Format::Archive(archive::Kind::Zip)),
             "application/x-tar" | "application/x-gtar" => Ok(Format::Archive(archive::Kind::Tar)),
             "application/x-compressed-tar" => Ok(Format::Archive(archive::Kind::TarGz)),
+            "application/x-bzip-compressed-tar" => Ok(Format::Archive(archive::Kind::TarBz2)),
             _ => Err(FxError::Unsupported(format!("media type {media}"))),
         }
     }
