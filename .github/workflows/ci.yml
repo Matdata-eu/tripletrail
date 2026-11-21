@@ -148,6 +148,14 @@ jobs:
       - name: JavaScript client
         working-directory: clients/js
         run: node --test
+      # The five reading tools of the web UI in Chromium (#40). Playwright is installed here only,
+      # never shipped.
+      - name: Browser tests of the web UI
+        working-directory: crates/tripletrail-server/ui-tests
+        run: |
+          npm install --no-package-lock --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          node --test
       - name: Upload the conformance reports
         if: always()
         uses: actions/upload-artifact@v4
