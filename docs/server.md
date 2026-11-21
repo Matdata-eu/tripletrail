@@ -2456,12 +2456,15 @@ instead. `--no-ui` turns the UI off.
 
 The Import page's API. The file is kept in the server's memory, never written to its disk, and
 read as [Facade-X](facade-x.md) only by the queries sent for it. Every request needs the right
-to write to the dataset (the update or admin token, or a policy that grants writing); a
-read-only dataset answers 405.
+to read and write the whole dataset (the update or admin token, or a policy that grants
+reading and writing every graph): callers whose policies give them only some graphs, or rows
+under row rules, are answered 403, as a mapping's `WHERE` could read past them. A read-only
+dataset answers 405.
 
 - `POST /{ds}/import?name=NAME[&options=…]`: the file as the body. `NAME` (letters, digits,
   `.`, `-`, `_`) chooses the format as a file name does; `options` are Facade-X options
-  (`csv.headers=true` by default for `.csv` and `.tsv`). Answers 201 with `id`, `name`,
+  (`csv.headers=true` by default for `.csv` and `.tsv`); options that name another source
+(`location`, `from-archive`, `content`, `table`, `sql`...) are refused. Answers 201 with `id`, `name`,
   `bytes`, `options`, `location` (`upload:NAME`), `tree` (the first 300 triples, as N-Triples),
   `triples` and `truncated`, and `query`: a `CONSTRUCT` that maps every key of the records (the
   rows of a table, the objects of a JSON array), with IRIs under `https://example.org/import/`.

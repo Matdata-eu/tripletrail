@@ -168,3 +168,134 @@ fn only_writers_import_and_an_upload_reads_nothing_else() {
     let (code, body) = post(&base, "/kg/import?name=broken.json", b"{ not json");
     assert_eq!(code, 422, "{body}");
 }
+
+/// Callers whose policies give them only some graphs: none of them may import, so a preview's
+/// free WHERE cannot read past their grants, nor a run's counts tell a graph's size.
+#[test]
+fn callers_limited_to_some_graphs_cannot_import() {
+    use tripletrail::oxigraph::io::RdfFormat;
+    let dir = tripletrail_testdir::tempdir("import-grants");
+    let sg = "@prefix sg: <https://matdata.eu/ns/sparql-guard#> .\n@prefix ex: <http://example.org/> .\n";
+    std::fs::write(
+        dir.join("kg.ttl"),
+        format!(
+            "{sg} ex:Team a sg:Policy ; sg:group \"team\" ; sg:readAllGraphs true ; sg:writeAllGraphs true .
+             ex:Editors a sg:Policy ; sg:group \"editors\" ; sg:readAllGraphs true ; sg:writeGraph <urn:wip> .
+             ex:Contractors a sg:Policy ; sg:group \"contractors\" ; sg:readGraph <urn:release> ; sg:writeGraph <urn:wip> ."
+        ),
+    )
+    .unwrap();
+    let key = |k: &str, group: &str| {
+        let hash =
+            tripletrail_server::auth::to_hex(&tripletrail_server::auth::sha256(k.as_bytes()));
+        format!(
+            r#"{{"sha256": "{hash}", "agent": "https://example.org/people/{k}", "groups": ["{group}"]}}"#
+        )
+    };
+    std::fs::write(
+        dir.join("guard.json"),
+        format!(
+            r#"{{"auth": {{"apiKeys": [{}, {}, {}]}}, "datasets": {{"kg": {{"policies": ["kg.ttl"]}}}}}}"#,
+            key("team", "team"),
+            key("editor", "editors"),
+            key("contractor", "contractors"),
+        ),
+    )
+    .unwrap();
+    let engine = Engine::new_tripletrail();
+    engine
+        .load(
+            RdfFormat::TriG,
+            &b"<urn:secret> { <urn:a> <urn:p> \"secret\" }\n<urn:release> { <urn:a> <urn:p> \"release\" }"[..],
+        )
+        .unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        [("kg".to_owned(), engine)],
+        Options {
+            auth_config: Some(dir.join("guard.json")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let send = |path: &str, key: &str, body: &str| {
+        status(
+            ureq::post(&format!("{base}{path}"))
+                .set("X-API-Key", key)
+                .set("Accept", "application/n-triples")
+                .send_string(body),
+        )
+    };
+    // The team may import: the whole dataset is theirs.
+    let (code, body) = send("/kg/import?name=a.csv", "team", "x\n1\n");
+    assert_eq!(code, 201, "{body}");
+    let upload: Value = serde_json::from_str(&body).unwrap();
+    let id = upload["id"].as_str().unwrap();
+    let steal = "CONSTRUCT { ?s ?p ?o } WHERE { GRAPH ?g { ?s ?p ?o } }";
+    let (code, body) = send(&format!("/kg/import/{id}/preview"), "team", steal);
+    assert_eq!(code, 200, "{body}");
+    assert!(body.contains("secret"), "{body}");
+    // Writers of some graphs, reading all or some: refused on every step, the upload too.
+    for who in ["editor", "contractor"] {
+        let (code, body) = send("/kg/import?name=b.csv", who, "x\n1\n");
+        assert_eq!(code, 403, "{who}: {body}");
+        let (code, body) = send(&format!("/kg/import/{id}/preview"), who, steal);
+        assert_eq!(code, 403, "{who}: {body}");
+        assert!(!body.contains("secret"), "{who}: {body}");
+        let (code, body) = send(&format!("/kg/import/{id}/run?graph=urn:wip"), who, steal);
+        assert_eq!(code, 403, "{who}: {body}");
+        assert!(!body.contains("\"before\""), "{who}: {body}");
+    }
+}
+
+/// Under the server's locked-down Facade-X (no files, no URLs), an upload's options and a
+/// preview's query read the upload and nothing else.
+#[test]
+fn options_and_queries_read_only_the_upload() {
+    let base = start();
+    let secret = format!("{base}/$/ui/icon.svg");
+    let hostname = std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .map(|h| h.trim().to_owned())
+        .filter(|h| h.len() > 3);
+    for options in [
+        format!("location={secret}"),
+        "from-archive=/etc/hostname".to_owned(),
+        "csv.headers=true,location=/etc/hostname".to_owned(),
+        "content=injected".to_owned(),
+    ] {
+        let path = format!(
+            "/kg/import?name=a.csv&options={}",
+            form_urlencoded::byte_serialize(options.as_bytes()).collect::<String>()
+        );
+        let (code, body) = post(&base, &path, CSV);
+        assert_eq!(code, 400, "{options}: {body}");
+    }
+    let (code, body) = post(&base, "/kg/import?name=a.csv", CSV);
+    assert_eq!(code, 201, "{body}");
+    let upload: Value = serde_json::from_str(&body).unwrap();
+    let id = upload["id"].as_str().unwrap();
+    for location in [
+        format!("location=upload:a.csv,location={secret}"),
+        "location=upload:a.csv,location=/etc/hostname".to_owned(),
+        format!("location={secret}"),
+        "from-archive=/etc/hostname,location=x".to_owned(),
+        "location=upload:a.csv,from-archive=/etc/hostname".to_owned(),
+    ] {
+        let q = format!(
+            "CONSTRUCT {{ ?s ?p ?o }} WHERE {{ SERVICE <x-sparql-anything:{location}> {{ ?s ?p ?o }} }}"
+        );
+        let (code, body) = post(&base, &format!("/kg/import/{id}/preview"), q.as_bytes());
+        // Refused, or the upload's own rows; never the page's icon or the host's name.
+        assert!(!body.contains("<svg"), "{location}: {body}");
+        if let Some(host) = hostname.as_deref() {
+            assert!(code != 200 || !body.contains(host), "{location}: {body}");
+        }
+        assert!(
+            code != 200 || body.contains("Gent"),
+            "{location}: {code} {body}"
+        );
+    }
+}

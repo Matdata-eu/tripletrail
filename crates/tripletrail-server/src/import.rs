@@ -67,6 +67,17 @@ impl Upload {
     }
 }
 
+/// Facade-X options that choose the source, which an upload's options may not set.
+const SOURCE_KEYS: [&str; 7] = [
+    "location",
+    "from-archive",
+    "content",
+    "command",
+    "table",
+    "sql",
+    "database",
+];
+
 /// The kept uploads by id, the most recently used last.
 type Kept = VecDeque<(String, Arc<Upload>)>;
 
@@ -86,6 +97,17 @@ pub(crate) fn route(
     // Running a mapping writes the dataset, and an upload takes the server's memory: writers
     // only, on every request.
     crate::may_write_as(state, request, context)?;
+    // A preview's WHERE is free text and a run counts the graph: only for callers who may read
+    // and write the whole dataset (routing already refuses graph grants and row rules here;
+    // this keeps it so).
+    if context.readable.is_some() || context.writable.is_some() || context.row_rules.is_some() {
+        return Err(HttpError(
+            403,
+            "Importing needs access to the whole dataset: your access is limited to some \
+             graphs or rows"
+                .to_owned(),
+        ));
+    }
     if read_only {
         return Err(HttpError(405, "The dataset is read-only".to_owned()));
     }
@@ -118,6 +140,16 @@ pub(crate) fn route(
                 return Err(HttpError::bad_request(
                     "options: name=value pairs, joined with commas",
                 ));
+            }
+            // The upload is the source: options that name another are refused.
+            if let Some(key) = options
+                .split(',')
+                .filter_map(|o| o.split('=').next())
+                .find(|k| SOURCE_KEYS.contains(&k.trim()))
+            {
+                return Err(HttpError::bad_request(format!(
+                    "options: {key} names another source; the upload is the source"
+                )));
             }
             let upload = Upload {
                 dataset: entry.id,
