@@ -481,6 +481,17 @@ fn a_write_waits_for_its_synchronous_replicas() {
     .unwrap();
     tripletrail_server::follow(&handle, &follower_dir, follow).unwrap();
     wait_for(&follower, "rep", 1);
+    // The base copy holds write 0, but the leader learns that only from the replica's first
+    // read of the log. Until then its writes answer at once, as after any timeout (#764):
+    // wait for it, or write 1 can come first and answer with none holding it.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while sync_status(&leader)["sync"]["followers"]
+        .as_array()
+        .is_none_or(Vec::is_empty)
+    {
+        assert!(Instant::now() < deadline, "{}", sync_status(&leader));
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     // With a replica: each write answers once the replica holds it, so a plain read of the
     // replica right after sees it, without TripleTrail-Min-Version.

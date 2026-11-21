@@ -1879,28 +1879,11 @@ fn describe_pages_and_explain_keep_to_row_rules() {
     ] {
         paths.push((format!("/dim/explain?query={}", encode(q)), "*/*"));
     }
-    for (path, accept) in &paths {
-        let (a, b) = (get(&full, path, accept), get(&only, path, accept));
-        assert_eq!(a.0, b.0, "{path}");
-        if path.starts_with("/dim/explain") {
-            // The restricted explain gives the row count alone; the other one, the plan too.
-            let rows =
-                |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap()["rows"].clone();
-            assert!(a.1.contains("\"restricted\":true"), "{}", a.1);
-            assert_eq!(rows(&a.1), rows(&b.1), "{path}");
-            continue;
-        }
-        assert_eq!(
-            a.1.replace(host(&full), "HOST"),
-            b.1.replace(host(&only), "HOST"),
-            "{path}"
-        );
-    }
-    let (_, page) = get(&full, &paths[0].0, "text/html");
-    assert!(page.contains("P one") && !page.contains("123"), "{page}");
     // The resources nearest a vector, also with the parameters as a form (the Search page's
-    // way): only the rows the caller may see. On servers of their own, last: run
-    // before them, these servers made the describe pages above differ (their class diagrams).
+    // way): only the rows the caller may see. On servers of their own, with the same dataset
+    // name and more data, started and asked before the pages below are compared: nothing of
+    // theirs reaches the other servers' pages (#50; their data model's order once differed,
+    // fixed by #58).
     let vectors = "ex:p1 ex:emb \"[1, 0]\" . ex:p2 ex:emb \"[1, 0.1]\" .\n";
     let full_v = serve(format!("{prefixes}{visible}{hidden}{vectors}"), true);
     let only_v = serve(
@@ -1931,6 +1914,29 @@ fn describe_pages_and_explain_keep_to_row_rules() {
         let get = |base: &str| get(base, &format!("/dim/search/similar?{form}"), "*/*");
         assert_eq!(get(&full_v), a, "{form}");
     }
+    for base in [&full, &only] {
+        let (_, page) = get(base, &paths[0].0, "text/html");
+        assert!(!page.contains("http://example.org/emb"), "{page}");
+    }
+    for (path, accept) in &paths {
+        let (a, b) = (get(&full, path, accept), get(&only, path, accept));
+        assert_eq!(a.0, b.0, "{path}");
+        if path.starts_with("/dim/explain") {
+            // The restricted explain gives the row count alone; the other one, the plan too.
+            let rows =
+                |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap()["rows"].clone();
+            assert!(a.1.contains("\"restricted\":true"), "{}", a.1);
+            assert_eq!(rows(&a.1), rows(&b.1), "{path}");
+            continue;
+        }
+        assert_eq!(
+            a.1.replace(host(&full), "HOST"),
+            b.1.replace(host(&only), "HOST"),
+            "{path}"
+        );
+    }
+    let (_, page) = get(&full, &paths[0].0, "text/html");
+    assert!(page.contains("P one") && !page.contains("123"), "{page}");
 }
 
 /// Compiling row rules for a description or a Graph Store read keeps to the query timeout,

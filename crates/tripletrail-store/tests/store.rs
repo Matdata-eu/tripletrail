@@ -1854,28 +1854,43 @@ fn copies_of_a_store_share_no_file_with_it() {
             GraphNameRef::DefaultGraph,
         )
     };
+    // The files under `dir` with their metadata. The store's background merge removes runs
+    // and segments while the walk reads the folder (#51), so an entry that is gone by the time
+    // its metadata is read, or a folder gone before it is listed, is left out.
+    fn files(dir: &std::path::Path, out: &mut Vec<std::fs::Metadata>) {
+        let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if gone(&e) => return,
+            Err(e) => panic!("{}: {e}", dir.display()),
+        };
+        for e in entries {
+            let e = match e {
+                Ok(e) => e,
+                Err(e) if gone(&e) => continue,
+                Err(e) => panic!("{}: {e}", dir.display()),
+            };
+            match e.metadata() {
+                Ok(m) if m.is_dir() => files(&e.path(), out),
+                Ok(m) => out.push(m),
+                Err(err) if gone(&err) => {}
+                Err(err) => panic!("{}: {err}", e.path().display()),
+            }
+        }
+    }
     // The inodes of the files under `dir` with more than one name.
     fn linked(dir: &std::path::Path) -> std::collections::HashSet<u64> {
-        let mut out = std::collections::HashSet::new();
-        for e in std::fs::read_dir(dir).unwrap().flatten() {
-            let m = e.metadata().unwrap();
-            if m.is_dir() {
-                out.extend(linked(&e.path()));
-            } else if m.nlink() > 1 {
-                out.insert(m.ino());
-            }
-        }
-        out
+        let mut all = Vec::new();
+        files(dir, &mut all);
+        all.iter()
+            .filter(|m| m.nlink() > 1)
+            .map(|m| m.ino())
+            .collect()
     }
     fn inodes(dir: &std::path::Path, out: &mut std::collections::HashSet<u64>) {
-        for e in std::fs::read_dir(dir).unwrap().flatten() {
-            let m = e.metadata().unwrap();
-            if m.is_dir() {
-                inodes(&e.path(), out);
-            } else {
-                out.insert(m.ino());
-            }
-        }
+        let mut all = Vec::new();
+        files(dir, &mut all);
+        out.extend(all.iter().map(|m| m.ino()));
     }
     let model = Store::new();
     let copies = |store: &Store, label: &str| {
