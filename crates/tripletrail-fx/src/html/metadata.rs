@@ -26,7 +26,7 @@ use oxigraph::model::{BlankNode, Literal, NamedNode, NamedOrBlankNode, Term};
 use oxiri::Iri;
 use regex::Regex;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::LazyLock;
 
@@ -1405,6 +1405,8 @@ struct Microdata<'d, 'o, 's, 'a> {
     subjects: HashMap<usize, NamedOrBlankNode>,
     /// Items being written, against loops.
     open: Vec<usize>,
+    /// The first element with each `id`, for `itemref`.
+    ids: HashMap<&'d str, usize>,
 }
 
 fn microdata(doc: &Doc, document: &str, out: &mut Out<'_, '_>) {
@@ -1432,7 +1434,7 @@ fn microdata(doc: &Doc, document: &str, out: &mut Out<'_, '_>) {
         }
     }
     if !possibles.is_empty() {
-        let refs: Vec<&str> = scopes
+        let refs: HashSet<&str> = scopes
             .iter()
             .flat_map(|&s| split_ws(doc.attr_exact(s, "itemref").unwrap_or_default()))
             .collect();
@@ -1445,7 +1447,14 @@ fn microdata(doc: &Doc, document: &str, out: &mut Out<'_, '_>) {
             }
         }
     }
+    let mut ids = HashMap::new();
+    for &e in &elements {
+        if let Some(id) = doc.attr_exact(e, "id") {
+            ids.entry(id).or_insert(e);
+        }
+    }
     let mut m = Microdata {
+        ids,
         doc,
         out,
         document: Iri::parse(document.to_owned()).ok(),
@@ -1542,17 +1551,15 @@ impl Microdata<'_, '_, '_, '_> {
                 .emit(&subject, &format!("{RDF}type"), t.clone().into());
         }
         let mut props = self.props(e, true);
-        let mut seen = Vec::new();
+        let mut seen = HashSet::new();
+        let mut known: HashSet<(usize, String, bool)> = props.iter().cloned().collect();
         for r in split_ws(doc.attr_exact(e, "itemref").unwrap_or_default()) {
-            if seen.contains(&r) {
+            if !seen.insert(r) {
                 continue;
             }
-            seen.push(r);
-            if let Some(target) = (0..doc.nodes.len())
-                .find(|&i| doc.is_element(i) && doc.attr_exact(i, "id") == Some(r))
-            {
+            if let Some(&target) = self.ids.get(r) {
                 for p in self.props(target, false) {
-                    if !props.contains(&p) {
+                    if known.insert(p.clone()) {
                         props.push(p);
                     }
                 }

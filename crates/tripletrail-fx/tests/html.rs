@@ -357,6 +357,29 @@ fn deep_metadata() {
     assert!(graph.len() > 1000, "{}", graph.len());
 }
 
+/// One item whose `itemref` names 20,000 elements, each a property: read in linear time.
+#[test]
+fn many_itemrefs() {
+    let dir = tripletrail_testdir::tempdir("fx-html-itemref");
+    let n = 20_000;
+    let ids: Vec<String> = (0..n).map(|i| format!("i{i}")).collect();
+    let mut page = format!("<div itemscope itemref=\"{}\"></div>", ids.join(" "));
+    for i in 0..n {
+        page.push_str(&format!("<span id=\"i{i}\" itemprop=\"p{i}\">v</span>"));
+    }
+    let path = dir.path().join("refs.html");
+    std::fs::write(&path, page).unwrap();
+    let start = std::time::Instant::now();
+    let values = values(
+        &format!("location={},html.metadata=true", path.display()),
+        "?s <http://schema.org/p19999> ?v",
+    )
+    .unwrap();
+    assert_eq!(values, ["\"v\""]);
+    // About 1 s in a debug build; quadratic, it took 20 s.
+    assert!(start.elapsed().as_secs() < 8, "{:?}", start.elapsed());
+}
+
 /// The values of `?v` for a pattern on an HTML source, or the error.
 fn values(options: &str, pattern: &str) -> Result<Vec<String>, String> {
     let fx = FxService::new(
