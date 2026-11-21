@@ -15,6 +15,9 @@ use tripletrail::oxigraph::sparql::results::{
     QueryResultsFormat, QueryResultsParser, SliceQueryResultsParserOutput,
 };
 
+/// The server's `--executor`, as the runner was given it.
+pub static EXECUTOR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// The dataset the tests run on.
 const DATASET: &str = "ds";
 
@@ -46,7 +49,11 @@ impl Server {
         let mut command = Command::new(binary);
         command
             .args(["serve", "--bind", &format!("127.0.0.1:{port}")])
-            .args(["--dataset", &datasets.join(","), "--no-ui"]);
+            .args(["--dataset", &datasets.join(","), "--no-ui"])
+            .args([
+                "--executor",
+                EXECUTOR.get().map_or("spareval", String::as_str),
+            ]);
         if federated {
             command.args(["--service-allow", &format!("http://127.0.0.1:{port}/")]);
         }
