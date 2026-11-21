@@ -306,6 +306,52 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?y WHERE { ?s ex:huge ?x BIND(?x + 1 AS ?y) }",
         false,
     ),
+    // A constant whose lexical form is not the stored one (`2.5e0`, the store holds `2.5`):
+    // compared by value, in a list, and joined; and copies of such a column.
+    (
+        "SELECT ?s ?v WHERE { ?s ex:b ?b BIND(2.5e0 AS ?v) FILTER(?v = ?b) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?v WHERE { ?s ex:b ?b BIND(2.5e0 AS ?v) FILTER(?b IN (?v)) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?v WHERE { ?s ex:b ?b BIND(2.5e0 AS ?v) FILTER(?b IN (?v, 7)) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?t WHERE { ?s ex:b ?b BIND(2.5e0 AS ?v) ?t ex:b ?v }",
+        false,
+    ),
+    (
+        "SELECT ?s ?v WHERE { ?s ex:b ?b BIND(2.5e0 AS ?v) FILTER(?v = 2.5 && isNumeric(?v)) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?v WHERE { ?s ex:b ?b BIND(2.5e0 AS ?v) FILTER(isLiteral(?v) && DATATYPE(?v) = xsd:double) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?v WHERE { ?s ex:b ?b BIND(2.5 AS ?v) FILTER(?v = ?b) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?c WHERE { ?s ex:b ?b BIND(?b AS ?c) FILTER(?c = 2.5e0) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?c WHERE { ?s ex:b ?b BIND(?b AS ?c) FILTER(?c IN (2.5e0, 2.5)) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?t WHERE { ?s ex:b ?b BIND(?b AS ?c) ?t ex:b ?x FILTER(?c = ?x) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?t WHERE { ?s ex:b ?b BIND(?b AS ?c) ?t ex:b ?c }",
+        false,
+    ),
 ];
 
 #[test]
@@ -313,7 +359,9 @@ fn binds_on_ids_are_the_evaluators() {
     let engine = Engine::new_tripletrail();
     engine.load(RdfFormat::Turtle, data().as_bytes()).unwrap();
     // Numbers of each kind, negative, zero and large ones among them.
-    let mut numbers = String::from("@prefix ex: <http://example.org/> .\n");
+    let mut numbers = String::from(
+        "@prefix ex: <http://example.org/> . @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
     for i in 0..400_i64 {
         let n = (i - 200) * 37;
         // Decimals and doubles in the forms the store inlines (no trailing zero, no exponent).
@@ -324,6 +372,15 @@ fn binds_on_ids_are_the_evaluators() {
         ));
     }
     numbers.push_str("ex:big ex:huge 9223372036854775000 .\n");
+    // 2.5 as a double, a decimal and a non-canonical decimal, and another value.
+    for (i, b) in ["\"2.5\"^^xsd:double", "2.5", "\"2.50\"^^xsd:decimal", "3"]
+        .iter()
+        .enumerate()
+    {
+        for j in 0..20 {
+            numbers.push_str(&format!("ex:b{i}_{j} ex:b {b} .\n"));
+        }
+    }
     engine.load(RdfFormat::Turtle, numbers.as_bytes()).unwrap();
     let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
     for &(q, on_ids) in BINDS {

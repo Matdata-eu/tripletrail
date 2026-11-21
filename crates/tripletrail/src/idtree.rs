@@ -918,6 +918,11 @@ impl Eval<'_> {
                     if set.contains_key(&mix(x)) {
                         return Some(Some(true));
                     }
+                    // A term only this query knows (a `BIND` constant the store doesn't hold,
+                    // `2.5e0`) may equal an item by value: the evaluator decides.
+                    if x.kind() == Kind::Ephemeral {
+                        return None;
+                    }
                     if !is_literal(x) {
                         // Items are IRIs and literals, never triple terms.
                         return Some(Some(false));
@@ -962,6 +967,9 @@ impl Eval<'_> {
                     let Some(id) = c.map(|c| row[c]).filter(|id| *id != UNBOUND) else {
                         return Some(None);
                     };
+                    if id.kind() == Kind::Ephemeral {
+                        return None;
+                    }
                     Some(Some(match f {
                         Function::IsLiteral => is_literal(id),
                         Function::IsIri => id.kind() == Kind::Iri,
@@ -982,6 +990,7 @@ impl Eval<'_> {
                     Some(Some(match id.kind() {
                         Kind::Integer | Kind::Double | Kind::Decimal => true,
                         Kind::Typed => cache.numeric(id)?,
+                        Kind::Ephemeral => return None,
                         _ => false,
                     }))
                 })
@@ -1291,6 +1300,7 @@ impl<'a> Decoded<'a> {
             return Some(None);
         };
         Some(match id.kind() {
+            Kind::Ephemeral => return None,
             Kind::LangString => Some(self.literal(id)?.language()?.to_owned()),
             _ if is_literal(id) => Some(String::new()),
             _ => None,
@@ -1304,6 +1314,7 @@ impl<'a> Decoded<'a> {
             return Some(None);
         };
         Some(match id.kind() {
+            Kind::Ephemeral => return None,
             Kind::String => Some(xsd::STRING.into_owned()),
             Kind::LangString => Some(rdf::LANG_STRING.into_owned()),
             Kind::Integer => Some(xsd::INTEGER.into_owned()),
@@ -1374,6 +1385,11 @@ fn equal_ids(x: TermId, y: TermId) -> Option<Option<bool>> {
     // Two different triple terms are equal when their parts are, and a literal part compares
     // by value (`<<( :a :b 1 )>> = <<( :a :b 1.0 )>>`): the ids don't decide it.
     if x.kind() == Kind::Triple && y.kind() == Kind::Triple {
+        return None;
+    }
+    // A term only this query knows (a `BIND` constant the store doesn't hold, `2.5e0`) may
+    // be a literal equal by value to another: the ids don't decide it.
+    if x.kind() == Kind::Ephemeral || y.kind() == Kind::Ephemeral {
         return None;
     }
     match (is_literal(x), is_literal(y)) {
