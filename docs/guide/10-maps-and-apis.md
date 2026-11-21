@@ -453,6 +453,24 @@ curl -s 'http://localhost:7878/ds/tiles/facets/Station?q=brussels%20no' | grep -
 They combine with each other and with facet filters, and a tile asked with them
 (`/ds/tiles/all/8/131/86.mvt?q=brussels`) draws only those features.
 
+A panel that shows several layers at once asks for their facets in one request, naming each
+collection: every collection's own answer comes back, with `features` their sum and `shared`
+the facets they have in common (the same key), summed over them. A bare filter such as
+`country=…` applies to each collection that has the facet, `Section.country=…` to one alone.
+The ten stations and twelve sections:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/tiles/facets?collection=Station&collection=Section' | grep -o '"features":[0-9]*'
+```
+
+<!-- test: output -->
+```text
+"features":10
+"features":12
+"features":22
+```
+
 ## The REST API
 
 `/ds/api/v1` is a JSON API for developers: one list per class, records by id, with an OpenAPI
