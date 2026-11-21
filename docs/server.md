@@ -3073,9 +3073,12 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   (#92, up to 64): `collections` holds each one's answer, as `/{ds}/tiles/facets/{id}` gives
   it; `features` their sum; and `shared` the facets whose key more than one of them has,
   with `collections` naming them. A shared values facet adds up the counts of each value (its
-  50 most frequent kept, `more` when any collection had more), a range takes the lowest `min`,
-  the highest `max` and the sum of `count`, and a text facet is listed as such. A facet of
-  different kinds in different collections is not shared. Filters work as on one collection: a
+  50 most frequent kept, `more` when any collection had more; then the sums are lower bounds,
+  as each collection counts only its own 50 most frequent values), a range takes the lowest
+  `min`, the highest `max` and the sum of `count` (numbers, or dates and times compared as
+  text), and a text facet is listed as such. A facet of different kinds in different
+  collections, a range with different units, or with numbers in one and dates in another, is
+  not shared. The request has one timeout for all its collections. Filters work as on one collection: a
   bare `{key}=value` on each collection that has the facet, `{collection}.{key}=value` on that
   one only. A feature of two of the classes is counted in each.
 - Three filters apply to every collection, on the facets and on the tiles alike (#92), with

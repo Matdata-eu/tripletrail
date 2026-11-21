@@ -329,9 +329,18 @@ pub(crate) fn route(
                 "More than {MAX_FACET_COLLECTIONS} collections"
             )));
         }
+        // One deadline for the whole request, not a timeout per collection.
+        let deadline = timeout.map(|t| std::time::Instant::now() + t);
         let mut each = Vec::with_capacity(chosen.len());
         for c in &chosen {
-            each.push(facet_counts(entry, c, params, timeout, view, version)?);
+            let left = match deadline {
+                Some(d) => match d.checked_duration_since(std::time::Instant::now()) {
+                    Some(left) if !left.is_zero() => Some(left),
+                    _ => return Err(HttpError(503, crate::TIMED_OUT.to_owned())),
+                },
+                None => None,
+            };
+            each.push(facet_counts(entry, c, params, left, view, version)?);
         }
         let counts = combine_facets(each);
         let mut reply = Reply::bytes(200, "application/json", counts.to_string().into_bytes());
@@ -1162,8 +1171,10 @@ const MAX_FACET_COLLECTIONS: usize = 64;
 /// The facets of several collections, as `/{ds}/tiles/facets?collection=…` answers them:
 /// `collections`, each one's own answer; `features`, their sum; and `shared`, the facets whose
 /// key more than one of them has, summed over those: a value's counts added up (the 50 most
-/// frequent kept, `more` when any collection had more), a range's lowest `min`, highest `max`
-/// and its counts added up. A feature of two of the classes is counted in each.
+/// frequent kept, `more` when any collection had more: then the sums are lower bounds, as each
+/// collection lists only its own 50 most frequent values), a range's lowest `min`, highest
+/// `max` and its counts added up (when all its bounds are numbers, or all text such as dates,
+/// and it has one unit). A feature of two of the classes is counted in each.
 fn combine_facets(each: Vec<serde_json::Value>) -> serde_json::Value {
     use serde_json::{Value, json};
     let total: u64 = each.iter().filter_map(|c| c["features"].as_u64()).sum();
@@ -1207,24 +1218,45 @@ fn combine_facets(each: Vec<serde_json::Value>) -> serde_json::Value {
         if facets.iter().all(|(_, f)| f["text"] == true) {
             out["text"] = true.into();
         } else if facets.iter().all(|(_, f)| f["range"] == true) {
-            let number = |v: &Value| v.as_f64();
-            let min = facets
+            // One unit, or none: a span over metres and kilometres means nothing.
+            let mut units: Vec<&Value> = facets.iter().map(|(_, f)| &f["unit"]).collect();
+            units.dedup();
+            if units.len() > 1 {
+                continue;
+            }
+            // Bounds are numbers, or the text of dates and times (ISO, so they sort as text);
+            // a collection without values has none. Of both kinds: not shared.
+            let bounds: Vec<&Value> = facets
                 .iter()
-                .filter_map(|(_, f)| number(&f["min"]))
-                .reduce(f64::min);
-            let max = facets
-                .iter()
-                .filter_map(|(_, f)| number(&f["max"]))
-                .reduce(f64::max);
+                .flat_map(|(_, f)| [&f["min"], &f["max"]])
+                .filter(|v| !v.is_null())
+                .collect();
+            let (min, max) = if bounds.iter().all(|v| v.is_number()) {
+                let numbers =
+                    |key: &'static str| facets.iter().filter_map(move |(_, f)| f[key].as_f64());
+                (
+                    numbers("min").reduce(f64::min).map(Value::from),
+                    numbers("max").reduce(f64::max).map(Value::from),
+                )
+            } else if bounds.iter().all(|v| v.is_string()) {
+                let texts =
+                    |key: &'static str| facets.iter().filter_map(move |(_, f)| f[key].as_str());
+                (
+                    texts("min").min().map(Value::from),
+                    texts("max").max().map(Value::from),
+                )
+            } else {
+                continue;
+            };
             out["range"] = true.into();
-            out["min"] = min.map_or(Value::Null, Value::from);
-            out["max"] = max.map_or(Value::Null, Value::from);
+            out["min"] = min.unwrap_or(Value::Null);
+            out["max"] = max.unwrap_or(Value::Null);
             out["count"] = facets
                 .iter()
                 .filter_map(|(_, f)| f["count"].as_u64())
                 .sum::<u64>()
                 .into();
-            if let Some(unit) = facets.iter().find_map(|(_, f)| f["unit"].as_str()) {
+            if let Some(unit) = units.first().and_then(|u| u.as_str()) {
                 out["unit"] = unit.into();
             }
         } else if facets.iter().all(|(_, f)| f["values"].is_array()) {

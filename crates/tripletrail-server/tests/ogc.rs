@@ -2430,23 +2430,28 @@ fn facets_and_tiles_by_area_graph_and_text() {
 fn facets_of_several_collections_at_once() {
     let mut ttl = String::from(
         "@prefix ex: <http://example.com/> .\n\
-         @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n",
+         @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+         @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
     );
     // Four stations and six sections, both with a country and a length; stations a kind.
     for i in 0..4 {
         let country = if i < 3 { "BE" } else { "NL" };
         ttl.push_str(&format!(
             "ex:s{i} a ex:Station ; ex:country ex:{country} ; ex:length {} ; ex:kind ex:halt ;\n\
+             \x20 ex:opened \"2020-0{}-01\"^^xsd:date ;\n\
              \x20 geo:hasGeometry [ geo:asWKT \"POINT(4.{i} 50.8)\"^^geo:wktLiteral ] .\n",
-            i * 10
+            i * 10,
+            i + 2
         ));
     }
     for i in 0..6 {
         let country = if i < 1 { "BE" } else { "NL" };
         ttl.push_str(&format!(
             "ex:l{i} a ex:Section ; ex:country ex:{country} ; ex:length {} ;\n\
+             \x20 ex:opened \"2019-0{m}-01\"^^xsd:date ;\n\
              \x20 geo:hasGeometry [ geo:asWKT \"LINESTRING(4.{i} 50.8, 4.{i} 50.9)\"^^geo:wktLiteral ] .\n",
-            100 + i * 50
+            100 + i * 50,
+            m = i + 1
         ));
     }
     let engine = Engine::new_tripletrail();
@@ -2492,6 +2497,17 @@ fn facets_of_several_collections_at_once() {
             length["count"].as_u64()
         ),
         (Some(0.0), Some(350.0), Some(10))
+    );
+    // Dates: one span over both, compared as dates (stations 2020-02..05, sections 2019-01..06).
+    let opened = shared(&both, "opened");
+    assert_eq!(
+        (
+            opened["min"].as_str(),
+            opened["max"].as_str(),
+            opened["count"].as_u64()
+        ),
+        (Some("2019-01-01"), Some("2020-05-01"), Some(10)),
+        "{both}"
     );
     // A facet of one collection only is in its own answer, not shared.
     assert!(shared(&both, "kind").is_null());
