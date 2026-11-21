@@ -22,6 +22,7 @@ const DESCRIBE_MAP_JS: &str = include_str!("../ui/describe-map.js");
 const DESCRIBE_JS: &str = include_str!("../ui/describe.js");
 const MAP_JS: &str = include_str!("../ui/map.js");
 const MAP_TOOLS_JS: &str = include_str!("../ui/map-tools.js");
+const MAP_SHARE_JS: &str = include_str!("../ui/map-share.js");
 const SEARCH_JS: &str = include_str!("../ui/search.js");
 const SHAPES_JS: &str = include_str!("../ui/shapes.js");
 const EXPLORE_JS: &str = include_str!("../ui/explore.js");
@@ -287,6 +288,7 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
         ["access.js"] => Ok(page("text/javascript; charset=utf-8", ACCESS_JS)),
         ["map.js"] => Ok(page("text/javascript; charset=utf-8", MAP_JS)),
         ["map-tools.js"] => Ok(page("text/javascript; charset=utf-8", MAP_TOOLS_JS)),
+        ["map-share.js"] => Ok(page("text/javascript; charset=utf-8", MAP_SHARE_JS)),
         ["search.js"] => Ok(page("text/javascript; charset=utf-8", SEARCH_JS)),
         ["shapes.js"] => Ok(page("text/javascript; charset=utf-8", SHAPES_JS)),
         ["explore.js"] => Ok(page("text/javascript; charset=utf-8", EXPLORE_JS)),
@@ -364,6 +366,7 @@ mod tests {
             ("describe.js", super::DESCRIBE_JS),
             ("map.js", super::MAP_JS),
             ("map-tools.js", super::MAP_TOOLS_JS),
+            ("map-share.js", super::MAP_SHARE_JS),
             ("search.js", super::SEARCH_JS),
             ("shapes.js", super::SHAPES_JS),
             ("explore.js", super::EXPLORE_JS),

@@ -1113,6 +1113,56 @@ fn datetime_filters_on_the_time_shapes() {
         assert_eq!(get(&url).0, 400, "{bad}");
     }
 
+    // The map takes the same datetime for its tiles and counts (#37), and its style says
+    // which collections have a time, and the data version to cite.
+    let style = get(&format!("{base}/kg/tiles/style.json")).2;
+    let legend = style["metadata"]["tripletrail:collections"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let timed = |id: &str| legend.iter().find(|c| c["id"] == id).unwrap()["time"] == true;
+    assert!(timed("Work") && timed("Event"), "{style}");
+    assert!(
+        style["metadata"]["tripletrail:dataVersion"].is_string(),
+        "{style}"
+    );
+    let counted = |collection: &str, datetime: &str| {
+        let url = format!(
+            "{base}/kg/tiles/facets/{collection}?datetime={}",
+            form_urlencoded::byte_serialize(datetime.as_bytes()).collect::<String>()
+        );
+        let (status, _, out) = get(&url);
+        assert_eq!(status, 200, "{datetime}: {out}");
+        out["features"].as_u64().unwrap()
+    };
+    assert_eq!(counted("Work", "2026-04-01/.."), 2);
+    assert_eq!(counted("Work", "2026-02-01"), 1);
+    assert_eq!(counted("Event", "2026-02-01T11:00:00Z/.."), 1);
+    assert_eq!(counted("Work", ""), 4);
+    assert_eq!(
+        get(&format!("{base}/kg/tiles/facets/Work?datetime=soon")).0,
+        400
+    );
+    // A tile keeps only the features of the time: w1 (1,1) and w2 (2,2) are in tile 0/0/0
+    // either way, so compare its bytes with and without the time.
+    let tile = |q: &str| {
+        let r = ureq::get(&format!("{base}/kg/tiles/Work/0/0/0.mvt{q}"))
+            .call()
+            .unwrap();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut r.into_reader(), &mut bytes).unwrap();
+        bytes
+    };
+    let all = tile("");
+    let april = tile("?datetime=2026-04-01%2F..");
+    assert!(
+        !april.is_empty() && april.len() < all.len(),
+        "{} {}",
+        april.len(),
+        all.len()
+    );
+    assert_eq!(tile("?datetime=..%2F2025-12-31").len(), 0);
+
     // JSON-FG (#497): the time of each feature, a conformsTo, and with another CRS the
     // geometry in it as place, beside the CRS84 one.
     let fg = |url: &str| -> (u16, String, Value) {
