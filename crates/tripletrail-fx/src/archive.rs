@@ -140,7 +140,7 @@ fn names(bytes: &[u8], kind: Kind) -> Result<Vec<String>, FxError> {
 fn decompressed(bytes: &[u8], kind: Kind) -> Box<dyn Read + '_> {
     match kind {
         Kind::TarGz => Box::new(flate2::read::GzDecoder::new(bytes)),
-        Kind::TarBz2 => Box::new(bzip2_rs::DecoderReader::new(bytes)),
+        Kind::TarBz2 => Box::new(crabz2::reader(bytes)),
         Kind::Zip | Kind::Tar => Box::new(bytes),
     }
 }

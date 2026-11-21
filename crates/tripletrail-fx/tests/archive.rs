@@ -123,6 +123,29 @@ fn bzip2_tars_list_their_entries_and_give_their_files() {
 }
 
 #[test]
+fn bzip2_tars_with_incompressible_blocks_and_several_streams_are_read_whole() {
+    // A 150 kB random entry (as a photo or a PDF) makes bzip2 write a block that does not
+    // compress, and pbzip2 and lbzip2 write several streams one after another.
+    assert_eq!(
+        names("incompressible.tar.bz2", None).unwrap(),
+        ["photo.bin", "test.csv"]
+    );
+    let makes = select(
+        "SERVICE <x-sparql-anything:location=test.csv,from-archive=incompressible.tar.bz2,csv.headers=true> {
+            ?row xyz:Make ?v }",
+    )
+    .unwrap();
+    assert!(makes.contains(&"Ford".to_owned()), "{makes:?}");
+    assert_eq!(names("two-streams.tar.bz2", None).unwrap(), ENTRIES);
+    let text = select(
+        "SERVICE <x-sparql-anything:location=test/test.txt,from-archive=two-streams.tar.bz2> {
+            ?r rdf:_1 ?v }",
+    )
+    .unwrap();
+    assert_eq!(text, ["this is a test"]);
+}
+
+#[test]
 fn zip_lists_its_entries() {
     assert_eq!(
         names("test.zip", None).unwrap(),

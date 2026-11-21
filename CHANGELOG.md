@@ -9,7 +9,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Added
 
-- Facade-X reads tar archives compressed with bzip2 (`.tar.bz2`, `.tbz2`, `application/x-bzip-compressed-tar`), as listings and with `from-archive`, as it already did gzip (#20). The decoder is the pure-Rust `bzip2-rs` crate (MIT or Apache-2.0). See [the guide](docs/guide/07-lifting.md#files-inside-an-archive).
+- Facade-X reads tar archives compressed with bzip2 (`.tar.bz2`, `.tbz2`, `application/x-bzip-compressed-tar`), as listings and with `from-archive`, as it already did gzip (#20). The decoder is the pure-Rust `crabz2` crate (MIT, no dependencies), which also reads blocks that do not compress and files of several streams (as pbzip2 and lbzip2 write). See [the guide](docs/guide/07-lifting.md#files-inside-an-archive).
 
 ### Fixed
 
