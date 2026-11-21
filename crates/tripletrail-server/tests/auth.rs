@@ -1163,7 +1163,7 @@ fn updates_during_a_policy_swap_are_applied_whole_or_not_at_all() {
              ex:Team a sg:Policy ; sg:group \"team\" ; sg:readAllGraphs true ."
         )
     };
-    std::fs::write(dir.join("dim.ttl"), policy(true)).unwrap();
+    std::fs::write(dir.join("kg.ttl"), policy(true)).unwrap();
     let key = |k: &str, group: &str| {
         format!(
             r#"{{"sha256": "{}", "agent": "https://example.org/people/{k}", "groups": ["{group}"]}}"#,
@@ -1173,7 +1173,7 @@ fn updates_during_a_policy_swap_are_applied_whole_or_not_at_all() {
     std::fs::write(
         dir.join("guard.json"),
         format!(
-            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"dim": {{"policies": ["dim.ttl"]}}}}}}"#,
+            r#"{{"auth": {{"apiKeys": [{}, {}]}}, "datasets": {{"kg": {{"policies": ["kg.ttl"]}}}}}}"#,
             key("editor", "editors"),
             key("team", "team"),
         ),
@@ -1181,7 +1181,7 @@ fn updates_during_a_policy_swap_are_applied_whole_or_not_at_all() {
     .unwrap();
     let server = Server::bind(
         "127.0.0.1:0",
-        [("dim".to_owned(), Engine::new_tripletrail())],
+        [("kg".to_owned(), Engine::new_tripletrail())],
         Options {
             threads: 4,
             auth_config: Some(dir.join("guard.json")),
@@ -1205,7 +1205,7 @@ fn updates_during_a_policy_swap_are_applied_whole_or_not_at_all() {
                         "INSERT DATA {{ GRAPH <urn:wip> {{ <urn:n> <urn:v> {n} }} }} ; \
                          INSERT DATA {{ GRAPH <urn:wip2> {{ <urn:n> <urn:v> {n} }} }}"
                     );
-                    let r = ureq::post(&format!("{base}/dim/update")).set("X-API-Key", "editor");
+                    let r = ureq::post(&format!("{base}/kg/update")).set("X-API-Key", "editor");
                     answers.push((n, status(r, Some(&text)).0));
                     i += 1;
                 }
@@ -1216,7 +1216,7 @@ fn updates_during_a_policy_swap_are_applied_whole_or_not_at_all() {
     // Four swaps, each picked up after the file's time changes.
     for round in 0..4 {
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        std::fs::write(dir.join("dim.ttl"), policy(round % 2 == 1)).unwrap();
+        std::fs::write(dir.join("kg.ttl"), policy(round % 2 == 1)).unwrap();
     }
     std::thread::sleep(std::time::Duration::from_millis(1100));
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1226,7 +1226,7 @@ fn updates_during_a_policy_swap_are_applied_whole_or_not_at_all() {
         .collect();
 
     let values = |graph: &str| -> std::collections::HashSet<usize> {
-        let body = ureq::get(&format!("{base}/dim/query"))
+        let body = ureq::get(&format!("{base}/kg/query"))
             .set("X-API-Key", "team")
             .set("Accept", "text/csv")
             .query(
