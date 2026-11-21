@@ -1601,6 +1601,105 @@ These answer without credentials. Signing in needs a licence that covers `sso` (
 otherwise), and so does using a session. In the web UI, the key button shows who is signed
 in, with **Sign out**, or the buttons to sign in.
 
+#### Setting up Keycloak
+
+This setup is tested against Keycloak 26. In the realm that holds your people (`rail` here):
+
+1. **A client for scripts and apps.** Create a client, such as `tripletrail-cli`, with *Client
+   authentication* on. A person's script uses *Direct access grants*, and a job with no person
+   behind it uses *Service accounts roles*. Its tokens are what callers send as `Bearer`.
+2. **The audience.** By default, Keycloak's access tokens name only `account` as their
+   audience. In the client's dedicated scope, add a mapper *By configuration → Audience* with
+   *Included Custom Audience* `tripletrail` and *Add to access token* on. Then set
+   `"audience": "tripletrail"`. Tokens Keycloak makes for the realm's other clients do not
+   name it, so they are refused (`The token is not for this server (audience)`).
+3. **Groups.** Add a mapper *Group Membership* with *Token Claim Name* `groups` and *Full group
+   path* off. Turn on *Add to ID token* too, for the browser sign-in. Realm roles are already in
+   `realm_access.roles`, and the roles of a client are in
+   `resource_access.<client>.roles`. Name the claims you use in `groups`, such as
+   `["groups", "realm_access.roles"]`.
+4. **The browser sign-in** (optional). Create a second client, such as `tripletrail-ui`, with
+   *Client authentication* and *Standard flow* on. Its *Valid redirect URIs* is your
+   `redirectUri`, and its client id and secret go in `browser`. Give it the group mapper of
+   step 3 as well. Keycloak checks the PKCE code challenge if you set *Proof Key for Code
+   Exchange Code Challenge Method* to `S256`, and TripleTrail always sends one.
+
+The issuer is `https://<keycloak>/realms/<realm>`. The keys are found through its discovery
+document, so `jwksUri` is not needed. For an agent IRI that survives renaming a person, use
+`{sub}` rather than `{preferred_username}`: Keycloak's `sub` is the user's id, which does not
+change.
+
+```json
+{
+  "issuer": "https://login.example.org/realms/rail",
+  "audience": "tripletrail",
+  "agent": "https://example.org/people/{preferred_username}",
+  "groups": ["groups", "realm_access.roles"],
+  "groupNames": { "rail-editors": "tripletrail:writer", "rail-admins": "tripletrail:admin" },
+  "browser": {
+    "name": "Example Rail",
+    "clientId": "tripletrail-ui",
+    "clientSecret": "${TRIPLETRAIL_OIDC_SECRET}",
+    "redirectUri": "https://tripletrail.example.org/$/sso/callback"
+  }
+}
+```
+
+#### Setting up Microsoft Entra ID
+
+In the Entra admin center, under *App registrations*:
+
+1. **Register TripleTrail.** Create an app registration, such as `TripleTrail`, for accounts
+   in this organisational directory only. Under *Expose an API*, set the *Application ID URI*
+   (`api://tripletrail`, or the default `api://<application-id>`) and add a scope, such as
+   `access_as_user`. Scripts ask for that scope. A job with no person behind it uses the client
+   credentials flow with the scope `api://tripletrail/.default`.
+2. **Version 2 tokens.** In the app's *Manifest*, set `"requestedAccessTokenVersion": 2`
+   (`accessTokenAcceptedVersion` in the older manifest). Otherwise Entra issues version 1 tokens
+   for the API, whose issuer is `https://sts.windows.net/<tenant-id>/` and not the issuer
+   below. In version 2 tokens, `aud` is the application id. List both forms in `audience`, as
+   the example below does.
+3. **Groups or roles.** Either:
+   - define *App roles* (such as `Rail.Editor`) and assign people, groups or applications to
+     them under *Enterprise applications*. They arrive in `roles`, by name. This is the
+     simpler way, and the only one for applications.
+   - or, under *Token configuration*, add a *groups claim* (security groups). Groups then
+     arrive in `groups` as object ids (GUIDs), which `groupNames` renames. A person in more than
+     200 groups gets no `groups` claim at all (Entra sends a link to Microsoft Graph instead,
+     which TripleTrail does not follow), so assign the groups to the application and choose
+     *Groups assigned to the application*, or use app roles.
+4. **The browser sign-in** (optional). Under *Authentication*, add the *Web* platform with your
+   `redirectUri`. Under *Certificates & secrets*, add a client secret for `clientSecret`. The
+   `clientId` is the application id. App roles and the groups claim are in ID tokens too.
+
+The issuer is `https://login.microsoftonline.com/<tenant-id>/v2.0`. Use `{oid}` for the agent:
+`oid` is the person's (or application's) object id, the same in every application of the
+tenant, while `sub` differs from one application to the next.
+
+```json
+{
+  "issuer": "https://login.microsoftonline.com/<tenant-id>/v2.0",
+  "audience": ["api://tripletrail", "<application-id>"],
+  "agent": "urn:example:entra:{oid}",
+  "groups": ["roles", "groups"],
+  "groupNames": {
+    "Rail.Editor": "tripletrail:writer",
+    "5f0c6a1e-0000-0000-0000-000000000000": "rail-planning"
+  },
+  "browser": {
+    "name": "Example Rail (Entra ID)",
+    "clientId": "<application-id>",
+    "clientSecret": "${TRIPLETRAIL_OIDC_SECRET}",
+    "redirectUri": "https://tripletrail.example.org/$/sso/callback"
+  }
+}
+```
+
+When a token is refused, its reason says which check failed, and an admin can send it to the
+explain endpoint, `GET /$/access/datasets/{ds}/explain` with the header
+`X-TripleTrail-Explain-Token` ([dataset access](#dataset-access-with-policies)), to see the
+agent and groups it gives and the claim behind each group.
+
 ### Dataset access with policies
 
 Who may read and write each dataset is written as
