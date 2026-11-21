@@ -15,6 +15,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Changed
 
+- `FILTER(?v IN (…))` and `NOT IN` with a list of IRIs and literals look each row up in a hash set of the items' term ids (#63) instead of comparing it with every item: 1,000 IRIs over 133k rows took 933 ms and now take 16 ms, close to the 11 ms of the same list as `VALUES`. Answers are unchanged: numbers of different datatypes still compare by value.
 - Every answer carries `Server: TripleTrail/<version>` instead of `tiny-http (Rust)`, and `--cors` lets pages read it, so query tools can recognise the engine by it. The Explain plugin of MatGUI and YASGUI does not yet: its TripleTrail engine waits for a plugin release.
 
 ## 0.1.0-rc.2 - 2026-11-20
