@@ -779,8 +779,9 @@ impl Prefix {
             return None;
         }
         Some(match self.total(lo, hi)? {
+            // As the AVG aggregate (#8): Jena's decimal division, exact or 24 fraction digits.
             (Number::Exact(d, _), _) => {
-                statagg::decimal_term(d.checked_div(Decimal::from(i64::try_from(count).ok()?))?)
+                spareval::decimal_divide(d, Decimal::from(i64::try_from(count).ok()?))?.into()
             }
             (n, level) => statagg::float_term(statagg::as_f64(n) / count as f64, level),
         })

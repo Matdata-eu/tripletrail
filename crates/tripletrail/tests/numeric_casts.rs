@@ -250,3 +250,70 @@ fn min_and_max_of_mixed_kinds_follow_jena() {
         assert_eq!(column(&engine, q), [expected], "{q}");
     }
 }
+
+/// Decimal division and `AVG` as Jena (`XSDFuncOp.decimalDivide`): the exact quotient when it
+/// ends, else 24 fraction digits rounded half to even (#8).
+#[test]
+fn decimal_division_keeps_24_fraction_digits_as_jena() {
+    let engine = Engine::new_tripletrail();
+    let d = |s: &str| format!("\"{s}\"^^<http://www.w3.org/2001/XMLSchema#decimal>");
+    for (expression, expected) in [
+        ("1.0 / 3.0", d("0.333333333333333333333333")),
+        ("2.0 / 3.0", d("0.666666666666666666666667")),
+        ("-2 / 3", d("-0.666666666666666666666667")),
+        ("10 / 3", d("3.333333333333333333333333")),
+        ("1 / 4", d("0.25")),
+        ("4 / 2", d("2.0")),
+        ("0 / 7", d("0.0")),
+        // Exact quotients keep every digit, also past 24.
+        (
+            "1.0 / 1099511627776",
+            d("0.0000000000009094947017729282379150390625"),
+        ),
+        ("0.000000000000000001 / 3", d("0.000000000000000000333333")),
+        ("1.0 / 0.0", "-".into()),
+        // A long quotient is still a number: arithmetic reads it at 18 fraction digits.
+        ("(1.0 / 3.0) * 3", d("0.999999999999999999")),
+        ("(2.0 / 3.0) + 0", d("0.666666666666666667")),
+    ] {
+        let r = column(&engine, &format!("SELECT ({expression} AS ?r) {{}}"));
+        assert_eq!(r, [expected.as_str()], "{expression}");
+    }
+    let r = column(&engine, "SELECT (DATATYPE(1 / 3) AS ?r) {}");
+    assert_eq!(r, ["<http://www.w3.org/2001/XMLSchema#decimal>"]);
+    let r = column(&engine, "SELECT (STR(2 / 3) AS ?r) {}");
+    assert_eq!(r, ["\"0.666666666666666666666667\""]);
+
+    // AVG divides the sum by the count the same way, from VALUES and from stored data.
+    let r = column(&engine, "SELECT (AVG(?v) AS ?r) { VALUES ?v { 1 1 2 } }");
+    assert_eq!(r, [d("1.333333333333333333333333")]);
+    let r = column(&engine, "SELECT (AVG(?v) AS ?r) { VALUES ?v { 1 2 } }");
+    assert_eq!(r, [d("1.5")]);
+    engine
+        .load(
+            RdfFormat::Turtle,
+            "<urn:a> <urn:n> 1.0, 1.5, 3.0 . <urn:b> <urn:n> 1, 2 .".as_bytes(),
+        )
+        .unwrap();
+    let r = column(
+        &engine,
+        "SELECT (AVG(?n) AS ?r) { ?s <urn:n> ?n } GROUP BY ?s ORDER BY ?s",
+    );
+    assert_eq!(r, [d("1.833333333333333333333333"), d("1.5")]);
+
+    // Data written with more than 18 fraction digits (by Jena, say) is a number too.
+    engine
+        .load(
+            RdfFormat::Turtle,
+            "<urn:c> <urn:x> \"0.333333333333333333333333\"^^<http://www.w3.org/2001/XMLSchema#decimal> ."
+                .as_bytes(),
+        )
+        .unwrap();
+    let r = column(&engine, "SELECT (?x * 3 AS ?r) { <urn:c> <urn:x> ?x }");
+    assert_eq!(r, [d("0.999999999999999999")]);
+    let r = column(
+        &engine,
+        "SELECT (STR(?x) AS ?r) { <urn:c> <urn:x> ?x FILTER(?x > 0.3 && ?x < 0.34) }",
+    );
+    assert_eq!(r, ["\"0.333333333333333333333333\""]);
+}

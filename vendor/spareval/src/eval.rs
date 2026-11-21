@@ -1,6 +1,6 @@
 #[cfg(feature = "sparql-12")]
 use crate::dataset::ExpressionTriple;
-use crate::dataset::{ExpressionTerm, InternalQuad, QueryableDataset};
+use crate::dataset::{ExpressionTerm, InternalQuad, QueryableDataset, decimal_divide};
 use crate::error::QueryEvaluationError;
 use crate::expression::{
     CustomFunctionRegistry, ExpressionEvaluator, ExpressionEvaluatorContext, NumericBinaryOperands,
@@ -2898,12 +2898,11 @@ impl Accumulator for AvgAccumulator {
             ExpressionTerm::DoubleLiteral(sum) => {
                 Some(ExpressionTerm::DoubleLiteral(sum / Double::from(count)))
             }
-            ExpressionTerm::IntegerLiteral(sum) => Some(ExpressionTerm::DecimalLiteral(
-                Decimal::from(sum).checked_div(count)?,
-            )),
-            ExpressionTerm::DecimalLiteral(sum) => {
-                Some(ExpressionTerm::DecimalLiteral(sum.checked_div(count)?))
+            // tripletrail (#8): the sum divided by the count as Jena divides decimals.
+            ExpressionTerm::IntegerLiteral(sum) => {
+                decimal_divide(Decimal::from(sum), Decimal::from(count))
             }
+            ExpressionTerm::DecimalLiteral(sum) => decimal_divide(sum, Decimal::from(count)),
             _ => None,
         }
     }

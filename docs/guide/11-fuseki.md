@@ -625,6 +625,22 @@ min,max
 3,3.0e0
 ```
 
+A division of decimals or integers, and `AVG`, keep the digits Jena keeps: the exact quotient
+when it ends, and otherwise 24 digits after the point, rounded half to even. Arithmetic on such
+a quotient reads it at 18 digits after the point, the precision TripleTrail computes decimals at:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/kg/sparql -H 'Accept: text/csv' \
+  --data-urlencode 'query=SELECT (2 / 3 AS ?third) (1 / 8 AS ?eighth) (AVG(?v) AS ?avg) WHERE { VALUES ?v { 1 1 2 } }'
+```
+
+<!-- test: output -->
+```text
+third,eighth,avg
+0.666666666666666666666667,0.125,1.333333333333333333333333
+```
+
 A few things differ on purpose:
 
 - Typed literals keep the form they were loaded in (`"100.0"` stays `"100.0"`), while

@@ -3425,7 +3425,11 @@ to change it. `MIN` and `MAX` order values as Jena's `NodeValue.compareAlways` d
 by kind first (IRIs, plain strings, language-tagged strings by tag, numbers, booleans, dates
 and times, durations, other datatypes last), then by value, and equal values by their text, so
 `MAX` of `3.0`, `3` and `3.0e0` is `3.0e0` and a plain string is below every number. `ORDER BY`
-keeps SPARQL's order of terms. [Conformance](conformance.md) lists the W3C test results.
+keeps SPARQL's order of terms. A division of decimals or integers, `AVG` and `win:avg` give
+what Jena's `XSDFuncOp.decimalDivide` gives (#8): the exact quotient when it ends (`1 / 8` is
+`0.125`), else 24 digits after the point rounded half to even (`2 / 3` is
+`0.666666666666666666666667`). Arithmetic and comparisons read a decimal with more than 18
+digits after the point, computed or loaded, at 18 digits rounded half to even. [Conformance](conformance.md) lists the W3C test results.
 
 ### Configuration file
 

@@ -257,3 +257,28 @@ fn moving_sums_of_doubles_add_only_the_frame() {
         ],
     );
 }
+
+#[test]
+fn a_decimal_average_keeps_24_fraction_digits_as_the_aggregate() {
+    // win:avg divides as AVG and Jena do (#8): 13.25 / 3, not 18 truncated digits.
+    let e = engine();
+    let rows = table(
+        &e,
+        "SELECT * WHERE { SERVICE <http://w3id.org/tripletrail/window> {
+           { SELECT ?s ?line ?km WHERE { ?s ex:line ?line ; ex:km ?km } }
+           [] win:partitionBy ?line ; win:orderBy ?km ; win:rows (-2 0) ; win:avg (?km ?avg) .
+         } }",
+        &["avg"],
+    );
+    expect(
+        &rows,
+        &[
+            ("s1", &["1.5"]),
+            ("s2", &["2.25"]),
+            ("s3", &["2.5"]),
+            ("s4", &["4.416666666666666666666667"]),
+            ("s5", &["2.0"]),
+            ("s6", &["3.5"]),
+        ],
+    );
+}
