@@ -233,6 +233,19 @@ impl Eval<'_> {
             // A sub-select's projection (the groups a count pass reads back from a table of
             // ids, #185), while the id executor answers whole queries (#11): its columns,
             // a variable it doesn't bind unbound in every row.
+            // A sub-select with `DISTINCT`, `REDUCED`, an order or a slice (#11).
+            GraphPattern::Slice { .. }
+            | GraphPattern::Distinct { .. }
+            | GraphPattern::Reduced { .. }
+                if crate::executor_ids() =>
+            {
+                crate::direct::sub_select(p, self)?
+            }
+            GraphPattern::Project { inner, .. }
+                if crate::executor_ids() && matches!(**inner, GraphPattern::OrderBy { .. }) =>
+            {
+                crate::direct::sub_select(p, self)?
+            }
             GraphPattern::Project { inner, variables } if crate::executor_ids() => {
                 let t = self.eval(inner)?;
                 project(t, variables)
