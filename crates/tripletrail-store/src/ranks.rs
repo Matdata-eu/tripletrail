@@ -8,7 +8,7 @@
 //! Comparing ranks then replaces decoding the terms for `MIN`, `MAX`, `ORDER BY` and prefix
 //! filters.
 
-use crate::dict::Dictionary;
+use crate::dict::{Dictionary, Text};
 use crate::id::{Kind, TermId};
 use rayon::prelude::*;
 use std::ops::Range;
@@ -35,7 +35,7 @@ fn slot(kind: Kind) -> Option<usize> {
 
 /// The text a term of a ranked kind sorts by, from its dictionary key, then (for a language
 /// string) its language tag; `None` for a language string with a base direction, which gets
-/// no rank.
+/// no rank. The key is written in full: see [`text_key`] for a key of `dict`.
 pub(crate) fn sort_key(key: &[u8]) -> Option<(&[u8], &[u8])> {
     let rest = &key[1..];
     if key[0] != Kind::LangString as u8 {
@@ -50,6 +50,14 @@ pub(crate) fn sort_key(key: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((value, language))
 }
 
+/// [`sort_key`] of a key of `dict`, which may be a compact IRI key (#152).
+pub(crate) fn text_key<'a>(dict: &'a Dictionary, key: &'a [u8]) -> Option<(Text<'a>, &'a [u8])> {
+    if let Some(iri) = dict.iri_text(key) {
+        return Some((iri, &[]));
+    }
+    sort_key(key).map(|(text, tag)| (Text(text, &[]), tag))
+}
+
 impl StringRanks {
     /// Ranks every ranked term of `dict`.
     pub(crate) fn build(dict: &Dictionary) -> Self {
@@ -58,12 +66,12 @@ impl StringRanks {
         for o in 1..=len {
             let key = dict.raw_key(o);
             if let Some(s) = RANKED.iter().position(|&k| k as u8 == key[0])
-                && sort_key(key).is_some()
+                && text_key(dict, key).is_some()
             {
                 by_kind[s].push(o);
             }
         }
-        let text = |o: u32| sort_key(dict.raw_key(o)).expect("a ranked term");
+        let text = |o: u32| text_key(dict, dict.raw_key(o)).expect("a ranked term");
         for list in &mut by_kind {
             list.par_sort_unstable_by(|&a, &b| text(a).cmp(&text(b)));
         }
@@ -117,8 +125,8 @@ impl StringRanks {
         let Some(s) = slot(kind) else { return 0..0 };
         let list = &self.sorted[s];
         let prefix = prefix.as_bytes();
-        let text = |o: u32| sort_key(dict.raw_key(o)).expect("a ranked term").0;
-        let lo = list.partition_point(|&o| text(o) < prefix);
+        let text = |o: u32| text_key(dict, dict.raw_key(o)).expect("a ranked term").0;
+        let lo = list.partition_point(|&o| text(o).cmp_bytes(prefix).is_lt());
         let hi = lo + list[lo..].partition_point(|&o| text(o).starts_with(prefix));
         lo as u32..hi as u32
     }
@@ -205,11 +213,7 @@ mod tests {
         assert_eq!(ranks.count(Kind::String), 6);
         let c = ranks.prefix(&dict, Kind::String, "C");
         let found: Vec<Term> = c
-            .map(|r| {
-                crate::dict::decode(
-                    dict.raw_key(ranks.id(Kind::String, r).unwrap().payload() as u32),
-                )
-            })
+            .map(|r| dict.term(ranks.id(Kind::String, r).unwrap().payload() as u32))
             .collect();
         assert_eq!(
             found,
@@ -231,5 +235,52 @@ mod tests {
         };
         let id = TermId::new(kind, u64::from(dict.get_or_insert(&later).0));
         assert_eq!(ranks.rank(id), None);
+    }
+
+    /// IRIs of compact keys (#152) rank as their full text: by namespace and rest together.
+    #[test]
+    fn compact_iris_rank_by_their_full_text() {
+        let iris = [
+            "http://ex.org/a/z",
+            "http://ex.org/a/b/c",
+            "http://ex.org/a/y",
+            "http://ex.org/a/b/d",
+            "http://ex.org/a/b/",
+            "http://ex.org/a/",
+            "http://ex.org/a#q",
+            "http://ex.org/a#p",
+            "http://ex.org/a/b",
+        ];
+        let mut dict = Dictionary::new();
+        let mut key = Vec::new();
+        let ids: Vec<TermId> = iris
+            .iter()
+            .map(|s| {
+                let Encoded::Key(kind) =
+                    encode(NamedNode::new_unchecked(*s).as_ref().into(), &mut key)
+                else {
+                    panic!()
+                };
+                TermId::new(kind, u64::from(dict.get_or_insert(&key).0))
+            })
+            .collect();
+        assert!(dict.namespaces().len() >= 2, "some keys are compact");
+        let ranks = StringRanks::build(&dict);
+        let mut sorted: Vec<&str> = iris.to_vec();
+        sorted.sort();
+        for (id, s) in ids.iter().zip(&iris) {
+            let r = ranks.rank(*id).unwrap();
+            assert_eq!(sorted[r as usize], *s);
+        }
+        for prefix in [
+            "http://ex.org/a/b",
+            "http://ex.org/a/b/",
+            "http://ex.org/a",
+            "x",
+        ] {
+            let found = ranks.prefix(&dict, Kind::Iri, prefix).len();
+            let want = iris.iter().filter(|s| s.starts_with(prefix)).count();
+            assert_eq!(found, want, "{prefix}");
+        }
     }
 }

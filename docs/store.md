@@ -274,8 +274,17 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   compact key's geometry may be a packed record (first byte `0x80`, then the number of
   decimals, then the record with varint counts and each coordinate as the zigzag varint
   difference from the one before, in units of that many decimals), used when every coordinate
-  has at most 9 decimals and reads back to the same bits. Formats 4 and 5 both open. `Store::dictionary_usage()` reads every key and
-  counts keys and bytes by kind of term (`tripletrail disk-usage`, #152).
+  has at most 9 decimals and reads back to the same bits. Formats 4 and 5 both open.
+  IRIs keep their namespace once (#152): a namespace is an IRI's text up to one of its last 8
+  `/` or `#`, at least 8 bytes long. A new IRI takes the longest namespace kept, else the
+  longest that an earlier IRI had, which is then kept (in the checkpoint's `namespaces.bin`),
+  so `…/way/1/geom/track` shares `…/way/` with `…/way/1`. Its key is a 0, the namespace's
+  number (a varint) and the rest of the IRI. The key is hashed as the full IRI, so lookups,
+  saved indexes and string ranks work as before; the first IRI of a namespace stays written
+  in full. A piece that may hold such keys is format 6
+  (`OXGSDIC6`), or 7 (`OXGSDIC7`) when it may also hold WKT in binary form, so a binary from
+  before refuses it; earlier formats open and grow. `Store::dictionary_usage()` reads every
+  key and counts keys and bytes by kind of term (`tripletrail disk-usage`, #152).
 
 ## Benchmark
 

@@ -62,16 +62,41 @@ const DICT_MAGIC_COMPACT: &[u8; 8] = b"OXGSDIC4";
 /// [`crate::geobin::PACKED`]): what a piece that may hold compact keys is written as now. A
 /// binary from before packed records refuses such a piece, as it could not read those keys.
 const DICT_MAGIC_PACKED: &[u8; 8] = b"OXGSDIC5";
+/// As v3, in a piece that may hold compact IRI keys (#152, see [`crate::dict::Namespaces`]):
+/// written by a store that keeps namespaces. A binary from before them refuses such a piece.
+const DICT_MAGIC_IRIS: &[u8; 8] = b"OXGSDIC6";
+/// As v5 (compact WKT keys, packed records), in a piece that may also hold compact IRI keys.
+const DICT_MAGIC_IRIS_PACKED: &[u8; 8] = b"OXGSDIC7";
 /// The dictionary formats read, oldest first: their position is the version.
-const DICT_MAGICS: [&[u8; 8]; 5] = [
+const DICT_MAGICS: [&[u8; 8]; 7] = [
     DICT_MAGIC_V1,
     DICT_MAGIC_V2,
     DICT_MAGIC,
     DICT_MAGIC_COMPACT,
     DICT_MAGIC_PACKED,
+    DICT_MAGIC_IRIS,
+    DICT_MAGIC_IRIS_PACKED,
 ];
-/// The first version that may hold compact keys ([`DICT_MAGIC_COMPACT`] and after).
-const DICT_COMPACT: usize = 3;
+
+/// Whether a piece of dictionary version `version` may hold compact WKT keys.
+fn may_hold_compact_wkt(version: usize) -> bool {
+    matches!(version, 3 | 4 | 6)
+}
+
+/// The magic a dictionary piece of `dict` is written with: whether it may hold compact WKT
+/// keys (`compact`), and compact IRI keys (when `dict` keeps namespaces).
+fn dict_magic(dict: &Dictionary, compact: bool) -> &'static [u8; 8] {
+    match (dict.namespaces().len() > 0, compact) {
+        (false, false) => DICT_MAGIC,
+        (false, true) => DICT_MAGIC_PACKED,
+        (true, false) => DICT_MAGIC_IRIS,
+        (true, true) => DICT_MAGIC_IRIS_PACKED,
+    }
+}
+/// The namespaces of compact IRI keys, in a checkpoint whose dictionary has any: the count,
+/// the bytes' length, the ends (count + 1), then the bytes.
+const NS_MAGIC: &[u8; 8] = b"OXGSNSP1";
+const NAMESPACES: &str = "namespaces.bin";
 /// A saved index of a dictionary piece: keys, slots and [`index_check`], then the slots.
 const INDEX_MAGIC: &[u8; 8] = b"OXGSDIX1";
 const INDEX_HEADER: usize = 32;
@@ -1570,6 +1595,12 @@ fn write_checkpoint(
             "stats.bin".to_owned(),
             Box::new(|| write_stats(&target.join("stats.bin"), quads)) as Job,
         )])
+        .chain((dict.namespaces().len() > 0).then(|| {
+            (
+                NAMESPACES.to_owned(),
+                Box::new(|| write_namespaces(&target.join(NAMESPACES), dict)) as Job,
+            )
+        }))
         .chain(
             PERM_NAMES
                 .iter()
@@ -1843,11 +1874,7 @@ fn write_dict(path: &Path, dict: &Dictionary, from: usize, keys: usize) -> io::R
     dict.for_each_run(from, keys, |_, ends| len += ends[ends.len() - 1] - ends[0]);
     let mut w = summing(path)?;
     // Keys copied from a dictionary that may hold compact ones may be compact.
-    w.write_all(if dict.may_hold_compact() {
-        DICT_MAGIC_PACKED
-    } else {
-        DICT_MAGIC
-    })?;
+    w.write_all(dict_magic(dict, dict.may_hold_compact()))?;
     write_u64s(&mut w, &[len, keys as u64 + 1])?;
     let mut result = Ok(());
     dict.for_each_run(from, keys, |bytes, ends| {
@@ -1870,6 +1897,52 @@ fn write_dict(path: &Path, dict: &Dictionary, from: usize, keys: usize) -> io::R
     });
     result?;
     finish(w)
+}
+
+/// Writes the namespaces of the dictionary's compact IRI keys (see [`NS_MAGIC`]). Small, so
+/// written whole by every checkpoint.
+fn write_namespaces(path: &Path, dict: &Dictionary) -> io::Result<Sum> {
+    let (bytes, ends) = dict.namespaces().saved();
+    let mut w = summing(path)?;
+    w.write_all(NS_MAGIC)?;
+    write_u64s(&mut w, &[ends.len() as u64 - 1, bytes.len() as u64])?;
+    write_u64s(&mut w, ends)?;
+    w.write_all(bytes)?;
+    finish(w)
+}
+
+/// Reads the namespaces of a checkpoint (none when it has no namespaces file).
+fn read_namespaces(
+    dir: &Path,
+    sums: Option<&HashMap<String, Sum>>,
+) -> Result<crate::dict::Namespaces, StoreError> {
+    let path = dir.join(NAMESPACES);
+    if !path.exists() {
+        return Ok(crate::dict::Namespaces::default());
+    }
+    let file = Mapped::open(path.clone())?;
+    file.refuse_newer(&[NS_MAGIC])?;
+    // Small: always checked against its sum, and copied to the heap.
+    check_sum(sums, &file)?;
+    let (_, h) = file.header(&[NS_MAGIC], 2)?;
+    let count = usize::try_from(h[0]).map_err(|_| corrupt(&path))?;
+    let len = usize::try_from(h[1]).map_err(|_| corrupt(&path))?;
+    let at = 24;
+    let ends_len = count
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(8))
+        .ok_or_else(|| corrupt(&path))?;
+    if at + ends_len + len != file.map.len() {
+        return Err(corrupt(&path));
+    }
+    let ends: Vec<u64> = file.map[at..at + ends_len]
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| u64::from_le_bytes(*c))
+        .collect();
+    let bytes = file.map[at + ends_len..].to_vec();
+    crate::dict::Namespaces::from_saved(bytes, ends).ok_or_else(|| corrupt(&path))
 }
 
 /// The file in a store directory that marks it as keeping WKT literals that its writer
@@ -2033,7 +2106,7 @@ fn write_dict_compact(
         .into_inner()
         .map_err(io::IntoInnerError::into_error)?;
     let mut header = Vec::with_capacity(HEADER);
-    header.extend_from_slice(DICT_MAGIC_PACKED);
+    header.extend_from_slice(dict_magic(dict, true));
     header.extend_from_slice(&len.to_le_bytes());
     header.extend_from_slice(&(keys as u64 + 1).to_le_bytes());
     file.seek(SeekFrom::Start(0))?;
@@ -2886,7 +2959,7 @@ fn read_checkpoint(
         Check::Full
     };
     let parts = read_parts(dir, keep_mapped, check)?;
-    let mut dict = Dictionary::from_pieces(parts.dict);
+    let mut dict = Dictionary::from_saved(parts.dict, parts.namespaces);
     dict.note_compact(parts.compact || has_compact_keys(dir));
     let mut quads = QuadIndex::from_segments(parts.segments);
     quads.set_runs(parts.runs);
@@ -2905,6 +2978,8 @@ pub(crate) type DictPieces = Vec<crate::dict::SavedPiece>;
 struct Parts {
     /// The dictionary's pieces.
     dict: DictPieces,
+    /// The namespaces of its compact IRI keys.
+    namespaces: crate::dict::Namespaces,
     /// The dictionary's format.
     version: usize,
     /// Some piece of the dictionary may hold compact WKT keys ([`DICT_MAGIC_COMPACT`]).
@@ -2923,6 +2998,7 @@ fn read_parts(dir: &Path, keep_mapped: bool, check: Check) -> Result<Parts, Stor
     let verify = check == Check::Full;
     let sums = read_sums(dir)?;
     let sums = sums.as_ref();
+    let namespaces = read_namespaces(dir, sums)?;
     // One dictionary file: its key bytes and ends, and its format.
     let read_piece = |file: &str, keep_mapped: bool| -> Result<_, StoreError> {
         let path = dir.join(file);
@@ -2948,7 +3024,7 @@ fn read_parts(dir: &Path, keep_mapped: bool, check: Check) -> Result<Parts, Stor
         if at + 8 * ends.len() != file.map.len()
             || ends.first() != Some(&0)
             || ends.last() != Some(&(bytes.len() as u64))
-            || (verify && !Dictionary::valid_parts(&bytes, &ends))
+            || (verify && !Dictionary::valid_parts(&bytes, &ends, &namespaces))
         {
             return Err(corrupt(&path));
         }
@@ -2966,7 +3042,7 @@ fn read_parts(dir: &Path, keep_mapped: bool, check: Check) -> Result<Parts, Stor
             .collect::<Result<Vec<_>, _>>()?;
         let version = pieces[0].2;
         let current = pieces.iter().all(|p| p.2 >= 2);
-        let compact = pieces.iter().any(|p| p.2 >= DICT_COMPACT);
+        let compact = pieces.iter().any(|p| may_hold_compact_wkt(p.2));
         // Saved indexes are used when the keys stay mapped (copied to the heap, the table
         // is smaller).
         let indexes: Vec<Option<(SavedIndex, Sum)>> = names
@@ -3124,6 +3200,7 @@ fn read_parts(dir: &Path, keep_mapped: bool, check: Check) -> Result<Parts, Stor
     let (dict, version, compact, pieces) = dict?;
     Ok(Parts {
         dict,
+        namespaces,
         version,
         compact,
         pieces,

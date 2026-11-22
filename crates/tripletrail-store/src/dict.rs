@@ -30,6 +30,8 @@ pub(crate) struct Dictionary {
     /// Whether keys may be compact (#370): only then is a key of another length than the
     /// one looked for read, to see whether it is a compact one (see [`Dictionary::key_is`]).
     compact: bool,
+    /// The namespaces of compact IRI keys.
+    ns: Namespaces,
 }
 
 /// Keys with consecutive ordinals from `first`.
@@ -129,6 +131,225 @@ fn piece_of(pieces: &[Piece], ordinal: u32) -> &Piece {
         return last;
     }
     &pieces[pieces.partition_point(|p| p.first <= ordinal) - 1]
+}
+
+/// Namespaces shorter than this are not kept: an IRI key that refers to one saves its bytes
+/// less two (the 0 and the namespace's number).
+const NAMESPACE_MIN: usize = 8;
+
+/// The namespaces an IRI is looked up under, at most: its text up to each of its last `/` or
+/// `#`.
+const CUTS: usize = 8;
+
+/// At most this many namespaces seen once are remembered (see [`Namespaces::seen`]).
+const SEEN_MAX: usize = 1 << 20;
+
+/// The namespaces of compact IRI keys (#152): an IRI's text up to and including its last `/`
+/// or `#`, kept once, numbered from 0 in the order kept. A compact IRI key is
+/// `[Kind::Iri][0]`, the number of its namespace (a varint) and the rest of the IRI; an IRI
+/// written in full has no 0 byte. The namespaces only grow, so the keys of a checkpoint refer
+/// to namespaces that every later checkpoint still has.
+#[derive(Clone)]
+pub(crate) struct Namespaces {
+    bytes: Vec<u8>,
+    /// `ends[i]..ends[i + 1]` is namespace `i`; `ends[0] == 0`.
+    ends: Vec<u64>,
+    table: HashTable<u32>,
+    /// The hashes of namespaces seen once and not kept: a namespace is kept when a second IRI
+    /// has it, so that an IRI alone in its namespace stays as it is rather than also writing
+    /// the namespace. Not saved: after a restart, an IRI may be written in full where it would
+    /// have been compact, which every lookup handles.
+    seen: hashbrown::HashSet<u64, rustc_hash::FxBuildHasher>,
+}
+
+impl Default for Namespaces {
+    fn default() -> Self {
+        Self {
+            bytes: Vec::new(),
+            ends: vec![0],
+            table: HashTable::new(),
+            seen: Default::default(),
+        }
+    }
+}
+
+fn namespace_hash(ns: &[u8]) -> u64 {
+    rustc_hash::FxBuildHasher.hash_one(ns)
+}
+
+impl Namespaces {
+    /// Namespaces kept.
+    pub(crate) fn len(&self) -> usize {
+        self.ends.len() - 1
+    }
+
+    fn get(&self, i: u64) -> Option<&[u8]> {
+        let i = usize::try_from(i).ok()?;
+        let (&start, &end) = (self.ends.get(i)?, self.ends.get(i + 1)?);
+        Some(&self.bytes[start as usize..end as usize])
+    }
+
+    fn find(&self, ns: &[u8]) -> Option<u32> {
+        let (bytes, ends) = (&self.bytes, &self.ends);
+        self.table
+            .find(namespace_hash(ns), |&i| {
+                &bytes[ends[i as usize] as usize..ends[i as usize + 1] as usize] == ns
+            })
+            .copied()
+    }
+
+    /// The number of namespace `ns`, not kept: kept now if an IRI had it before, else noted.
+    fn note(&mut self, ns: &[u8]) -> Option<u32> {
+        let h = namespace_hash(ns);
+        if self.seen.len() >= SEEN_MAX {
+            self.seen.clear();
+        }
+        if self.seen.insert(h) {
+            return None;
+        }
+        self.seen.remove(&h);
+        let i = u32::try_from(self.len()).ok()?;
+        self.bytes.extend_from_slice(ns);
+        self.ends.push(self.bytes.len() as u64);
+        let (bytes, ends) = (&self.bytes, &self.ends);
+        self.table.insert_unique(h, i, |&j| {
+            namespace_hash(&bytes[ends[j as usize] as usize..ends[j as usize + 1] as usize])
+        });
+        Some(i)
+    }
+
+    /// The namespace and the rest of a compact IRI key; `None` for any other key, and for a
+    /// compact key of an unknown namespace (a damaged one: see [`Dictionary::valid_parts`]).
+    pub(crate) fn parts<'a>(&'a self, key: &'a [u8]) -> Option<(&'a [u8], &'a [u8])> {
+        if key.len() < 3 || key[0] != Kind::Iri as u8 || key[1] != 0 {
+            return None;
+        }
+        let mut at = 2;
+        let i = crate::segment::get_varint(key, &mut at)?;
+        Some((self.get(i)?, &key[at..]))
+    }
+
+    /// The namespaces as saved: their bytes and ends.
+    pub(crate) fn saved(&self) -> (&[u8], &[u64]) {
+        (&self.bytes, &self.ends)
+    }
+
+    /// Namespaces read back from [`Namespaces::saved`]; `None` unless the ends start at 0,
+    /// never go back and end at the last byte, and every namespace is UTF-8.
+    pub(crate) fn from_saved(bytes: Vec<u8>, ends: Vec<u64>) -> Option<Self> {
+        if ends.first() != Some(&0) || ends.last() != Some(&(bytes.len() as u64)) {
+            return None;
+        }
+        if !ends.windows(2).all(|w| {
+            w[0] <= w[1] && std::str::from_utf8(&bytes[w[0] as usize..w[1] as usize]).is_ok()
+        }) {
+            return None;
+        }
+        let mut ns = Self {
+            bytes,
+            ends,
+            ..Self::default()
+        };
+        let mut table = HashTable::with_capacity(ns.len());
+        for i in 0..ns.len() {
+            let h = namespace_hash(ns.get(i as u64).expect("in range"));
+            table.insert_unique(h, i as u32, |_| unreachable!("the table has room"));
+        }
+        ns.table = table;
+        Some(ns)
+    }
+
+    fn heap_size(&self) -> usize {
+        self.bytes.capacity() + self.ends.capacity() * 8 + self.table.capacity() * 4
+    }
+}
+
+/// A text in two parts, ordered as the two written one after the other: an IRI of a compact
+/// key, its namespace then the rest, read without copying them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Text<'a>(pub(crate) &'a [u8], pub(crate) &'a [u8]);
+
+impl Text<'_> {
+    pub(crate) fn starts_with(&self, prefix: &[u8]) -> bool {
+        if prefix.len() <= self.0.len() {
+            return self.0.starts_with(prefix);
+        }
+        let (head, rest) = prefix.split_at(self.0.len());
+        head == self.0 && self.1.starts_with(rest)
+    }
+
+    /// The order of this text and `other` written out.
+    pub(crate) fn cmp_bytes(&self, other: &[u8]) -> std::cmp::Ordering {
+        self.cmp(&Text(other, &[]))
+    }
+
+    pub(crate) fn to_vec(self) -> Vec<u8> {
+        [self.0, self.1].concat()
+    }
+}
+
+impl Ord for Text<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        // The same namespace (one slice of the namespaces): the rests decide.
+        if std::ptr::eq(self.0, other.0) {
+            return self.1.cmp(other.1);
+        }
+        let (mut a, mut b) = ((self.0, self.1), (other.0, other.1));
+        loop {
+            if a.0.is_empty() {
+                if a.1.is_empty() {
+                    break;
+                }
+                a = (a.1, &[]);
+                continue;
+            }
+            if b.0.is_empty() {
+                if b.1.is_empty() {
+                    break;
+                }
+                b = (b.1, &[]);
+                continue;
+            }
+            let n = a.0.len().min(b.0.len());
+            match a.0[..n].cmp(&b.0[..n]) {
+                Ordering::Equal => (a.0, b.0) = (&a.0[n..], &b.0[n..]),
+                o => return o,
+            }
+        }
+        (a.0.len() + a.1.len()).cmp(&(b.0.len() + b.1.len()))
+    }
+}
+
+impl PartialOrd for Text<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Text<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for Text<'_> {}
+
+/// The hash of `key` as written in full: a compact IRI key is hashed as its full key, so that
+/// a lookup by the full key finds it.
+fn hash_full(hasher: &Hasher, ns: &Namespaces, key: &[u8]) -> u64 {
+    thread_local! {
+        static FULL: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    match ns.parts(key) {
+        Some((n, rest)) => FULL.with_borrow_mut(|full| {
+            full.clear();
+            full.extend_from_slice(n);
+            full.extend_from_slice(rest);
+            hash_parts(hasher, &key[..1], full)
+        }),
+        None => hash_key(hasher, key),
+    }
 }
 
 /// How a term is stored: in its id, or in the dictionary under a key.
@@ -424,8 +645,8 @@ pub struct KindUsage {
     /// Of those, the bytes of the datatype IRI or language tag (typed and geometry
     /// literals, language strings), written again in every key.
     pub prefix_bytes: u64,
-    /// For IRIs, the bytes of their namespaces (up to the last `/` or `#`): what
-    /// keeping each namespace once would save at most.
+    /// For the IRIs written in full, the bytes of their namespaces (up to the last `/` or
+    /// `#`): IRIs that share a namespace with an earlier one refer to it (#152).
     pub namespace_bytes: u64,
 }
 
@@ -473,7 +694,7 @@ impl Dictionary {
                 u.keys += 1;
                 u.bytes += key.len() as u64;
                 u.prefix_bytes += prefix as u64;
-                if slot == 0 {
+                if slot == 0 && self.ns.parts(key).is_none() {
                     let iri = &key[1..];
                     u.namespace_bytes += iri
                         .iter()
@@ -506,6 +727,7 @@ impl Dictionary {
             })
             .sum::<usize>()
             + self.table.capacity() * 4
+            + self.ns.heap_size()
     }
 
     /// The key of `ordinal`: a compact WKT key is given as its full key (see [`is_compact`]).
@@ -514,6 +736,8 @@ impl Dictionary {
         let key = self.raw_key(ordinal);
         if is_compact(key) {
             std::borrow::Cow::Owned(expand(key))
+        } else if let Some((ns, rest)) = self.ns.parts(key) {
+            std::borrow::Cow::Owned([&key[..1], ns, rest].concat())
         } else {
             std::borrow::Cow::Borrowed(key)
         }
@@ -528,7 +752,27 @@ impl Dictionary {
             write_text(key, &mut text);
             return Literal::new_typed_literal(text, WKT_LITERAL).into();
         }
+        if let Some((ns, rest)) = self.ns.parts(key) {
+            let iri = String::from_utf8(Text(ns, rest).to_vec()).expect("keys are UTF-8");
+            return NamedNode::new_unchecked(iri).into();
+        }
         decode(key)
+    }
+
+    /// The namespaces of compact IRI keys.
+    pub(crate) fn namespaces(&self) -> &Namespaces {
+        &self.ns
+    }
+
+    /// The text of an IRI key (without its kind byte), in two parts when compact.
+    pub(crate) fn iri_text<'a>(&'a self, key: &'a [u8]) -> Option<Text<'a>> {
+        if key.first() != Some(&(Kind::Iri as u8)) {
+            return None;
+        }
+        Some(match self.ns.parts(key) {
+            Some((ns, rest)) => Text(ns, rest),
+            None => Text(&key[1..], &[]),
+        })
     }
 
     /// The key of `ordinal` as stored: compact WKT keys as they are.
@@ -556,6 +800,18 @@ impl Dictionary {
         if is(k) {
             return true;
         }
+        // A compact IRI key (#152) is shorter than the IRI's full key.
+        if prefix.first() == Some(&(Kind::Iri as u8))
+            && k.len() < prefix.len() + value.len()
+            && let Some((ns, rest)) = self.ns.parts(k)
+        {
+            let full = [&k[..1], ns, rest];
+            return full.iter().map(|s| s.len()).sum::<usize>() == prefix.len() + value.len()
+                && full
+                    .iter()
+                    .flat_map(|s| s.iter())
+                    .eq(prefix.iter().chain(value));
+        }
         // A compact key (#370) holds a WKT literal without its text: only a WKT literal can
         // be one, and only in a dictionary that may hold compact keys.
         self.compact
@@ -577,7 +833,47 @@ impl Dictionary {
     }
 
     fn hash(&self, key: &[u8]) -> u64 {
-        hash_key(&self.hasher, key)
+        hash_full(&self.hasher, &self.ns, key)
+    }
+
+    /// The key to store for the full key `key`, not found: a compact one for an IRI whose
+    /// namespace is kept (or kept now), else `key` itself.
+    fn stored<'a>(&mut self, key: &'a [u8], out: &'a mut Vec<u8>) -> &'a [u8] {
+        if key.first() != Some(&(Kind::Iri as u8)) {
+            return key;
+        }
+        let iri = &key[1..];
+        // The namespaces it may have, longest first: its text up to each `/` or `#`, from the
+        // last. An IRI under another (`…/way/1/geom/track` under `…/way/1`) then shares the
+        // namespace of the shorter one (`…/way/`) rather than one of its own.
+        let mut cuts = [0; CUTS];
+        let mut n = 0;
+        for (i, &b) in iri.iter().enumerate().rev() {
+            if n == CUTS || i + 1 < NAMESPACE_MIN {
+                break;
+            }
+            if b == b'/' || b == b'#' {
+                cuts[n] = i + 1;
+                n += 1;
+            }
+        }
+        let cuts = &cuts[..n];
+        // The longest kept, else the longest that an IRI had before.
+        let Some((i, cut)) = cuts
+            .iter()
+            .find_map(|&c| Some((self.ns.find(&iri[..c])?, c)))
+            .or_else(|| {
+                cuts.iter()
+                    .find_map(|&c| Some((self.ns.note(&iri[..c])?, c)))
+            })
+        else {
+            return key;
+        };
+        out.clear();
+        out.extend_from_slice(&[Kind::Iri as u8, 0]);
+        crate::segment::put_varint(out, u64::from(i));
+        out.extend_from_slice(&iri[cut..]);
+        out
     }
 
     pub(crate) fn get(&self, key: &[u8]) -> Option<u32> {
@@ -600,16 +896,19 @@ impl Dictionary {
             return (o, false);
         }
         let ordinal = u32::try_from(self.len() + 1).expect("fewer than 2^32 terms");
+        let mut compact = Vec::new();
+        let key = self.stored(key, &mut compact);
         let Self {
             pieces,
             table,
             hasher,
+            ns,
             ..
         } = self;
         if table.len() == table.capacity() {
             // Grown here rather than by the table, which would rehash in bucket order,
             // reading the keys at random (#292).
-            *table = build_table(hasher, pieces, (table.capacity() * 2).max(16));
+            *table = build_table(hasher, ns, pieces, (table.capacity() * 2).max(16));
         }
         // New keys go to a piece on the heap: the pieces of a checkpoint stay as they are.
         if matches!(pieces.last(), Some(p) if p.bytes.mapped_size() > 0 || p.ends.mapped_size() > 0)
@@ -627,7 +926,7 @@ impl Dictionary {
         let end = bytes.len() as u64;
         last.ends.to_mut().push(end);
         table.insert_unique(h, ordinal, |&o| {
-            hash_key(hasher, piece_of(pieces, o).key(o))
+            hash_full(hasher, ns, piece_of(pieces, o).key(o))
         });
         (ordinal, true)
     }
@@ -751,7 +1050,7 @@ impl Dictionary {
         // The table holds the keys of the pieces without an index: built again only when the
         // keys indexed changed (the same keys, held elsewhere, need no change).
         if changed {
-            self.table = build_table(&self.hasher, &self.pieces, 0);
+            self.table = build_table(&self.hasher, &self.ns, &self.pieces, 0);
         }
     }
 
@@ -786,7 +1085,8 @@ impl Dictionary {
     /// Whether saved parts can be rebuilt into a dictionary whose keys all [`decode`]: the
     /// key ends start at 0, never go back, end at the last byte, and every key is a kind byte
     /// followed by UTF-8 text, with the separator literals need.
-    pub(crate) fn valid_parts(bytes: &[u8], ends: &[u64]) -> bool {
+    /// A compact IRI key must refer to one of `ns`.
+    pub(crate) fn valid_parts(bytes: &[u8], ends: &[u64], ns: &Namespaces) -> bool {
         if ends.first() != Some(&0) || ends.last() != Some(&(bytes.len() as u64)) {
             return false;
         }
@@ -807,6 +1107,11 @@ impl Dictionary {
             let Some((&kind, rest)) = key.split_first() else {
                 return false;
             };
+            if kind == Kind::Iri as u8 && rest.first() == Some(&0) {
+                return ns
+                    .parts(key)
+                    .is_some_and(|(_, rest)| std::str::from_utf8(rest).is_ok());
+            }
             std::str::from_utf8(rest).is_ok()
                 && match kind {
                     k if k == Kind::Iri as u8 || k == Kind::Blank as u8 => true,
@@ -820,15 +1125,14 @@ impl Dictionary {
         })
     }
 
-    /// Rebuilds a dictionary from saved parts, which must be [`Dictionary::valid_parts`].
-    #[cfg(test)]
-    pub(crate) fn from_parts(bytes: impl Into<Buf<u8>>, ends: impl Into<Buf<u64>>) -> Self {
-        Self::from_pieces(vec![(bytes.into(), ends.into(), None)])
-    }
-
     /// Rebuilds a dictionary from saved pieces of consecutive keys, each
     /// [`Dictionary::valid_parts`].
     pub(crate) fn from_pieces(saved: Vec<SavedPiece>) -> Self {
+        Self::from_saved(saved, Namespaces::default())
+    }
+
+    /// [`Dictionary::from_pieces`], with the namespaces its compact IRI keys refer to.
+    pub(crate) fn from_saved(saved: Vec<SavedPiece>, ns: Namespaces) -> Self {
         let mut dict = Self {
             pieces: vec![Piece {
                 first: 1,
@@ -839,11 +1143,12 @@ impl Dictionary {
             table: HashTable::new(),
             hasher: Hasher::default(),
             compact: false,
+            ns,
         };
         if !saved.is_empty() {
             dict.replace_saved(saved);
         }
-        dict.table = build_table(&dict.hasher, &dict.pieces, 0);
+        dict.table = build_table(&dict.hasher, &dict.ns, &dict.pieces, 0);
         dict
     }
 }
@@ -872,7 +1177,12 @@ fn find(
 /// A table of the ordinals of the keys in pieces without a saved index, with room for
 /// `capacity` keys. The keys are hashed in parallel and in ordinal order, so their bytes are
 /// read front to back.
-fn build_table(hasher: &Hasher, pieces: &[Piece], capacity: usize) -> HashTable<u32> {
+fn build_table(
+    hasher: &Hasher,
+    ns: &Namespaces,
+    pieces: &[Piece],
+    capacity: usize,
+) -> HashTable<u32> {
     use rayon::prelude::*;
     const CHUNK: usize = 1 << 20;
     let unindexed = pieces.iter().filter(|p| p.index.is_none());
@@ -885,7 +1195,7 @@ fn build_table(hasher: &Hasher, pieces: &[Piece], capacity: usize) -> HashTable<
             let end = (start + CHUNK).min(first + p.len());
             (start..end)
                 .into_par_iter()
-                .map(|o| hash_key(hasher, p.key(o as u32)))
+                .map(|o| hash_full(hasher, ns, p.key(o as u32)))
                 .collect_into_vec(&mut hashes);
             for (o, &h) in (start..end).zip(&hashes) {
                 // There is room: the table never grows here.
@@ -938,8 +1248,8 @@ mod tests {
                 ("wktBinary", 1)
             ]
         );
-        // "http://e/" and "http://e/ns#", and the IRIs' kind bytes.
-        assert_eq!((usage[0].bytes, usage[0].namespace_bytes), (25, 21));
+        // The first IRI in full ("http://e/", its kind byte), the second referring to it.
+        assert_eq!((usage[0].bytes, usage[0].namespace_bytes), (18, 9));
         assert_eq!(usage[2].prefix_bytes, 4); // the kind byte, "en" and its 0
         assert_eq!(usage[3].prefix_bytes, 13); // the kind byte, "http://e/dt" and its 0
         assert_eq!(usage[4].prefix_bytes, wkt_prefix().len() as u64);
@@ -959,8 +1269,8 @@ mod tests {
                 ends.push(bytes.len() as u64);
             }
         });
-        assert!(Dictionary::valid_parts(&bytes, &ends));
-        Dictionary::from_parts(bytes, ends)
+        assert!(Dictionary::valid_parts(&bytes, &ends, &dict.ns));
+        Dictionary::from_saved(vec![(bytes.into(), ends.into(), None)], dict.ns.clone())
     }
 
     #[test]
@@ -981,7 +1291,10 @@ mod tests {
             dict.fill_index(from, keys, &mut slots);
             (bytes.into(), ends.into(), Some(SavedIndex(slots.into())))
         };
-        let mut saved = Dictionary::from_pieces(vec![piece(0, 30_000), piece(30_000, 20_000)]);
+        let mut saved = Dictionary::from_saved(
+            vec![piece(0, 30_000), piece(30_000, 20_000)],
+            dict.ns.clone(),
+        );
         assert_eq!(saved.table.len(), 0, "no key is hashed again");
         for i in 0..50_000 {
             assert_eq!(saved.get(&key(i)), Some(i + 1));
@@ -998,7 +1311,7 @@ mod tests {
         // A damaged index cannot point at keys outside its piece, nor loop.
         let mut bad = piece(0, 100);
         bad.2 = Some(SavedIndex(vec![u64::MAX; index_slots(100)].into()));
-        let bad = Dictionary::from_pieces(vec![bad]);
+        let bad = Dictionary::from_saved(vec![bad], dict.ns.clone());
         assert_eq!(bad.get(&key(5)), None);
     }
 
@@ -1026,6 +1339,108 @@ mod tests {
         }
         for v in ["", "-", "+1", "01", "-0", "00", "1.0", " 1"] {
             assert!(!canonical_integer(v), "{v}");
+        }
+    }
+
+    #[test]
+    fn iris_keep_their_namespace_once() {
+        let iri = |s: &str| {
+            let mut key = Vec::new();
+            encode(NamedNode::new_unchecked(s).as_ref().into(), &mut key);
+            key
+        };
+        let iris = [
+            "http://example.org/node/1",
+            "http://example.org/node/2",
+            "http://example.org/node/3",
+            "http://example.org/way#4",
+            "http://example.org/way#5",
+            "http://example.org/alone/6",
+            "urn:x:7",
+            "x:y/8",
+            "x:y/9",
+        ];
+        let mut dict = Dictionary::new();
+        for (i, s) in iris.iter().enumerate() {
+            assert_eq!(dict.get_or_insert(&iri(s)), (i as u32 + 1, true), "{s}");
+        }
+        // The first IRI of a namespace is written in full, the later ones refer to it, to the
+        // longest namespace kept; namespaces seen once, and short ones, are not kept.
+        let compact: Vec<bool> = (1..=iris.len() as u32)
+            .map(|o| dict.ns.parts(dict.raw_key(o)).is_some())
+            .collect();
+        assert_eq!(
+            compact,
+            [false, true, true, true, true, true, false, false, false]
+        );
+        assert_eq!(dict.ns.len(), 2);
+        assert_eq!(dict.raw_key(2), b"\x01\0\x002");
+        let check = |dict: &Dictionary| {
+            for (i, s) in iris.iter().enumerate() {
+                let o = i as u32 + 1;
+                assert_eq!(dict.get(&iri(s)), Some(o), "{s}");
+                let k = iri(s);
+                let (prefix, value) = split_key(&k);
+                assert_eq!(dict.get_split(prefix, value), Some(o));
+                assert_eq!(dict.term(o), Term::from(NamedNode::new_unchecked(*s)));
+                assert_eq!(&*dict.key(o), k.as_slice());
+                let text = dict.iri_text(dict.raw_key(o)).unwrap().to_vec();
+                assert_eq!(text, s.as_bytes());
+            }
+            // The namespace itself, a prefix or an extension of an IRI is not one of them.
+            for s in [
+                "http://example.org/node/",
+                "http://example.org/node/22",
+                "http://example.org/node/",
+            ] {
+                assert_eq!(dict.get(&iri(s)), None, "{s}");
+            }
+        };
+        check(&dict);
+        // Again, from saved parts with the namespaces: the table is built from full keys.
+        check(&copy(&dict));
+        // Loaded again: the same ordinals, nothing added.
+        let mut again = copy(&dict);
+        for (i, s) in iris.iter().enumerate() {
+            assert_eq!(again.get_or_insert(&iri(s)), (i as u32 + 1, false));
+        }
+        // A compact key of an unknown namespace is damaged.
+        let (bytes, ends) = (b"\x01\0\x05x".to_vec(), vec![0, 4]);
+        assert!(!Dictionary::valid_parts(&bytes, &ends, &dict.ns));
+        let usage = dict.usage();
+        assert_eq!(usage[0].keys, iris.len() as u64);
+        // Only the IRIs written in full count their namespaces.
+        let full: u64 = [24, 0, 4, 4].iter().sum();
+        assert_eq!(usage[0].namespace_bytes, full);
+        // Saved and read back.
+        let (bytes, ends) = dict.ns.saved();
+        let back = Namespaces::from_saved(bytes.to_vec(), ends.to_vec()).unwrap();
+        assert_eq!(back.find(b"http://example.org/"), Some(1));
+        assert_eq!(back.find(b"http://example.org/way#"), None);
+        assert!(Namespaces::from_saved(b"ab".to_vec(), vec![0, 3]).is_none());
+        assert!(Namespaces::from_saved(vec![0xff], vec![0, 1]).is_none());
+    }
+
+    #[test]
+    fn two_part_texts_order_as_written_out() {
+        let texts: [(&[u8], &[u8]); 8] = [
+            (b"a/", b"z"),
+            (b"a/b/", b"c"),
+            (b"", b"a/b/c"),
+            (b"a/b/c", b""),
+            (b"a/b/", b""),
+            (b"a/", b"b/cd"),
+            (b"b", b""),
+            (b"", b""),
+        ];
+        for a in texts {
+            for b in texts {
+                let (ta, tb) = (Text(a.0, a.1), Text(b.0, b.1));
+                let (wa, wb) = (ta.to_vec(), tb.to_vec());
+                assert_eq!(ta.cmp(&tb), wa.cmp(&wb), "{wa:?} {wb:?}");
+                assert_eq!(ta.cmp_bytes(&wb), wa.cmp(&wb));
+                assert_eq!(ta.starts_with(&wb), wa.starts_with(&wb), "{wa:?} {wb:?}");
+            }
         }
     }
 
