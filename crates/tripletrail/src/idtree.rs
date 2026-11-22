@@ -340,27 +340,28 @@ impl Eval<'_> {
                 unbound
             }
             _ => {
-                let kernel = crate::idvalue::compile(expression, &t, self.snapshot)?;
-                // Each value once: the same value gives the same id.
-                let mut ids: HashMap<(u8, i128), TermId> = HashMap::new();
+                let kernel = crate::idvalue::compile_output(expression, &t, self.snapshot)?;
+                // Each value once: the same value (in the same form) gives the same id.
+                let mut ids: HashMap<((u8, i128), crate::idvalue::Form), TermId> = HashMap::new();
                 let mut unbound = false;
                 for r in 0..rows {
                     if r % 4096 == 0 && (self.cancelled)() {
                         return None;
                     }
                     match kernel(t.row(r))? {
-                        Ok(v) => {
+                        Ok((v, form)) => {
                             // An inline number is its id: no lookup, no literal.
-                            if let Some(id) = crate::idvalue::inline_id(v) {
+                            if let Some(id) = crate::idvalue::inline_id(v, form) {
                                 column.push(id);
                                 continue;
                             }
-                            let key = value_key(v)?;
+                            let key = (value_key(v)?, form);
                             let id = match ids.get(&key) {
                                 Some(&id) => id,
                                 None => {
-                                    let id =
-                                        self.snapshot.id_of(crate::idvalue::literal(v)?.into());
+                                    let id = self
+                                        .snapshot
+                                        .id_of(crate::idvalue::literal(v, form)?.into());
                                     ids.insert(key, id);
                                     id
                                 }
@@ -1558,7 +1559,13 @@ pub(crate) fn value_expression(e: &Expression) -> bool {
         E::FunctionCall(Function::Custom(f), args)
             if f.as_ref() == oxigraph::model::vocab::xsd::INTEGER =>
         {
-            matches!(args.as_slice(), [a] if text_test(a).is_some())
+            matches!(args.as_slice(), [a] if text_test(a).is_some() || value_expression(a))
+        }
+        // `xsd:decimal` of a number (#11).
+        E::FunctionCall(Function::Custom(f), args)
+            if f.as_ref() == oxigraph::model::vocab::xsd::DECIMAL =>
+        {
+            matches!(args.as_slice(), [a] if value_expression(a))
         }
         _ => false,
     }

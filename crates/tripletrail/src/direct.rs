@@ -233,7 +233,14 @@ fn computable(e: &Expression, top: bool) -> bool {
         Expression::FunctionCall(F::Custom(f), args)
             if f.as_ref() == oxigraph::model::vocab::xsd::INTEGER =>
         {
-            args.len() == 1 && !matches!(args[0], Expression::Literal(_))
+            args.len() == 1
+                && (crate::idtree::text_test(&args[0]).is_some() || computable(&args[0], false))
+        }
+        // `xsd:decimal` of a number.
+        Expression::FunctionCall(F::Custom(f), args)
+            if f.as_ref() == oxigraph::model::vocab::xsd::DECIMAL =>
+        {
+            args.len() == 1 && computable(&args[0], false)
         }
         _ => false,
     }
