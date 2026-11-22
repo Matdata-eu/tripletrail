@@ -3046,45 +3046,50 @@ fn slice_key<T: Eq>(slice: &[T], element: &T) -> Option<usize> {
     None
 }
 
+/// The kind of a value in Jena's order of values (`NodeValueCmp`): blank nodes, IRIs, plain
+/// strings, language-tagged strings, numbers, booleans, dates and times, durations, triple
+/// terms, and literals of other datatypes last.
+fn jena_kind(t: &ExpressionTerm) -> u16 {
+    match t {
+        ExpressionTerm::BlankNode(_) => 12,
+        ExpressionTerm::NamedNode(_) => 13,
+        ExpressionTerm::StringLiteral(_) => 50,
+        ExpressionTerm::LangStringLiteral { .. } => 55,
+        #[cfg(feature = "sparql-12")]
+        ExpressionTerm::DirLangStringLiteral { .. } => 55,
+        ExpressionTerm::IntegerLiteral(_)
+        | ExpressionTerm::DecimalLiteral(_)
+        | ExpressionTerm::FloatLiteral(_)
+        | ExpressionTerm::DoubleLiteral(_) => 110,
+        ExpressionTerm::BooleanLiteral(_) => 120,
+        ExpressionTerm::DateTimeLiteral(_) => 130,
+        #[cfg(feature = "calendar-ext")]
+        ExpressionTerm::GYearLiteral(_)
+        | ExpressionTerm::GYearMonthLiteral(_)
+        | ExpressionTerm::GMonthLiteral(_)
+        | ExpressionTerm::GMonthDayLiteral(_)
+        | ExpressionTerm::GDayLiteral(_) => 130,
+        #[cfg(feature = "sep-0002")]
+        ExpressionTerm::DateLiteral(_) => 131,
+        #[cfg(feature = "sep-0002")]
+        ExpressionTerm::TimeLiteral(_) => 135,
+        #[cfg(feature = "sep-0002")]
+        ExpressionTerm::DurationLiteral(_)
+        | ExpressionTerm::YearMonthDurationLiteral(_)
+        | ExpressionTerm::DayTimeDurationLiteral(_) => 160,
+        #[cfg(feature = "sparql-12")]
+        ExpressionTerm::Triple(_) => 999,
+        ExpressionTerm::OtherTypedLiteral { .. } => 6000,
+    }
+}
+
 /// tripletrail (#517): the order in which Jena's `MIN` and `MAX` see values
 /// (`NodeValueCmp.compareWithOrdering`): first by kind of value, with plain strings below
 /// language-tagged strings, numbers, booleans, dates and times, durations and triple terms, and
 /// literals of other datatypes last; then by value; and values that are equal, such as
 /// `3.0` and `3.0e0`, or that do not compare, by the terms as written (`NodeCmp.compareRDFTerms`).
 fn cmp_values_as_jena(a: &ExpressionTerm, b: &ExpressionTerm) -> Ordering {
-    fn kind(t: &ExpressionTerm) -> u16 {
-        match t {
-            ExpressionTerm::BlankNode(_) => 12,
-            ExpressionTerm::NamedNode(_) => 13,
-            ExpressionTerm::StringLiteral(_) => 50,
-            ExpressionTerm::LangStringLiteral { .. } => 55,
-            #[cfg(feature = "sparql-12")]
-            ExpressionTerm::DirLangStringLiteral { .. } => 55,
-            ExpressionTerm::IntegerLiteral(_)
-            | ExpressionTerm::DecimalLiteral(_)
-            | ExpressionTerm::FloatLiteral(_)
-            | ExpressionTerm::DoubleLiteral(_) => 110,
-            ExpressionTerm::BooleanLiteral(_) => 120,
-            ExpressionTerm::DateTimeLiteral(_) => 130,
-            #[cfg(feature = "calendar-ext")]
-            ExpressionTerm::GYearLiteral(_)
-            | ExpressionTerm::GYearMonthLiteral(_)
-            | ExpressionTerm::GMonthLiteral(_)
-            | ExpressionTerm::GMonthDayLiteral(_)
-            | ExpressionTerm::GDayLiteral(_) => 130,
-            #[cfg(feature = "sep-0002")]
-            ExpressionTerm::DateLiteral(_) => 131,
-            #[cfg(feature = "sep-0002")]
-            ExpressionTerm::TimeLiteral(_) => 135,
-            #[cfg(feature = "sep-0002")]
-            ExpressionTerm::DurationLiteral(_)
-            | ExpressionTerm::YearMonthDurationLiteral(_)
-            | ExpressionTerm::DayTimeDurationLiteral(_) => 160,
-            #[cfg(feature = "sparql-12")]
-            ExpressionTerm::Triple(_) => 999,
-            ExpressionTerm::OtherTypedLiteral { .. } => 6000,
-        }
-    }
+    let kind = jena_kind;
     let (va, vb) = (a.value_ref(), b.value_ref());
     let order = kind(&va).cmp(&kind(&vb));
     if order != Ordering::Equal {
@@ -3147,15 +3152,24 @@ fn cmp_terms(a: Option<&ExpressionTerm>, b: Option<&ExpressionTerm>) -> Ordering
                     #[cfg(feature = "sparql-12")]
                     ExpressionTerm::Triple(_) => Ordering::Less,
                     _ => {
-                        // tripletrail (#78): a total order, or the sort panics.
-                        if let Some(ord) = order_cmp_literals(a, b) {
+                        // tripletrail (#78, #148): a total order, or the sort panics.
+                        // Values compare only with values of their own kind (numbers with
+                        // numbers, dates with dates…), so literals are ordered by kind first,
+                        // as Jena orders values; without that, `2 < 10` by value, `10 < "1z"`
+                        // and `"1z" < 2` as written would make a cycle. Within a kind, values
+                        // that don't compare (of different datatypes, or language strings of
+                        // different tags) go by datatype, then as written.
+                        let kind = jena_kind(&a.value_ref()).cmp(&jena_kind(&b.value_ref()));
+                        if kind != Ordering::Equal {
+                            kind
+                        } else if let Some(ord) = order_cmp_literals(a, b) {
                             ord
                         } else if let (Term::Literal(a), Term::Literal(b)) =
                             (a.clone().into(), b.clone().into())
                         {
-                            (a.value(), a.datatype(), a.language()).cmp(&(
-                                b.value(),
+                            (a.datatype(), a.value(), a.language()).cmp(&(
                                 b.datatype(),
+                                b.value(),
                                 b.language(),
                             ))
                         } else {
