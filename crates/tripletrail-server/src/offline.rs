@@ -451,3 +451,138 @@ fn scoped(quad: Quad, i: usize) -> Quad {
         },
     )
 }
+
+/// `tripletrail disk-usage` (#152): what a dataset on disk takes, by kind of file (numbered
+/// pieces and runs counted under their kind, as `dict.bin`) and, read from every key, what
+/// the dictionary's keys take by kind of term. Text, or JSON with `json`.
+pub(crate) fn disk_usage(location: &Path, dataset: &str, json: bool) -> Result<()> {
+    let dir = location.join(dataset);
+    if !dir.is_dir() {
+        return Err(format!("no dataset {dataset:?} in {}", location.display()).into());
+    }
+    let mut files = std::collections::BTreeMap::<String, u64>::new();
+    let mut stack = vec![dir.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d)?.flatten() {
+            let meta = e.metadata()?;
+            if meta.is_dir() {
+                stack.push(e.path());
+            } else {
+                *files
+                    .entry(file_kind(&e.file_name().to_string_lossy()))
+                    .or_default() += meta.len();
+            }
+        }
+    }
+    let total: u64 = files.values().sum();
+    let store = tripletrail::store::Store::open_read_only(&dir)?;
+    let usage = store.dictionary_usage();
+    if json {
+        let out = serde_json::json!({
+            "dataset": dataset,
+            "bytes": total,
+            "files": files,
+            "dictionary": usage.iter().map(|u| serde_json::json!({
+                "kind": u.kind,
+                "keys": u.keys,
+                "bytes": u.bytes,
+                "prefixBytes": u.prefix_bytes,
+                "namespaceBytes": u.namespace_bytes,
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+    let share = |b: u64, of: u64| {
+        if of == 0 {
+            0.0
+        } else {
+            100.0 * b as f64 / of as f64
+        }
+    };
+    println!("{dataset}: {} on disk", size(total));
+    let mut by_size: Vec<_> = files.iter().collect();
+    by_size.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    for (name, bytes) in by_size {
+        println!(
+            "  {name:<14} {:>10} {:>5.1}%",
+            size(*bytes),
+            share(*bytes, total)
+        );
+    }
+    let keys: u64 = usage.iter().map(|u| u.bytes).sum();
+    println!("dictionary keys: {}", size(keys));
+    println!(
+        "  {:<11} {:>13} {:>10} {:>6} {:>10} {:>10}",
+        "kind", "keys", "bytes", "%", "datatype", "namespace"
+    );
+    for u in &usage {
+        println!(
+            "  {:<11} {:>13} {:>10} {:>5.1}% {:>10} {:>10}",
+            u.kind,
+            u.keys,
+            size(u.bytes),
+            share(u.bytes, keys),
+            size(u.prefix_bytes),
+            size(u.namespace_bytes)
+        );
+    }
+    Ok(())
+}
+
+/// Bytes in kB, MB or GB (powers of 1,000).
+fn size(b: u64) -> String {
+    match b {
+        0..1_000 => format!("{b} B"),
+        1_000..1_000_000 => format!("{:.1} kB", b as f64 / 1e3),
+        1_000_000..1_000_000_000 => format!("{:.1} MB", b as f64 / 1e6),
+        _ => format!("{:.2} GB", b as f64 / 1e9),
+    }
+}
+
+/// A store file's kind: its name without the numbers of pieces and runs (`dict-2.bin` and
+/// `spog.3a.seg` count as `dict.bin` and `spog.seg`), as tripletrail-bench groups them.
+fn file_kind(name: &str) -> String {
+    let b = name.as_bytes();
+    let digits = |from: usize| from + b[from..].iter().take_while(|c| c.is_ascii_digit()).count();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < b.len() {
+        // `-12`: left out.
+        if b[i] == b'-' && digits(i + 1) > i + 1 {
+            i = digits(i + 1);
+            continue;
+        }
+        // `.12.`, `.12a.` or `.12r.`: one dot.
+        if b[i] == b'.' && digits(i + 1) > i + 1 {
+            let mut j = digits(i + 1);
+            if j < b.len() && (b[j] == b'a' || b[j] == b'r') {
+                j += 1;
+            }
+            if j < b.len() && b[j] == b'.' {
+                i = j;
+                continue;
+            }
+        }
+        out.push(b[i] as char);
+        i += 1;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn file_kinds() {
+        for (name, kind) in [
+            ("dict.bin", "dict.bin"),
+            ("dict-2.bin", "dict.bin"),
+            ("spog.3.seg", "spog.seg"),
+            ("spog.12a.seg", "spog.seg"),
+            ("wal-1.log", "wal.log"),
+            ("CURRENT", "CURRENT"),
+        ] {
+            assert_eq!(super::file_kind(name), kind, "{name}");
+        }
+    }
+}

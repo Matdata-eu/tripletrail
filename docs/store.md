@@ -248,7 +248,8 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   numbers and dates have inline ids instead of keys (#125); formats 1 and 2 still open. A
   piece that may hold WKT literals in binary form (`--render-wkt`, #370) is format 4
   (`OXGSDIC4`), otherwise as format 3, so that a binary from before it refuses the store
-  rather than misread those keys (#428).
+  rather than misread those keys (#428). `Store::dictionary_usage()` reads every key and
+  counts keys and bytes by kind of term (`tripletrail disk-usage`, #152).
 
 ## Benchmark
 
