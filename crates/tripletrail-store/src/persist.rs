@@ -31,7 +31,7 @@ use crate::StoreError;
 use crate::buf::{Buf, Pod};
 use crate::dict::{Dictionary, SavedIndex, index_check, index_slots};
 use crate::geobin::{Saved, SavedBoxes, SavedPart};
-use crate::index::{PERM_NAMES, QuadIndex};
+use crate::index::{GRAPH_FIRST, PERM_NAMES, QuadIndex};
 /// Quad permutations in checkpoints written before PSOG and GPSO.
 const OLD_PERMS: usize = 6;
 use crate::segment::{Key, Segment};
@@ -83,6 +83,12 @@ const SEG_MAGIC3: &[u8; 8] = b"OXGSSEG3";
 /// As format 3, with the blocks first and the sizes last, so that a segment can be written
 /// front to back while it is built (#218).
 const SEG_MAGIC4: &[u8; 8] = b"OXGSSEG4";
+/// A graph-first segment that reads the blocks of another permutation's segment of the same
+/// checkpoint (#152, see [`Segment::graph_first`]): its `firsts`, then the quads, the blocks
+/// and the number of the permutation whose blocks it reads.
+const SEG_MAGIC5: &[u8; 8] = b"OXGSSEG5";
+/// The segment formats read.
+const SEG_MAGICS: [&[u8; 8]; 5] = [SEG_MAGIC, SEG_MAGIC2, SEG_MAGIC3, SEG_MAGIC4, SEG_MAGIC5];
 /// The sizes at the end of a format 4 segment file: quads, firsts, offsets, starts, bytes.
 const SEG_TRAILER: usize = 5 * 8;
 /// The geometries of the whole dictionary: count and bytes, ordinals, offsets, then records.
@@ -1574,22 +1580,29 @@ fn write_checkpoint(
             PERM_NAMES
                 .iter()
                 .zip(&quads.perms)
-                .flat_map(|(name, perm)| {
+                .enumerate()
+                .flat_map(|(p, (name, perm))| {
                     let runs = perm.runs.iter().enumerate().flat_map(move |(i, run)| {
                         [
                             (run_name(name, i, true), &run.added),
                             (run_name(name, i, false), &run.removed),
                         ]
                     });
-                    std::iter::once((format!("{name}.seg"), &perm.segment))
-                        .chain(runs)
-                        .map(|(file, segment)| {
-                            let path = target.join(&file);
-                            (
-                                file,
-                                Box::new(move || write_segment(&path, segment, link)) as Job,
-                            )
-                        })
+                    let file = format!("{name}.seg");
+                    let path = target.join(&file);
+                    let base: Job = match graph_first_source(p) {
+                        Some(source) => {
+                            Box::new(move || write_graph_first(&path, quads, p, source, link))
+                        }
+                        None => Box::new(move || write_segment(&path, &perm.segment, link)),
+                    };
+                    std::iter::once((file, base)).chain(runs.map(|(file, segment)| {
+                        let path = target.join(&file);
+                        (
+                            file,
+                            Box::new(move || write_segment(&path, segment, link)) as Job,
+                        )
+                    }))
                 }),
         )
         .collect();
@@ -2395,28 +2408,109 @@ fn read_stats(dir: &Path, quads: &QuadIndex) {
     }
 }
 
-fn write_segment(path: &Path, s: &Segment, link: bool) -> io::Result<Sum> {
-    // A segment read from a file (a fold's, or a checkpoint's) is that file: linked into a
-    // checkpoint of the store, copied elsewhere.
-    if let Some(run) = &s.file {
-        if link && fs::hard_link(&run.path, path).is_ok() {
-            // Opened for writing: on Windows, flushing a file needs a handle with write
-            // access.
-            fs::OpenOptions::new().write(true).open(path)?.sync_all()?;
-            return Ok(run.sum);
-        }
-        if !link {
-            // Checked on the way: a damaged file is not copied into a backup under a new sum.
-            let sum = copy_file(&run.path, path)?;
-            if sum != run.sum {
-                let _ = fs::remove_file(path);
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("{} does not match its checksum", run.path.display()),
-                ));
-            }
+/// For a permutation of [`GRAPH_FIRST`], the one whose blocks it reads or may read.
+fn graph_first_source(perm: usize) -> Option<usize> {
+    GRAPH_FIRST
+        .iter()
+        .position(|&g| g == perm)
+        .map(|i| crate::index::GRAPH_LAST[i])
+}
+
+/// Whether `a` reads the blocks of `b`.
+fn shares_blocks(a: &Segment, b: &Segment) -> bool {
+    a.len == b.len
+        && a.bytes.len() == b.bytes.len()
+        && std::ptr::eq(a.bytes.as_ptr(), b.bytes.as_ptr())
+}
+
+/// Writes the segment of `perm`, one of [`GRAPH_FIRST`], whose quads with the graph last are
+/// those of permutation `source`: as a file of its `firsts` that reads `source`'s blocks
+/// (#152) when it reads them already, or when the quads are all in the default graph and
+/// both permutations are their segments alone (no runs, no delta), so the same quads.
+fn write_graph_first(
+    path: &Path,
+    quads: &QuadIndex,
+    perm: usize,
+    source: usize,
+    link: bool,
+) -> io::Result<Sum> {
+    let (s, src) = (&quads.perms[perm].segment, &quads.perms[source].segment);
+    let view_of_source = s.graph_first && shares_blocks(s, src);
+    let same_quads = !s.graph_first
+        && quads.delta_len() == 0
+        && quads.perms[perm].runs.is_empty()
+        && quads.perms[source].runs.is_empty()
+        && s.len == src.len
+        && src.only_default_graph();
+    if view_of_source {
+        // Read from a file: linked or copied as such a file is.
+        if let Some(sum) = copy_or_link(path, s, link)? {
             return Ok(sum);
         }
+        return write_view(path, &s.firsts, s.len, src.firsts.len(), source);
+    }
+    if same_quads {
+        let firsts: Vec<Key> = src
+            .firsts
+            .iter()
+            .map(crate::segment::graph_to_front)
+            .collect();
+        return write_view(path, &firsts, s.len, src.firsts.len(), source);
+    }
+    if s.graph_first {
+        // It reads blocks another segment no longer has: written out as a segment of its own.
+        let own = Segment::from_sorted(s.quads());
+        return write_segment(path, &own, false);
+    }
+    write_segment(path, s, link)
+}
+
+/// Reads a graph-first segment file ([`SEG_MAGIC5`]) of a segment that reads the blocks of
+/// permutation `source`: a placeholder holding its `firsts` and length (see [`read_parts`]).
+fn read_view(file: &Mapped, keep_mapped: bool, source: usize) -> Result<Segment, StoreError> {
+    let path = &file.path;
+    let n = file.map.len();
+    if n < 8 + 24 {
+        return Err(corrupt(path));
+    }
+    let h: Vec<u64> = file.map[n - 24..]
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| u64::from_le_bytes(*c))
+        .collect();
+    let len = usize::try_from(h[0]).map_err(|_| corrupt(path))?;
+    let firsts: Buf<Key> = file.buf(8, h[1], keep_mapped)?;
+    if 8 + byte_len::<Key>(h[1], path)? + 24 != n || h[2] != source as u64 {
+        return Err(corrupt(path));
+    }
+    Ok(Segment {
+        len,
+        firsts,
+        graph_first: true,
+        ..Segment::default()
+    })
+}
+
+/// Writes a graph-first segment file ([`SEG_MAGIC5`]).
+fn write_view(
+    path: &Path,
+    firsts: &[Key],
+    len: usize,
+    blocks: usize,
+    source: usize,
+) -> io::Result<Sum> {
+    let mut w = summing(path)?;
+    w.write_all(SEG_MAGIC5)?;
+    let flat: Vec<u64> = firsts.iter().flatten().copied().collect();
+    write_u64s(&mut w, &flat)?;
+    write_u64s(&mut w, &[len as u64, blocks as u64, source as u64])?;
+    finish(w)
+}
+
+fn write_segment(path: &Path, s: &Segment, link: bool) -> io::Result<Sum> {
+    if let Some(sum) = copy_or_link(path, s, link)? {
+        return Ok(sum);
     }
     let mut w = summing(path)?;
     w.write_all(SEG_MAGIC4)?;
@@ -2430,6 +2524,32 @@ fn write_segment(path: &Path, s: &Segment, link: bool) -> io::Result<Sum> {
         s.bytes.len(),
     )?;
     finish(w)
+}
+
+/// Writes segment `s`, if read from a file (a fold's, or a checkpoint's), as that file: linked
+/// into a checkpoint of the store (`link`), copied elsewhere. `None` when it is to be written.
+fn copy_or_link(path: &Path, s: &Segment, link: bool) -> io::Result<Option<Sum>> {
+    if let Some(run) = &s.file {
+        if link && fs::hard_link(&run.path, path).is_ok() {
+            // Opened for writing: on Windows, flushing a file needs a handle with write
+            // access.
+            fs::OpenOptions::new().write(true).open(path)?.sync_all()?;
+            return Ok(Some(run.sum));
+        }
+        if !link {
+            // Checked on the way: a damaged file is not copied into a backup under a new sum.
+            let sum = copy_file(&run.path, path)?;
+            if sum != run.sum {
+                let _ = fs::remove_file(path);
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{} does not match its checksum", run.path.display()),
+                ));
+            }
+            return Ok(Some(sum));
+        }
+    }
+    Ok(None)
 }
 
 /// Copies `from` to `to` byte by byte, and syncs it: not `fs::copy`, which may share the
@@ -2690,6 +2810,7 @@ fn read_segment_v4(file: &Mapped, keep_mapped: bool, verify: bool) -> Result<Seg
         starts,
         bytes,
         stats: Default::default(),
+        graph_first: false,
         file: None,
     };
     if verify && !segment.is_consistent() {
@@ -3009,11 +3130,27 @@ fn read_parts(dir: &Path, keep_mapped: bool, check: Check) -> Result<Parts, Stor
     let read_segment = |name: &str| -> Result<Segment, StoreError> {
         let path = dir.join(format!("{name}.seg"));
         let file = Mapped::open(path.clone())?;
-        file.refuse_newer(&[SEG_MAGIC, SEG_MAGIC2, SEG_MAGIC3, SEG_MAGIC4])?;
+        file.refuse_newer(&SEG_MAGICS)?;
         if verify {
             check_sum(sums, &file)?;
         } else {
             check_len(sums, &file)?;
+        }
+        if file.map.get(..8) == Some(SEG_MAGIC5.as_slice()) {
+            // Its blocks are another segment's: read with it, below.
+            let perm = PERM_NAMES.iter().position(|n| *n == name);
+            let source = perm
+                .and_then(graph_first_source)
+                .ok_or_else(|| corrupt(&path))?;
+            let mut segment = read_view(&file, keep_mapped, source)?;
+            if let Some(&sum) = sums.and_then(|s| s.get(&format!("{name}.seg"))) {
+                segment.file = Some(Arc::new(RunFile {
+                    path,
+                    sum,
+                    owned: false,
+                }));
+            }
+            return Ok(segment);
         }
         if file.map.get(..8) == Some(SEG_MAGIC4.as_slice()) {
             let mut segment = read_segment_v4(&file, keep_mapped, verify)?;
@@ -3067,6 +3204,7 @@ fn read_parts(dir: &Path, keep_mapped: bool, check: Check) -> Result<Parts, Stor
             starts,
             bytes,
             stats: Default::default(),
+            graph_first: false,
             file: None,
         };
         if verify && !segment.is_consistent() {
@@ -3122,13 +3260,41 @@ fn read_parts(dir: &Path, keep_mapped: bool, check: Check) -> Result<Parts, Stor
         )
     });
     let (dict, version, compact, pieces) = dict?;
+    let mut segments = segments?;
+    let runs = runs?;
+    // Graph-first segments take the blocks of their source (read as a placeholder with only
+    // its `firsts`); runs never are such segments.
+    let views: Vec<usize> = (0..segments.len())
+        .filter(|&i| segments[i].graph_first)
+        .collect();
+    for i in views {
+        let bad = || corrupt(&dir.join(format!("{}.seg", PERM_NAMES[i])));
+        let src = graph_first_source(i).ok_or_else(bad)?;
+        if segments.get(src).is_none_or(|s| s.graph_first) {
+            return Err(bad());
+        }
+        let (firsts, len) = (std::mem::take(&mut segments[i].firsts), segments[i].len);
+        let view = segments[src]
+            .graph_first_with(firsts, verify)
+            .filter(|v| v.len == len)
+            .ok_or_else(bad)?;
+        let file = segments[i].file.take();
+        segments[i] = Segment { file, ..view };
+    }
+    if runs
+        .iter()
+        .flatten()
+        .any(|(a, r)| a.graph_first || r.graph_first)
+    {
+        return Err(corrupt(&dir.join("runs")));
+    }
     Ok(Parts {
         dict,
         version,
         compact,
         pieces,
-        segments: segments?,
-        runs: runs?,
+        segments,
+        runs,
     })
 }
 

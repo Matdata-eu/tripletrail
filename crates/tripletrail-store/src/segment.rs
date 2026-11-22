@@ -39,9 +39,21 @@ pub(crate) struct Segment {
     /// Counts of the quads (see [`crate::stats`]): computed while building, read from the
     /// checkpoint, or computed on first use.
     pub(crate) stats: OnceLock<Arc<SegStats>>,
+    /// Whether this segment is a graph-first one read from the blocks of another (#152): of a
+    /// permutation whose last column is the graph, its quads all in the default graph
+    /// (graph 0), as the permutation with the graph moved to the front (SPOG as GSPO). The
+    /// blocks are the other segment's, shared, with their columns in its order; `firsts`
+    /// is in this segment's order. See [`Segment::graph_first`].
+    pub(crate) graph_first: bool,
     /// The file of a fold this segment was read from, if any: deleted when the last segment
     /// read from it goes. Last, so the maps above are dropped before it.
     pub(crate) file: Option<Arc<RunFile>>,
+}
+
+/// A key of a permutation with the graph last, with the graph moved to the front.
+#[inline]
+pub(crate) fn graph_to_front(k: &Key) -> Key {
+    [k[3], k[0], k[1], k[2]]
 }
 
 fn put_varint(out: &mut Vec<u8>, mut v: u64) {
@@ -144,6 +156,13 @@ fn columns(s: &Segment, b: usize, n: usize) -> Option<([Col; 4], usize)> {
     let mut pos = start + 4;
     let mut cols = [Col::default(); 4];
     let first = s.firsts.get(b)?;
+    // A graph-first segment's blocks hold the columns in the order of the one it shares them
+    // with, graph last.
+    let first = if s.graph_first {
+        &[first[1], first[2], first[3], first[0]]
+    } else {
+        first
+    };
     for c in 0..4 {
         let bits = u32::from(header[c]);
         if bits > 64 {
@@ -161,6 +180,9 @@ fn columns(s: &Segment, b: usize, n: usize) -> Option<([Col; 4], usize)> {
     for col in &mut cols {
         col.bit = bit;
         bit += n * col.bits as usize;
+    }
+    if s.graph_first {
+        cols = [cols[3], cols[0], cols[1], cols[2]];
     }
     Some((cols, bit.div_ceil(8) - start))
 }
@@ -413,6 +435,56 @@ impl Segment {
         segment
     }
 
+    /// This segment, of a permutation with the graph last (SPOG, POSG, OSPG, PSOG) whose
+    /// quads are all in the default graph, as the permutation with the graph moved to the
+    /// front (GSPO, GPOS, GOSP, GPSO): the same quads in the same order, read from the same
+    /// blocks (shared from now on, not copied), so it takes only its `firsts` (#152). `None`
+    /// when a quad is in a named graph, or the segment is itself graph-first.
+    pub(crate) fn graph_first(&mut self) -> Option<Segment> {
+        let firsts: Vec<Key> = self.firsts.iter().map(graph_to_front).collect();
+        self.graph_first_with(firsts.into(), true)
+    }
+
+    /// [`Segment::graph_first`] with its `firsts` given (as saved). With `check`, `None` also
+    /// when they are not this segment's with the graph moved to the front; without, only
+    /// their number is checked, so that a mapped segment is not read (a checkpoint's files
+    /// are checked against their sums).
+    pub(crate) fn graph_first_with(&mut self, firsts: Buf<Key>, check: bool) -> Option<Segment> {
+        if self.graph_first
+            || firsts.len() != self.firsts.len()
+            || check
+                && (!self.only_default_graph()
+                    || firsts
+                        .iter()
+                        .zip(self.firsts.iter())
+                        .any(|(f, s)| *f != graph_to_front(s)))
+        {
+            return None;
+        }
+        let segment = Segment {
+            len: self.len,
+            firsts,
+            offsets: self.offsets.share(),
+            starts: self.starts.share(),
+            bytes: self.bytes.share(),
+            stats: OnceLock::new(),
+            graph_first: true,
+            file: None,
+        };
+        // Its counts are another permutation's: computed on first use, or read from
+        // `stats.bin`.
+        Some(segment)
+    }
+
+    /// Whether every quad has graph 0 (the last column): the last column's bit width is 0
+    /// and its base 0 in every block.
+    pub(crate) fn only_default_graph(&self) -> bool {
+        (0..self.blocks()).all(|b| {
+            self.firsts[b][3] == 0
+                && columns(self, b, self.block_len(b)).is_some_and(|(c, _)| c[3].bits == 0)
+        })
+    }
+
     /// Whether the blocks hold on average less than three quarters of [`BLOCK`] (after
     /// partial compactions): scans then read more block headers than they need to.
     pub(crate) fn is_fragmented(&self) -> bool {
@@ -422,10 +494,16 @@ impl Segment {
     /// The segment's counts, computed by a scan the first time if the segment was read from
     /// a checkpoint without them.
     pub(crate) fn stats(&self) -> Arc<SegStats> {
-        Arc::clone(self.stats.get_or_init(|| {
-            let mut range = self.range_of([0; 4], [u64::MAX; 4]);
-            Arc::new(SegStats::of(std::iter::from_fn(|| range.next(self))))
-        }))
+        Arc::clone(
+            self.stats
+                .get_or_init(|| Arc::new(SegStats::of(self.quads()))),
+        )
+    }
+
+    /// Every quad, in order.
+    pub(crate) fn quads(&self) -> impl Iterator<Item = Key> + '_ {
+        let mut range = self.range_of([0; 4], [u64::MAX; 4]);
+        std::iter::from_fn(move || range.next(self))
     }
 
     /// Whether a segment read from disk is consistent enough to be read without going out of
@@ -657,8 +735,15 @@ impl Builder {
         self.len += quads.len();
     }
 
-    /// Block `b` of `s` as it is.
+    /// Block `b` of `s` as it is (decoded and written again from a graph-first segment, whose
+    /// blocks have their columns in another order).
     fn copy_block(&mut self, s: &Segment, b: usize) {
+        if s.graph_first {
+            let cursor = Cursor::at_block(s, b);
+            let quads: Vec<Key> = (0..cursor.n).map(|i| cursor.key(s, i)).collect();
+            self.block(&quads);
+            return;
+        }
         self.start(s.firsts[b]);
         let (from, to) = (s.offsets[b] as usize, s.offsets[b + 1] as usize);
         self.bytes.extend_from_slice(&s.bytes[from..to]);
@@ -706,6 +791,7 @@ impl Builder {
             starts: self.starts.into(),
             bytes: self.bytes.into(),
             stats: OnceLock::new(),
+            graph_first: false,
             file: None,
         }
     }
@@ -1149,6 +1235,70 @@ mod tests {
         v.sort_unstable();
         v.dedup();
         v
+    }
+
+    /// A segment of the default graph read graph first (#152) holds the quads of the
+    /// permutation with the graph first, built on its own: the same reads, ranges, counts and
+    /// merges, from the same blocks.
+    #[test]
+    fn graph_first_segments_read_the_blocks_of_another() {
+        // Graph last, all in the default graph.
+        let spog: Vec<Key> = quads(5_000)
+            .into_iter()
+            .map(|q| [q[0], q[1], q[2], 0])
+            .collect();
+        let mut spog_seg = Segment::from_sorted_slice(&spog);
+        let gspo: Vec<Key> = spog.iter().map(graph_to_front).collect();
+        let built = Arc::new(Segment::from_sorted_slice(&gspo));
+        let view = Arc::new(spog_seg.graph_first().unwrap());
+        assert!(view.graph_first && view.is_consistent());
+        assert!(
+            std::ptr::eq(view.bytes.as_ptr(), spog_seg.bytes.as_ptr()),
+            "shared"
+        );
+        assert_eq!(view.iter().collect::<Vec<_>>(), gspo);
+        let mut all = Vec::new();
+        view.decode_all(&mut all);
+        assert_eq!(all, gspo);
+        assert_eq!(*view.stats(), *built.stats());
+        for (i, k) in gspo.iter().enumerate().step_by(37) {
+            assert!(view.contains(k));
+            let high = gspo[(i + 300).min(gspo.len() - 1)];
+            assert_eq!(view.count_range(*k, high), built.count_range(*k, high));
+            assert_eq!(
+                view.range(*k, high).collect::<Vec<_>>(),
+                built.range(*k, high).collect::<Vec<_>>()
+            );
+        }
+        assert!(!view.contains(&[1, 0, 0, 0]));
+        // A delta, here with a quad in a named graph: blocks read graph first are written
+        // again, not copied, and the result is a segment of its own.
+        let delta: Vec<(Key, i64)> = vec![(gspo[10], -1), ([0, 3, 9, 9_999], 1), ([7, 1, 2, 3], 1)];
+        let merged = view.merged(&delta, None);
+        assert!(!merged.graph_first && merged.is_consistent());
+        let mut want: Vec<Key> = gspo.clone();
+        want.remove(10);
+        want.push([0, 3, 9, 9_999]);
+        want.push([7, 1, 2, 3]);
+        want.sort_unstable();
+        assert_eq!(Arc::new(merged).iter().collect::<Vec<_>>(), want);
+        // A segment with a quad in a named graph has none; nor has a graph-first one.
+        let mut named = Segment::from_sorted_slice(&quads(100));
+        assert!(named.graph_first().is_none());
+        let mut again = Segment {
+            graph_first: true,
+            ..Segment::from_sorted_slice(&spog)
+        };
+        assert!(again.graph_first().is_none());
+        // Saved firsts that are not the segment's are refused when checked.
+        let mut wrong: Vec<Key> = spog_seg.firsts.iter().map(graph_to_front).collect();
+        wrong[1][1] += 1;
+        assert!(
+            spog_seg
+                .graph_first_with(wrong.clone().into(), true)
+                .is_none()
+        );
+        assert!(spog_seg.graph_first_with(wrong.into(), false).is_some());
     }
 
     #[test]

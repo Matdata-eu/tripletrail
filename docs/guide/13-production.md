@@ -116,6 +116,10 @@ dictionary keys:
   wktBinary              22
 ```
 
+The `.seg` files are the eight quad indexes. In a dataset without named graphs the four
+whose names start with `g` read the blocks of the other four and are only a few percent of
+their size; the first quad in a named graph gives them blocks of their own.
+
 The `datatype` column is what the datatype IRIs repeated in every typed literal take, and
 `namespace` what the IRIs' namespaces (up to the last `/` or `#`) take. `--json` gives the
 same as JSON. Keys written since the last checkpoint are counted with the dictionary but are
