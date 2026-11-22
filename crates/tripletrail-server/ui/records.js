@@ -166,16 +166,25 @@ window.TripleTrailRecords = (function () {
     const keys = columnsOf(c);
     const q = el("input", { type: "search", id: "records-q", placeholder: "Label contains…", "aria-label": "Search the labels", value: state.q });
     const count = el("span", { class: "muted small", id: "records-count", role: "status" });
-    const csv = el("a", { class: "btn small", id: "records-csv", download: "", title: "The filtered records as CSV (up to 10,000)" }, "CSV");
+    const csv = el("button", { type: "button", class: "btn small", id: "records-csv", title: "The filtered records as CSV (up to 10,000)" }, "CSV");
     const sparql = el("button", { type: "button", class: "btn small", title: "Open the grid's query on the Query page" }, "Open as SPARQL");
     const holder = el("div", { class: "records-table", id: "records-table" });
     box.replaceChildren(
       el("div", { class: "records-grid-head" }, el("h2", {}, c.title || c.id), count, el("span", { class: "grow" }), q, csv, sparql),
       holder);
     let last = null; // the search of the page shown
-    const setLinks = () => {
+    // Read with the caller's token (a plain link would carry none), then saved from a blob.
+    csv.onclick = async () => {
       if (!last) return;
-      csv.href = base() + "/search/results?" + new URLSearchParams({ m: JSON.stringify(last), f: "csv", limit: "10000" });
+      try {
+        const text = await ui.api("GET", base() + "/search/results", { params: { m: JSON.stringify(last), f: "csv", limit: "10000" } });
+        const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+        const a = el("a", { href: url, download: (c.id || "records") + ".csv" });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) { ui.toast(e.message, "bad"); }
     };
     sparql.onclick = async () => {
       if (!last) return;
@@ -206,7 +215,6 @@ window.TripleTrailRecords = (function () {
         const offset = ((params.page || 1) - 1) * PAGE;
         const out = await ui.api("GET", url, { params: { m: JSON.stringify(m), limit: String(PAGE), offset: String(offset) } });
         last = m;
-        setLinks();
         count.textContent = ui.fmtNum(out.count) + (out.count === 1 ? " record" : " records");
         return { last_page: Math.max(1, Math.ceil(out.count / PAGE)), data: out.rows.map((r) => ({ iri: r.iri, _label: r.label || r.iri, ...r.values })) };
       },
@@ -216,9 +224,12 @@ window.TripleTrailRecords = (function () {
           return el("a", { href: "/$/ui/records/" + enc(state.ds) + "?class=" + enc(c.id) + "&iri=" + enc(r.iri), title: r.iri,
             onclick: (e) => { e.preventDefault(); record(r.iri); } }, r._label);
         } },
-        ...keys.map((p) => ({ title: p.title || p.key, field: p.key, headerSort: p.single, ...filterOf(p),
+        // Titles and cells come from the shapes and the data: Tabulator takes a string as HTML,
+        // so both are given as text nodes.
+        ...keys.map((p) => ({ title: p.key, titleFormatter: () => document.createTextNode(p.title || p.key),
+          field: p.key, headerSort: p.single, ...filterOf(p),
           hozAlign: p.kind === "number" ? "right" : "left",
-          formatter: (cell) => cellText(cell.getValue()) })),
+          formatter: (cell) => document.createTextNode(cellText(cell.getValue())) })),
       ],
     });
     table.on("rowClick", (e, row) => { if (!e.target.closest("a")) record(row.getData().iri); });
@@ -257,6 +268,8 @@ window.TripleTrailRecords = (function () {
       view.geometries && view.geometries.length ? el("a", { class: "btn small", href: "/$/ui/map/" + enc(state.ds) + "?feature=" + enc(iri) }, "Map") : null,
       el("a", { class: "btn small", href: "/$/ui/explore/" + enc(state.ds) + "?iri=" + enc(iri) }, "Explore"),
       el("button", { type: "button", class: "btn small", title: "Open the record's triples on the Query page", onclick: () => {
+        // The IRI comes from the link: one that would break out of <…> is refused.
+        if (/[\s<>"{}|^`\\]/.test(iri)) { ui.toast("This IRI cannot be written in SPARQL as it is.", "bad"); return; }
         const text = "SELECT ?property ?value WHERE {\n  <" + iri + "> ?property ?value .\n}";
         try { sessionStorage.setItem("tripletrail-open-query", text); } catch (e) { /* the query page opens empty */ }
         ui.go("query/" + enc(state.ds));

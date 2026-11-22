@@ -3001,7 +3001,7 @@ reader's shapes, and a limited caller sees only what it can read.
   - `f=csv`: the rows as CSV (`text/csv`, as a download named after the class): `iri`,
     `label`, then a column per key, a resource as its IRI and several values joined with
     ` | `. `limit` is then at most 10,000. A cell that a spreadsheet would run as a formula
-    (starting with `=`, `+`, `-` or `@`, not a number) gets a `'` before it. Another `f` is a
+    (starting with `=`, `+`, `-`, `@`, a tab or a carriage return, not a number) gets a `'` before it. Another `f` is a
     400.
 - `GET /{ds}/search/sparql?m=…` gives the SPARQL of a search, as `application/sparql-query`.
 - `GET /{ds}/search/values?m=…&key=…` suggests values for a condition: the values property

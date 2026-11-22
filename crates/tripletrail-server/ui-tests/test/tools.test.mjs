@@ -181,7 +181,9 @@ test("Records: a class's records sort, filter and open as a form", async (t) => 
   // A header filter: the sections faster than 200 km/h.
   await page.locator('.tabulator-col[tabulator-field="maxSpeed"] input').pressSequentially(">200");
   await count.filter({ hasText: /^1 record$/ }).waitFor();
-  assert.match(await page.getAttribute("#records-csv", "href"), /f=csv/);
+  // CSV: read with the page's token and saved as a file.
+  const [download] = await Promise.all([page.waitForEvent("download"), page.click("#records-csv")]);
+  assert.equal(download.suggestedFilename(), "Section.csv");
   // The record: a form of its values, its links open records here.
   await page.locator("#records-table .tabulator-row a").first().click();
   await page.locator(".records-record-head h2", { hasText: "S07" }).waitFor();
@@ -192,4 +194,26 @@ test("Records: a class's records sort, filter and open as a form", async (t) => 
   await page.locator("#records-record a", { hasText: "Leuven" }).click();
   await page.locator(".records-record-head h2", { hasText: "Leuven" }).waitFor();
   assert.match(await page.locator("#records-incoming").innerText(), /S06/);
+});
+
+test("Records: markup in the data stays text in the grid", async (t) => {
+  const page = await open(t);
+  // A search answer whose values and title hold markup, as data from anywhere could.
+  const markup = '<img src=x onerror="window.ran=1">';
+  await page.route(/\/ds\/search\/results/, (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ class: "Station", title: "Station", count: 1, offset: 0, more: false, columns: [], sparql: "",
+      rows: [{ iri: EX + "X", label: markup, values: { code: markup, label: markup } }] }),
+  }));
+  await page.route(/\/ds\/search\/classes/, (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ classes: [{ id: "Station", title: "Station", class: EX + "Station", count: 1, geometry: false,
+      properties: [{ key: "code", title: markup, path: "<" + EX + "code>", kind: "text", single: true }] }] }),
+  }));
+  await page.goto(base + "/$/ui/records/ds?class=Station");
+  await page.locator("#records-count", { hasText: "1 record" }).waitFor();
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator("#page-records img").count(), 0, "no element made from the data");
+  assert.equal(await page.evaluate(() => window.ran), undefined);
+  assert.match(await page.locator("#records-table").innerText(), /onerror/);
 });

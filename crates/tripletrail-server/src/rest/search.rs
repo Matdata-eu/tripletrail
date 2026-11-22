@@ -1039,7 +1039,8 @@ fn csv_reply(class: &str, columns: &[serde_json::Value], rows: &[serde_json::Val
         }
     }
     fn quote(text: &str) -> String {
-        let risky = text.starts_with(['=', '+', '-', '@']) && text.parse::<f64>().is_err();
+        let risky =
+            text.starts_with(['=', '+', '-', '@', '\t', '\r']) && text.parse::<f64>().is_err();
         let text = if risky {
             format!("'{text}")
         } else {

@@ -279,7 +279,7 @@ the middle shows its records in a grid, a column per property:
 - **Label contains…** keeps the records whose label holds the text.
 - The grid pages through the records 50 at a time, and the server does the sorting, the
   filtering and the paging, so a class of a million records stays quick.
-- **CSV** downloads the filtered records (up to 10,000), and **Open as SPARQL** puts the
+- **CSV** downloads the filtered records (up to 10,000, read with your token like the grid), and **Open as SPARQL** puts the
   grid's query on the Query page.
 
 Click a record and the right shows it as a form, drawn from the shapes: their groups in their
