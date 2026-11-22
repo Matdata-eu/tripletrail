@@ -441,6 +441,60 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?x WHERE { ?s ex:n ?x } ORDER BY DESC(?x / 8) ?s LIMIT 7",
         true,
     ),
+    // `IF` and `COALESCE`: numbers to inline ids, other terms through the term kernels; only
+    // the branch taken is computed, and an error in the condition is unbound.
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(IF(?x > 50, 1, 0) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x ; ex:d ?d BIND(IF(?x < 0 && ?d < -100, ?x * 2, ?d + 1) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(IF(?x > 50, \"big\", \"small\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(IF(!(?x = 0) || ?x > 9, ex:a, STR(?x)) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } BIND(IF(BOUND(?x), ?x, -1) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } BIND(IF(?x > 0, 1, 2) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } BIND(IF(?x > 0 || ?o = ?o, 1, 2) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(IF(?x > 0, ?x / 3, 7) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y ?z WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } BIND(COALESCE(?x, 0) AS ?y) BIND(COALESCE(?x * 2, 1.5) AS ?z) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:label ?l } BIND(COALESCE(?l, STR(?o)) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(COALESCE(?x / 0, ?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:n ?x FILTER(IF(?x > 0, ?x, -?x) > 3000) }",
+        true,
+    ),
+    (
+        "SELECT ?s (SUM(IF(?x > 0, 1, 0)) AS ?n) WHERE { ?s ex:n ?x } GROUP BY ?s",
+        false,
+    ),
     // `REPLACE` with a constant pattern (and flags), `STRLANG`, `STRDT`.
     (
         "SELECT ?s ?i WHERE { ?s ex:p ?o BIND(IRI(REPLACE(STR(?o), \"example\", \"other\")) AS ?i) }",

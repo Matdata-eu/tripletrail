@@ -95,7 +95,10 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   evaluator's (`spareval::decimal_divide`, Jena's), of doubles a double, by zero an error
   (`BIND(?q / 4 AS ?h) FILTER(?h > 20)` on 133k orders 191 → 33 ms).
   Comparisons and `+ - * /` take inline doubles too (#11), with integers and decimals turned
-  into doubles as the evaluator turns them, and `-0` equal to `0`. Dictionary literals
+  into doubles as the evaluator turns them, and `-0` equal to `0`. `IF` and `COALESCE` are
+  computed too: the condition of `IF` is a comparison of such values, `!`, `&&`, `||` (with
+  SPARQL's errors) or `BOUND`, and only the branch taken is computed. Their branches may be
+  numbers (inline ids) or any term the string kernels make (`IF(?q > 50, "big", "small")`). Dictionary literals
   (`1.5E2`), a double result that is not finite, overflow, decimal products with more than 18
   fraction digits (they are exact on 256 bits otherwise), decimal quotients that don't end
   within 18 fraction digits (`1 / 3`: the evaluator's 24 digits are its own literal), dates

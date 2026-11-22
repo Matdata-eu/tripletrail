@@ -198,6 +198,114 @@ pub(crate) fn compile<'k>(
                 Err(()) => Some(Err(())),
             })
         }
+        // `IF` and `COALESCE` (#11): only the branch taken is computed, as in the evaluator, so
+        // a branch that gives up only gives up on the rows that take it.
+        E::If(c, a, b) => {
+            let (c, a, b) = (
+                condition(c, t, snapshot)?,
+                compile(a, t, snapshot)?,
+                compile(b, t, snapshot)?,
+            );
+            Box::new(move |row| match c(row)? {
+                Some(true) => a(row),
+                Some(false) => b(row),
+                None => Some(Err(())),
+            })
+        }
+        E::Coalesce(list) => {
+            let list = list
+                .iter()
+                .map(|e| compile(e, t, snapshot))
+                .collect::<Option<Vec<_>>>()?;
+            Box::new(move |row| {
+                for k in &list {
+                    if let Ok(v) = k(row)? {
+                        return Some(Ok(v));
+                    }
+                }
+                Some(Err(()))
+            })
+        }
+        _ => return None,
+    })
+}
+
+/// A test of a row inside an expression (the condition of `IF`): `Some(Some(b))` its value,
+/// `Some(None)` an error, `None` give up.
+pub(crate) type Condition<'k> = Box<dyn Fn(&[TermId]) -> Option<Option<bool>> + Sync + 'k>;
+
+/// Whether `e` has the form [`condition`] compiles, with `leaf` deciding the operands of its
+/// comparisons.
+pub(crate) fn is_condition(e: &Expression, leaf: &dyn Fn(&Expression) -> bool) -> bool {
+    use Expression as E;
+    match e {
+        E::Equal(a, b)
+        | E::Greater(a, b)
+        | E::GreaterOrEqual(a, b)
+        | E::Less(a, b)
+        | E::LessOrEqual(a, b) => leaf(a) && leaf(b),
+        E::Not(a) => is_condition(a, leaf),
+        E::And(a, b) | E::Or(a, b) => is_condition(a, leaf) && is_condition(b, leaf),
+        E::Bound(_) => true,
+        _ => false,
+    }
+}
+
+/// A condition on numbers and dates: comparisons, `!=` (as `!(a = b)`), `!`, `&&`, `||` with
+/// SPARQL's errors, and `BOUND`.
+pub(crate) fn condition<'k>(
+    e: &Expression,
+    t: &Table,
+    snapshot: &'k Snapshot,
+) -> Option<Condition<'k>> {
+    use Expression as E;
+    Some(match e {
+        E::Equal(a, b)
+        | E::Greater(a, b)
+        | E::GreaterOrEqual(a, b)
+        | E::Less(a, b)
+        | E::LessOrEqual(a, b) => {
+            let test: fn(Ordering) -> bool = match e {
+                E::Equal(..) => Ordering::is_eq,
+                E::Greater(..) => Ordering::is_gt,
+                E::GreaterOrEqual(..) => Ordering::is_ge,
+                E::Less(..) => Ordering::is_lt,
+                _ => Ordering::is_le,
+            };
+            let (a, b) = (compile(a, t, snapshot)?, compile(b, t, snapshot)?);
+            Box::new(move |row| {
+                let (x, y) = match (a(row)?, b(row)?) {
+                    (Ok(x), Ok(y)) => (x, y),
+                    _ => return Some(None),
+                };
+                Some(compare(x, y)?.map(test))
+            })
+        }
+        E::Not(a) => {
+            let a = condition(a, t, snapshot)?;
+            Box::new(move |row| Some(a(row)?.map(|b| !b)))
+        }
+        // An error and false is false, an error or true is true; otherwise an error stays one.
+        E::And(a, b) | E::Or(a, b) => {
+            let and = matches!(e, E::And(..));
+            let (a, b) = (condition(a, t, snapshot)?, condition(b, t, snapshot)?);
+            Box::new(move |row| {
+                let x = a(row)?;
+                if x == Some(!and) {
+                    return Some(x);
+                }
+                let y = b(row)?;
+                Some(match (x, y) {
+                    (_, Some(v)) if v != and => Some(v),
+                    (Some(_), Some(v)) => Some(v),
+                    _ => None,
+                })
+            })
+        }
+        E::Bound(v) => match t.col(v) {
+            Some(c) => Box::new(move |row| Some(Some(row[c] != TermId(0)))),
+            None => Box::new(|_| Some(Some(false))),
+        },
         _ => return None,
     })
 }

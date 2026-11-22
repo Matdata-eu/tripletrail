@@ -214,6 +214,12 @@ fn computable(e: &Expression, top: bool) -> bool {
         | Expression::Multiply(a, b)
         | Expression::Divide(a, b) => computable(a, false) && computable(b, false),
         Expression::UnaryMinus(a) => computable(a, false),
+        // Branches that are numbers: a bare variable or a string constant may be any term, and
+        // then the term kernels (`idstring`) take the expression.
+        Expression::If(c, a, b) => {
+            crate::idvalue::is_condition(c, &|x| computable(x, false)) && branch(a) && branch(b)
+        }
+        Expression::Coalesce(list) => !list.is_empty() && list.iter().all(branch),
         Expression::FunctionCall(
             F::Abs
             | F::Ceil
@@ -236,6 +242,23 @@ fn computable(e: &Expression, top: bool) -> bool {
             args.len() == 1 && !matches!(args[0], Expression::Literal(_))
         }
         _ => false,
+    }
+}
+
+/// A branch of `IF` or `COALESCE` the value kernels compute: a number or a date.
+fn branch(e: &Expression) -> bool {
+    use oxigraph::model::vocab::xsd;
+    match e {
+        Expression::Variable(_) => false,
+        Expression::Literal(l) => [
+            xsd::INTEGER,
+            xsd::DECIMAL,
+            xsd::DOUBLE,
+            xsd::DATE,
+            xsd::DATE_TIME,
+        ]
+        .contains(&l.datatype()),
+        e => computable(e, false),
     }
 }
 

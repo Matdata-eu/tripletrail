@@ -1539,6 +1539,12 @@ pub(crate) fn value_expression(e: &Expression) -> bool {
             value_expression(a) && value_expression(b)
         }
         E::UnaryMinus(a) => value_expression(a),
+        E::If(c, a, b) => {
+            crate::idvalue::is_condition(c, &value_expression)
+                && value_expression(a)
+                && value_expression(b)
+        }
+        E::Coalesce(list) => !list.is_empty() && list.iter().all(value_expression),
         E::FunctionCall(
             Function::Abs
             | Function::Ceil
