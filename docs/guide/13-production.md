@@ -127,7 +127,8 @@ written by a tool with a fixed number of decimals; otherwise the text is kept, i
 its geometry in `geoms.bin`. Queries give the same text either way. A query that outputs many
 WKT literals is slower, since each is written back (on 290,000 OpenStreetMap geometries, 1.9 s
 instead of 1.3 s for all of them); spatial filters and joins are not. On that OpenStreetMap
-extract of Norway the store takes 364 MB instead of 731 MB with the text kept.
+extract of Norway the store takes 178 MB instead of 731 MB with the text kept: coordinates
+with a fixed number of decimals are kept as small integers, each the step from the one before.
 
 `--keep-wkt-text` keeps the text of every WKT literal, for a new dataset or to turn it off on
 an existing one; `--render-wkt` turns binary form on for a dataset made before it was the

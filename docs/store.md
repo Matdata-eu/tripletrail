@@ -249,7 +249,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   numbers and dates have inline ids instead of keys (#125); formats 1 and 2 still open. A
   piece that may hold WKT literals in binary form (`--render-wkt`, #370) is format 4
   (`OXGSDIC4`), otherwise as format 3, so that a binary from before it refuses the store
-  rather than misread those keys (#428). `Store::dictionary_usage()` reads every key and
+  rather than misread those keys (#428). Since #152 such a piece is format 5 (`OXGSDIC5`): a
+  compact key's geometry may be a packed record (first byte `0x80`, then the number of
+  decimals, then the record with varint counts and each coordinate as the zigzag varint
+  difference from the one before, in units of that many decimals), used when every coordinate
+  has at most 9 decimals and reads back to the same bits. Formats 4 and 5 both open. `Store::dictionary_usage()` reads every key and
   counts keys and bytes by kind of term (`tripletrail disk-usage`, #152).
 
 ## Benchmark

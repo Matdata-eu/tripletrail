@@ -106,6 +106,7 @@ fn decimals_of(text: &str) -> Option<u8> {
 /// Appends the WKT text of `record` in `style` to `out`; `None` (and `out` holding part of
 /// it) for a record this writer does not write, or a style it does not know.
 pub(crate) fn write(record: &[u8], style: [u8; 2], out: &mut String) -> Option<()> {
+    let record = &*crate::geobin::plain(record)?;
     let [decimals, flags] = style;
     if (decimals > MAX_DECIMALS && decimals != SHORTEST) || flags & !FLAGS != 0 {
         return None;
