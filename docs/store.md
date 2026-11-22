@@ -91,10 +91,14 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   order, so the same query can round differently on other data. The evaluator, and Fuseki, round after each addition in row order, so the last
   digit can differ: ten times `0.1` sums to `1` here and to `0.9999999999999999` there. An
   `AVG` of integers and decimals only (a decimal division) stays with the evaluator.
-  Comparisons and `+ - *` take inline doubles too (#11), with integers and decimals turned
+  Under `--executor ids`, `/` is computed too: a quotient of integers or decimals as the
+  evaluator's (`spareval::decimal_divide`, Jena's), of doubles a double, by zero an error
+  (`BIND(?q / 4 AS ?h) FILTER(?h > 20)` on 133k orders 191 → 33 ms).
+  Comparisons and `+ - * /` take inline doubles too (#11), with integers and decimals turned
   into doubles as the evaluator turns them, and `-0` equal to `0`. Dictionary literals
   (`1.5E2`), a double result that is not finite, overflow, decimal products with more than 18
-  fraction digits (they are exact on 256 bits otherwise), dates
+  fraction digits (they are exact on 256 bits otherwise), decimal quotients that don't end
+  within 18 fraction digits (`1 / 3`: the evaluator's 24 digits are its own literal), dates
   against date-times or with and without a time zone, and unbound values give the expression
   back to the evaluator. On 133 k doubles: `FILTER(?a > 4000)` 60 → 15 ms,
   `FILTER(?a * 1.21 > 5000 && ?a < 9000)` 89 → 27 ms. On 300 k rows: `SUM(YEAR(?d))` 83 → 14 ms,
@@ -177,12 +181,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `2.5`) gets an id made up for the query, which joins only itself; a filter that would have
   to compare it by value (`=`, `IN`, `isLiteral`, `DATATYPE`) leaves the query to the
   evaluator. Before any work, the plan checks that each `BIND` expression is one the kernels
-  compute, so a query with `UCASE` or a division doesn't run its patterns on ids first. An
+  compute, so a query with `UCASE` doesn't run its patterns on ids first. An
   order on an expression the kernels compute (`ORDER BY DESC(?q * 3)`) orders a column of its
   values, computed as a `BIND` would be (133k orders, `LIMIT 10`: 117 → 15 ms). Rows with
   equal keys may come in another order than under `spareval`. A `LIMIT`
   without an order, other order expressions, columns the ids don't order, an expression the kernels
-  don't compute (`UCASE`, a division), and every other operator (`GROUP BY` beyond the count
+  don't compute (`UCASE`, a decimal quotient that doesn't end), and every other operator (`GROUP BY` beyond the count
   shortcuts, property paths outside the tables) leave the query to the evaluator, which then
   runs it as before.
 - **Geometries.** Geometry literals (`geo:wktLiteral`, `geoJSONLiteral`, `gmlLiteral`,

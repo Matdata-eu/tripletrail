@@ -209,9 +209,10 @@ fn computable(e: &Expression, top: bool) -> bool {
         Expression::Variable(_) => true,
         Expression::Literal(_) => true,
         Expression::NamedNode(_) => top,
-        Expression::Add(a, b) | Expression::Subtract(a, b) | Expression::Multiply(a, b) => {
-            computable(a, false) && computable(b, false)
-        }
+        Expression::Add(a, b)
+        | Expression::Subtract(a, b)
+        | Expression::Multiply(a, b)
+        | Expression::Divide(a, b) => computable(a, false) && computable(b, false),
         Expression::UnaryMinus(a) => computable(a, false),
         Expression::FunctionCall(
             F::Abs
