@@ -26,7 +26,7 @@ This product includes software developed by third parties:
   Oxrdflib authors: its rdflib store, adapted in python/tripletrail/rdflib.py,
   under the BSD 3-Clause license; see python/tripletrail/licenses/oxrdflib-LICENSE.md.
 
-- MatGUI 6.13.0 (https://github.com/Matdata-eu/Matgui), a fork of YASGUI,
+- MatGUI 6.15.0 (https://github.com/Matdata-eu/Matgui), a fork of YASGUI,
   Copyright (c) Triply B.V. and the MatGUI contributors, embedded in the server
   under the MIT license; see crates/tripletrail-server/ui/vendor/matgui/LICENSE.
   Its bundle includes further third-party web components (icons, fonts and map

@@ -172,8 +172,8 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   alone from every origin. Pages may send `Authorization`, `Content-Type`, `Accept` and `X-API-Key`, and
   read `X-Result-Incomplete`, `X-Cache`, `X-Truncated` and `Server` from answers. Every answer
   carries `Server: TripleTrail/<version>`, which names the engine so that query tools can
-  recognise it. (The web UI's Query page shows TripleTrail's plan in MatGUI's Explain view
-  without it.)
+  recognise it: MatGUI's Explain view (from 6.15.0) and YASGUI's explain plugin (from 1.1.0)
+  then ask `/{ds}/explain` for the plan.
 - `--union-default-graph kg,build` (or `*`, `TRIPLETRAIL_UNION_DEFAULT_GRAPH`;
   `unionDefaultGraph=true` when creating a dataset over the admin API) makes the default graph
   of queries and updates the union of all graphs, as Fuseki's `tdb2:unionDefaultGraph`: rules
@@ -2425,8 +2425,8 @@ then takes it out of the address bar.
 - **Query**: [MatGUI](https://github.com/Matdata-eu/Matgui) on the chosen dataset, with its
   table, map, chart and graph views, and **Explain**, which shows TripleTrail's plan with row counts,
   timings and the spatial and range decisions. MatGUI's own **Explain** tab of the results asks
-  `/{ds}/explain` too for this server's endpoints (its Engine list reads "Detect (TripleTrail)"),
-  and draws the plan as a tree of steps with their rows and times.
+  `/{ds}/explain` too, as it recognises the server by its `Server` header (its Engine list
+  reads "Detect (TripleTrail)"), and draws the plan as a tree of steps with their rows and times.
 - **Map** (`/$/ui/map/{ds}`): the dataset's features on a map, a layer per collection (see
   [Vector tiles](#vector-tiles)), with a layer list, facets to filter each collection with
   their counts, and the features under a click. A feature's describe page opens in a panel
@@ -2615,8 +2615,8 @@ feedback links and **What's new**, the release notes from `crates/tripletrail-se
 returning browser gets a dot on About when a release it has not seen is out.
 
 The admin token is asked for when a change needs it and kept in the browser's local storage.
-MatGUI 6.13.0 (MIT) is built into the binary, so the UI works without internet access;
-`--matgui-url https://cdn.jsdelivr.net/npm/@matdata/yasgui@6.13.0/build/` loads it from a CDN
+MatGUI 6.15.0 (MIT) is built into the binary, so the UI works without internet access;
+`--matgui-url https://cdn.jsdelivr.net/npm/@matdata/yasgui@6.15.0/build/` loads it from a CDN
 instead. `--no-ui` turns the UI off.
 
 ### Importing files
