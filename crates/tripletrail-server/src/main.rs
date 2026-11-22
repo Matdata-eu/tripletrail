@@ -1106,7 +1106,7 @@ struct ServeArgs {
     #[arg(long, env = "TRIPLETRAIL_NO_UI")]
     no_ui: bool,
     /// Load MatGUI from this URL (a directory holding yasgui.min.js and yasgui.min.css, e.g.
-    /// https://cdn.jsdelivr.net/npm/@matdata/yasgui@6.13.0/build/) instead of the copy built
+    /// https://cdn.jsdelivr.net/npm/@matdata/yasgui@6.15.0/build/) instead of the copy built
     /// into the binary.
     #[arg(long, env = "TRIPLETRAIL_MATGUI_URL")]
     matgui_url: Option<String>,

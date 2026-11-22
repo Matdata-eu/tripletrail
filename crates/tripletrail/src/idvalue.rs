@@ -69,12 +69,86 @@ pub(crate) fn of_id(id: TermId) -> Option<Value> {
     }
 }
 
-/// The literal the evaluator gives for a value it computed (`BIND(?a * 1.21 AS ?b)`), if
-/// the ids decide it: dates and date-times are left to the evaluator.
-pub(crate) fn literal(v: Value) -> Option<Literal> {
+/// How the evaluator writes a whole decimal it made: `3.0` as Jena writes a computed one, or
+/// `3`, the text of the integer an `xsd:decimal` cast keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Form {
+    Computed,
+    Cast,
+}
+
+/// A kernel that also gives the form its decimals are written in.
+pub(crate) type OutputKernel<'k> =
+    Box<dyn Fn(&[TermId]) -> Option<Result<(Value, Form), ()>> + Sync + 'k>;
+
+/// [`compile`] for a value that becomes a term (a `BIND`, `STR`), whose lexical form counts.
+/// `xsd:decimal` keeps the text of its argument, as Jena's: an integer's (`7`), a decimal's,
+/// and the computed form of a double's (`1500.0`). A whole decimal argument may be written
+/// either way (`3` or `3.0`), so it gives up.
+pub(crate) fn compile_output<'k>(
+    e: &Expression,
+    t: &Table,
+    snapshot: &'k Snapshot,
+) -> Option<OutputKernel<'k>> {
+    match e {
+        Expression::FunctionCall(Function::Custom(f), args) if f.as_ref() == xsd::DECIMAL => {
+            let [a] = args.as_slice() else { return None };
+            let a = compile(a, t, snapshot)?;
+            Some(Box::new(move |row| match a(row)? {
+                Ok(x) => {
+                    let form = match x {
+                        Value::Integer(_) => Form::Cast,
+                        Value::Decimal(d) if d % ONE == 0 => return None,
+                        _ => Form::Computed,
+                    };
+                    Some(Ok((cast(false, x)?, form)))
+                }
+                Err(()) => Some(Err(())),
+            }))
+        }
+        // A branch is the term it gives: a cast keeps its form through `IF` and `COALESCE`.
+        Expression::If(c, a, b) => {
+            let (c, a, b) = (
+                condition(c, t, snapshot)?,
+                compile_output(a, t, snapshot)?,
+                compile_output(b, t, snapshot)?,
+            );
+            Some(Box::new(move |row| match c(row)? {
+                Some(true) => a(row),
+                Some(false) => b(row),
+                None => Some(Err(())),
+            }))
+        }
+        Expression::Coalesce(list) => {
+            let list = list
+                .iter()
+                .map(|e| compile_output(e, t, snapshot))
+                .collect::<Option<Vec<_>>>()?;
+            Some(Box::new(move |row| {
+                for k in &list {
+                    if let Ok(v) = k(row)? {
+                        return Some(Ok(v));
+                    }
+                }
+                Some(Err(()))
+            }))
+        }
+        _ => {
+            let k = compile(e, t, snapshot)?;
+            Some(Box::new(move |row| {
+                Some(k(row)?.map(|v| (v, Form::Computed)))
+            }))
+        }
+    }
+}
+
+/// The literal the evaluator gives for a value it computed (`BIND(?a * 1.21 AS ?b)`), with
+/// whole decimals written in `form`, if the ids decide it: dates and date-times are left to
+/// the evaluator.
+pub(crate) fn literal(v: Value, form: Form) -> Option<Literal> {
     Some(match v {
         Value::Integer(i) => Literal::from(i),
-        Value::Decimal(d) => Literal::new_typed_literal(decimal_lexical(d), xsd::DECIMAL),
+        Value::Decimal(d) => Literal::new_typed_literal(decimal_lexical(d, form), xsd::DECIMAL),
         Value::Double(d) => Literal::from(oxsdatatypes::Double::from(d)),
         Value::DateTime { .. } => return None,
     })
@@ -82,10 +156,10 @@ pub(crate) fn literal(v: Value) -> Option<Literal> {
 
 /// The inline id of the literal [`literal`] gives for `v`, if the store inlines it: the id
 /// it gives that literal, made without the literal.
-pub(crate) fn inline_id(v: Value) -> Option<TermId> {
+pub(crate) fn inline_id(v: Value, form: Form) -> Option<TermId> {
     match v {
         Value::Integer(i) => TermId::inline_integer(i),
-        Value::Decimal(d) => TermId::inline_number(false, &decimal_lexical(d)),
+        Value::Decimal(d) => TermId::inline_number(false, &decimal_lexical(d, form)),
         Value::Double(d) if d.is_finite() => {
             use std::io::Write;
             // `oxsdatatypes::Double` writes a finite double as `f64` does.
@@ -165,7 +239,11 @@ pub(crate) fn compile<'k>(
             })
         }
         // `xsd:integer(CONTAINS(?v, "x"))` and the other text tests: 1 or 0.
-        E::FunctionCall(Function::Custom(f), args) if f.as_ref() == xsd::INTEGER => {
+        E::FunctionCall(Function::Custom(f), args)
+            if f.as_ref() == xsd::INTEGER
+                && args.len() == 1
+                && crate::idtree::text_test(&args[0]).is_some() =>
+        {
             let [a] = args.as_slice() else { return None };
             let (v, test) = crate::idtree::text_test(a)?;
             let c = t.col(v);
@@ -176,6 +254,19 @@ pub(crate) fn compile<'k>(
                 }
                 let is = string_of(snapshot, id, |s| test.matches(s))?;
                 Some(Ok(Value::Integer(i64::from(is))))
+            })
+        }
+        // `xsd:integer` and `xsd:decimal` of a number (#11), as the evaluator casts. A cast to
+        // `xsd:double` keeps the lexical form as Jena does, so it is left to the evaluator.
+        E::FunctionCall(Function::Custom(f), args)
+            if f.as_ref() == xsd::INTEGER || f.as_ref() == xsd::DECIMAL =>
+        {
+            let [a] = args.as_slice() else { return None };
+            let to_integer = f.as_ref() == xsd::INTEGER;
+            let a = compile(a, t, snapshot)?;
+            Box::new(move |row| match a(row)? {
+                Ok(x) => cast(to_integer, x).map(Ok),
+                Err(()) => Some(Err(())),
             })
         }
         E::FunctionCall(f, args) => {
@@ -198,6 +289,114 @@ pub(crate) fn compile<'k>(
                 Err(()) => Some(Err(())),
             })
         }
+        // `IF` and `COALESCE` (#11): only the branch taken is computed, as in the evaluator, so
+        // a branch that gives up only gives up on the rows that take it.
+        E::If(c, a, b) => {
+            let (c, a, b) = (
+                condition(c, t, snapshot)?,
+                compile(a, t, snapshot)?,
+                compile(b, t, snapshot)?,
+            );
+            Box::new(move |row| match c(row)? {
+                Some(true) => a(row),
+                Some(false) => b(row),
+                None => Some(Err(())),
+            })
+        }
+        E::Coalesce(list) => {
+            let list = list
+                .iter()
+                .map(|e| compile(e, t, snapshot))
+                .collect::<Option<Vec<_>>>()?;
+            Box::new(move |row| {
+                for k in &list {
+                    if let Ok(v) = k(row)? {
+                        return Some(Ok(v));
+                    }
+                }
+                Some(Err(()))
+            })
+        }
+        _ => return None,
+    })
+}
+
+/// A test of a row inside an expression (the condition of `IF`): `Some(Some(b))` its value,
+/// `Some(None)` an error, `None` give up.
+pub(crate) type Condition<'k> = Box<dyn Fn(&[TermId]) -> Option<Option<bool>> + Sync + 'k>;
+
+/// Whether `e` has the form [`condition`] compiles, with `leaf` deciding the operands of its
+/// comparisons.
+pub(crate) fn is_condition(e: &Expression, leaf: &dyn Fn(&Expression) -> bool) -> bool {
+    use Expression as E;
+    match e {
+        E::Equal(a, b)
+        | E::Greater(a, b)
+        | E::GreaterOrEqual(a, b)
+        | E::Less(a, b)
+        | E::LessOrEqual(a, b) => leaf(a) && leaf(b),
+        E::Not(a) => is_condition(a, leaf),
+        E::And(a, b) | E::Or(a, b) => is_condition(a, leaf) && is_condition(b, leaf),
+        E::Bound(_) => true,
+        _ => false,
+    }
+}
+
+/// A condition on numbers and dates: comparisons, `!=` (as `!(a = b)`), `!`, `&&`, `||` with
+/// SPARQL's errors, and `BOUND`.
+pub(crate) fn condition<'k>(
+    e: &Expression,
+    t: &Table,
+    snapshot: &'k Snapshot,
+) -> Option<Condition<'k>> {
+    use Expression as E;
+    Some(match e {
+        E::Equal(a, b)
+        | E::Greater(a, b)
+        | E::GreaterOrEqual(a, b)
+        | E::Less(a, b)
+        | E::LessOrEqual(a, b) => {
+            let test: fn(Ordering) -> bool = match e {
+                E::Equal(..) => Ordering::is_eq,
+                E::Greater(..) => Ordering::is_gt,
+                E::GreaterOrEqual(..) => Ordering::is_ge,
+                E::Less(..) => Ordering::is_lt,
+                _ => Ordering::is_le,
+            };
+            let (a, b) = (compile(a, t, snapshot)?, compile(b, t, snapshot)?);
+            Box::new(move |row| {
+                let (x, y) = match (a(row)?, b(row)?) {
+                    (Ok(x), Ok(y)) => (x, y),
+                    _ => return Some(None),
+                };
+                Some(compare(x, y)?.map(test))
+            })
+        }
+        E::Not(a) => {
+            let a = condition(a, t, snapshot)?;
+            Box::new(move |row| Some(a(row)?.map(|b| !b)))
+        }
+        // An error and false is false, an error or true is true; otherwise an error stays one.
+        E::And(a, b) | E::Or(a, b) => {
+            let and = matches!(e, E::And(..));
+            let (a, b) = (condition(a, t, snapshot)?, condition(b, t, snapshot)?);
+            Box::new(move |row| {
+                let x = a(row)?;
+                if x == Some(!and) {
+                    return Some(x);
+                }
+                let y = b(row)?;
+                Some(match (x, y) {
+                    (_, Some(v)) if v != and => Some(v),
+                    (Some(_), Some(v)) => Some(v),
+                    _ => None,
+                })
+            })
+        }
+        E::Bound(v) => match t.col(v) {
+            Some(c) => Box::new(move |row| Some(Some(row[c] != TermId(0)))),
+            None => Box::new(|_| Some(Some(false))),
+        },
         _ => return None,
     })
 }
@@ -463,6 +662,13 @@ fn unary(f: Unary, x: Value) -> Option<Value> {
         (Unary::Round, Value::Decimal(d)) => Some(Value::Decimal(
             d.checked_add(ONE / 2)?.div_euclid(ONE).checked_mul(ONE)?,
         )),
+        // As `oxsdatatypes::Double`: halves round up, and a negative that rounds to zero is -0.
+        (Unary::Abs, Value::Double(d)) => Some(Value::Double(d.abs())),
+        (Unary::Ceil, Value::Double(d)) => Some(Value::Double(d.ceil())),
+        (Unary::Floor, Value::Double(d)) => Some(Value::Double(d.floor())),
+        (Unary::Round, Value::Double(d)) => Some(Value::Double(f64::from(
+            oxsdatatypes::Double::from(d).round(),
+        ))),
         (Unary::Year | Unary::Month | Unary::Day, Value::DateTime { instant, tz, .. }) => {
             let local = instant.checked_add(i64::from(tz.unwrap_or(0)) * 60_000)?;
             let (y, m, d) = civil(local.div_euclid(MS_PER_DAY));
@@ -489,6 +695,34 @@ fn unary(f: Unary, x: Value) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+/// `xsd:integer` (`to_integer`) or `xsd:decimal` of a number, as `spareval` casts: towards
+/// zero to an integer, and a double to the shortest decimal that reads back as it (Jena's
+/// `BigDecimal.valueOf`). Out of range, or a date: give up.
+fn cast(to_integer: bool, x: Value) -> Option<Value> {
+    let decimal = match x {
+        Value::Integer(i) if to_integer => return Some(Value::Integer(i)),
+        Value::Integer(i) => i128::from(i).checked_mul(ONE)?,
+        Value::Decimal(d) => d,
+        Value::Double(d) if to_integer => {
+            let whole = d.trunc();
+            // i64::MAX as f64 rounds up to 2^63, which is out of range.
+            #[expect(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            return (whole >= i64::MIN as f64 && whole < i64::MAX as f64)
+                .then_some(Value::Integer(whole as i64));
+        }
+        Value::Double(d) => {
+            let d: oxsdatatypes::Decimal = format!("{d}").parse().ok()?;
+            i128::from_be_bytes(d.to_be_bytes())
+        }
+        Value::DateTime { .. } => return None,
+    };
+    Some(if to_integer {
+        Value::Integer(i64::try_from(decimal / ONE).ok()?)
+    } else {
+        Value::Decimal(decimal)
+    })
 }
 
 /// Year, month and day of the day `days` after 1970-01-01 (proleptic Gregorian).
@@ -586,7 +820,7 @@ impl Sum {
                 // evaluator turns each into a double when it adds it to a double.
                 let rest: f64 = match exact {
                     Exact::Integer(i) => i.to_string().parse().ok()?,
-                    Exact::Decimal(d) => decimal_lexical(d).parse().ok()?,
+                    Exact::Decimal(d) => decimal_lexical(d, Form::Computed).parse().ok()?,
                 };
                 f.add(rest)?;
                 Total::Double(f.value())
@@ -598,7 +832,9 @@ impl Sum {
     pub(crate) fn literal(&self) -> Option<Literal> {
         Some(match self.total()? {
             Total::Integer(i) => Literal::from(i),
-            Total::Decimal(d) => Literal::new_typed_literal(decimal_lexical(d), xsd::DECIMAL),
+            Total::Decimal(d) => {
+                Literal::new_typed_literal(decimal_lexical(d, Form::Computed), xsd::DECIMAL)
+            }
             Total::Double(d) => Literal::from(oxsdatatypes::Double::from(d)),
         })
     }
@@ -700,8 +936,8 @@ impl Fsum {
 }
 
 /// The canonical form of a decimal times 10^18, as the evaluator writes it: no exponent, no
-/// trailing fraction zeros, no point for a whole number.
-fn decimal_lexical(d: i128) -> String {
+/// trailing fraction zeros, and a whole number as `form` has it.
+fn decimal_lexical(d: i128, form: Form) -> String {
     let negative = d < 0;
     let magnitude = d.unsigned_abs();
     let whole = magnitude / ONE.unsigned_abs();
@@ -715,7 +951,7 @@ fn decimal_lexical(d: i128) -> String {
         let digits = format!("{fraction:018}");
         s.push('.');
         s.push_str(digits.trim_end_matches('0'));
-    } else {
+    } else if form == Form::Computed {
         // Jena's form of a whole computed decimal (see `spareval::decimal_lexical`).
         s.push_str(".0");
     }
@@ -785,13 +1021,15 @@ mod tests {
             values.push(Value::Double(d));
         }
         for v in values {
-            let stored = literal(v).map(|l| snapshot.id_of(l.into()));
-            match inline_id(v) {
-                Some(id) => assert_eq!(Some(id), stored, "{v:?}"),
-                None => assert!(
-                    stored.is_none_or(|id| id.kind() == Kind::Ephemeral),
-                    "{v:?} is inline: {stored:?}"
-                ),
+            for form in [Form::Computed, Form::Cast] {
+                let stored = literal(v, form).map(|l| snapshot.id_of(l.into()));
+                match inline_id(v, form) {
+                    Some(id) => assert_eq!(Some(id), stored, "{v:?} {form:?}"),
+                    None => assert!(
+                        stored.is_none_or(|id| id.kind() == Kind::Ephemeral),
+                        "{v:?} is inline: {stored:?}"
+                    ),
+                }
             }
         }
     }
@@ -839,10 +1077,11 @@ mod tests {
 
     #[test]
     fn decimals_print_as_the_evaluator_does() {
-        assert_eq!(decimal_lexical(0), "0.0");
-        assert_eq!(decimal_lexical(5 * ONE), "5.0");
-        assert_eq!(decimal_lexical(-15 * ONE / 10), "-1.5");
-        assert_eq!(decimal_lexical(ONE / 100), "0.01");
+        assert_eq!(decimal_lexical(0, Form::Computed), "0.0");
+        assert_eq!(decimal_lexical(5 * ONE, Form::Computed), "5.0");
+        assert_eq!(decimal_lexical(-15 * ONE / 10, Form::Computed), "-1.5");
+        assert_eq!(decimal_lexical(ONE / 100, Form::Computed), "0.01");
+        assert_eq!(decimal_lexical(5 * ONE, Form::Cast), "5");
     }
 
     #[test]

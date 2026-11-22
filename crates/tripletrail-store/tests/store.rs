@@ -2590,7 +2590,7 @@ fn wkt_literals_kept_in_binary_form_read_back_exactly() {
     assert!(current(&dir).join("compact-keys").exists());
     // Pieces that may hold compact keys have a magic of their own, which a binary from before
     // them refuses (#428), v5 since their records may be packed (#152); the others keep the
-    // v3 one.
+    // v3 one. Both keep their IRIs' namespaces once (#152), so they are v7 and v6.
     let magics = |d: &Path| -> Vec<Vec<u8>> {
         let mut m: Vec<Vec<u8>> = std::fs::read_dir(current(d))
             .unwrap()
@@ -2603,9 +2603,9 @@ fn wkt_literals_kept_in_binary_form_read_back_exactly() {
         m.dedup();
         m
     };
-    assert_eq!(magics(&plain), [b"OXGSDIC3".to_vec()]);
+    assert_eq!(magics(&plain), [b"OXGSDIC6".to_vec()]);
     assert!(
-        magics(&dir).contains(&b"OXGSDIC5".to_vec()),
+        magics(&dir).contains(&b"OXGSDIC7".to_vec()),
         "{:?}",
         magics(&dir)
     );
@@ -3430,7 +3430,8 @@ fn a_format_4_store_with_compact_keys_opens_and_grows() {
     let wkt = |v: String| Literal::new_typed_literal(v, wkt_type);
     let quad = |i: usize, l: &Literal| {
         Quad::new(
-            oxigraph::model::NamedNode::new_unchecked(format!("http://example.com/f{i}")),
+            // Without a `/`: no namespace is kept, as in format 4.
+            oxigraph::model::NamedNode::new_unchecked(format!("urn:example:f{i}")),
             oxigraph::model::NamedNode::new_unchecked("http://www.opengis.net/ont/geosparql#asWKT"),
             l.clone(),
             oxigraph::model::GraphName::DefaultGraph,
@@ -3606,4 +3607,88 @@ fn graph_first_permutations_read_the_others_until_named_graphs_come() {
         assert_same_answers(&reference, &Store::open_read_only(&dir).unwrap());
         assert_same_answers(&reference, &Store::open(&dir).unwrap());
     }
+}
+
+/// IRIs keep their namespace once (#152): a checkpoint saves the namespaces, and a store
+/// read back (read-write or read-only) answers as before, ORDER BY and STRSTARTS on IRIs
+/// included; a damaged namespaces file is an error, not wrong IRIs.
+#[test]
+fn iris_written_once_per_namespace_read_back_the_same() {
+    let dir = temp_dir("namespaces");
+    let (reference, _) = load_both();
+    let ordered = [
+        "SELECT ?s WHERE { ?s ?p ?o FILTER(isIRI(?s)) } ORDER BY ?s",
+        "SELECT DISTINCT ?o WHERE { ?s ?p ?o FILTER(isIRI(?o)) } ORDER BY DESC(?o)",
+        "SELECT ?s WHERE { ?s ?p ?o FILTER(STRSTARTS(STR(?s), \"http://example.com/\")) }",
+        "SELECT (MIN(?s) AS ?a) (MAX(?s) AS ?b) WHERE { ?s ?p ?o FILTER(isIRI(?s)) }",
+    ];
+    let same = |store: &Store| {
+        assert_same_answers(&reference, store);
+        for q in ordered {
+            let run = |r: QueryResults| match r {
+                QueryResults::Solutions(s) => s
+                    .map(|s| format!("{:?}", s.unwrap().values()))
+                    .collect::<Vec<_>>(),
+                _ => unreachable!(),
+            };
+            let expected = run(evaluator()
+                .parse_query(q)
+                .unwrap()
+                .on_store(&reference)
+                .execute()
+                .unwrap());
+            let got = run(evaluator()
+                .parse_query(q)
+                .unwrap()
+                .on_queryable_dataset(store.snapshot())
+                .execute()
+                .unwrap());
+            if q.contains("ORDER BY") {
+                assert_eq!(got, expected, "{q}");
+            } else {
+                let sort = |mut v: Vec<String>| {
+                    v.sort();
+                    v
+                };
+                assert_eq!(sort(got), sort(expected), "{q}");
+            }
+        }
+    };
+    {
+        let store = Store::open(&dir).unwrap();
+        store.bulk_load(RdfFormat::Turtle, DATA.as_bytes()).unwrap();
+        store
+            .bulk_load(RdfFormat::NQuads, NAMED.as_bytes())
+            .unwrap();
+        same(&store);
+        store.checkpoint().unwrap();
+        same(&store);
+    }
+    let current = dir.join(format!(
+        "checkpoint-{}",
+        std::fs::read_to_string(dir.join("CURRENT")).unwrap().trim()
+    ));
+    let sums = std::fs::read_to_string(current.join("checksums")).unwrap();
+    assert!(sums.contains("namespaces.bin "), "{sums}");
+    let dict = std::fs::read(current.join("dict.bin")).unwrap();
+    assert_eq!(&dict[..8], b"OXGSDIC6");
+    same(&Store::open_read_only(&dir).unwrap());
+    {
+        // Reopened, it grows: new IRIs of a saved namespace refer to it.
+        let store = Store::open(&dir).unwrap();
+        same(&store);
+        let usage = store.dictionary_usage();
+        let iri = usage.iter().find(|u| u.kind == "iri").unwrap();
+        assert!(iri.bytes < iri.keys * 20, "{iri:?}");
+    }
+    let path = current.join("namespaces.bin");
+    let good = std::fs::read(&path).unwrap();
+    let mut bad = good.clone();
+    let at = bad.len() - 1;
+    bad[at] ^= 0x55;
+    std::fs::write(&path, &bad).unwrap();
+    let error = Store::open(&dir).err().expect("a damaged namespaces file");
+    assert!(error.to_string().contains("namespaces.bin"), "{error}");
+    std::fs::write(&path, &good).unwrap();
+    same(&Store::open(&dir).unwrap());
 }

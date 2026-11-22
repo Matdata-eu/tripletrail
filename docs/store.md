@@ -109,7 +109,17 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   evaluator's (`spareval::decimal_divide`, Jena's), of doubles a double, by zero an error
   (`BIND(?q / 4 AS ?h) FILTER(?h > 20)` on 133k orders 191 → 33 ms).
   Comparisons and `+ - * /` take inline doubles too (#11), with integers and decimals turned
-  into doubles as the evaluator turns them, and `-0` equal to `0`. Dictionary literals
+  into doubles as the evaluator turns them, and `-0` equal to `0`. So do `ABS`, `CEIL`,
+  `FLOOR` and `ROUND` (halves up, `ROUND(-0.5)` is `-0`). `xsd:integer` and `xsd:decimal` of
+  a number are cast as the evaluator casts: towards zero to an integer, and a double to the
+  shortest decimal that reads back as it. `xsd:decimal` keeps the text of its argument, as
+  Jena's: `7` of the integer 7, `1500.0` of the double 1500; a whole decimal argument (`3` or
+  `3.0`) stays with the evaluator, and so does `xsd:double`, which keeps the text too. `IF`
+  and `COALESCE` are computed too: the condition of `IF` is a comparison of such values, `!`,
+  `&&`, `||` (with SPARQL's errors) or `BOUND`, and only the branch taken is computed. Their
+  branches may be numbers (inline ids) or any term the string kernels make
+  (`IF(?q > 50, "big", "small")`); a cast to `xsd:decimal` in a branch keeps its text there
+  too. Dictionary literals
   (`1.5E2`), a double result that is not finite, overflow, decimal products with more than 18
   fraction digits (they are exact on 256 bits otherwise), decimal quotients that don't end
   within 18 fraction digits (`1 / 3`: the evaluator's 24 digits are its own literal), dates
@@ -271,8 +281,17 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   compact key's geometry may be a packed record (first byte `0x80`, then the number of
   decimals, then the record with varint counts and each coordinate as the zigzag varint
   difference from the one before, in units of that many decimals), used when every coordinate
-  has at most 9 decimals and reads back to the same bits. Formats 4 and 5 both open. `Store::dictionary_usage()` reads every key and
-  counts keys and bytes by kind of term (`tripletrail disk-usage`, #152).
+  has at most 9 decimals and reads back to the same bits. Formats 4 and 5 both open.
+  IRIs keep their namespace once (#152): a namespace is an IRI's text up to one of its last 8
+  `/` or `#`, at least 8 bytes long. A new IRI takes the longest namespace kept, else the
+  longest that an earlier IRI had, which is then kept (in the checkpoint's `namespaces.bin`),
+  so `…/way/1/geom/track` shares `…/way/` with `…/way/1`. Its key is a 0, the namespace's
+  number (a varint) and the rest of the IRI. The key is hashed as the full IRI, so lookups,
+  saved indexes and string ranks work as before; the first IRI of a namespace stays written
+  in full. A piece that may hold such keys is format 6
+  (`OXGSDIC6`), or 7 (`OXGSDIC7`) when it may also hold WKT in binary form, so a binary from
+  before refuses it; earlier formats open and grow. `Store::dictionary_usage()` reads every
+  key and counts keys and bytes by kind of term (`tripletrail disk-usage`, #152).
 
 ## Benchmark
 

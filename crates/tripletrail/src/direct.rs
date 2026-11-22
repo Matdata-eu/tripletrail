@@ -214,6 +214,12 @@ fn computable(e: &Expression, top: bool) -> bool {
         | Expression::Multiply(a, b)
         | Expression::Divide(a, b) => computable(a, false) && computable(b, false),
         Expression::UnaryMinus(a) => computable(a, false),
+        // Branches that are numbers: a bare variable or a string constant may be any term, and
+        // then the term kernels (`idstring`) take the expression.
+        Expression::If(c, a, b) => {
+            crate::idvalue::is_condition(c, &|x| computable(x, false)) && branch(a) && branch(b)
+        }
+        Expression::Coalesce(list) => !list.is_empty() && list.iter().all(branch),
         Expression::FunctionCall(
             F::Abs
             | F::Ceil
@@ -233,9 +239,43 @@ fn computable(e: &Expression, top: bool) -> bool {
         Expression::FunctionCall(F::Custom(f), args)
             if f.as_ref() == oxigraph::model::vocab::xsd::INTEGER =>
         {
-            args.len() == 1 && !matches!(args[0], Expression::Literal(_))
+            args.len() == 1
+                && (crate::idtree::text_test(&args[0]).is_some() || computable(&args[0], false))
+        }
+        // `xsd:decimal` of a number.
+        Expression::FunctionCall(F::Custom(f), args)
+            if f.as_ref() == oxigraph::model::vocab::xsd::DECIMAL =>
+        {
+            args.len() == 1 && computable(&args[0], false)
         }
         _ => false,
+    }
+}
+
+/// A branch of `IF` or `COALESCE` the value kernels compute: a number. A constant is the
+/// term the branch gives as written, so it must be in the form the value kernels write
+/// (`2.5`, not `2.50`); a bare variable or another constant may be any term, and then the
+/// term kernels (`idstring`) take the expression.
+fn branch(e: &Expression) -> bool {
+    use oxigraph::model::vocab::xsd;
+    match e {
+        Expression::Variable(_) => false,
+        Expression::Literal(l) => {
+            let v = l.value();
+            let d = l.datatype();
+            if d == xsd::INTEGER {
+                v.parse::<i64>().is_ok_and(|i| i.to_string() == v)
+            } else if d == xsd::DECIMAL {
+                v.parse::<oxsdatatypes::Decimal>()
+                    .is_ok_and(|x| spareval::decimal_lexical(x) == v)
+            } else if d == xsd::DOUBLE {
+                v.parse::<oxsdatatypes::Double>()
+                    .is_ok_and(|x| x.is_finite() && x.to_string() == v)
+            } else {
+                false
+            }
+        }
+        e => computable(e, false),
     }
 }
 

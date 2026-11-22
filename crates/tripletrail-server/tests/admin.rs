@@ -1987,7 +1987,7 @@ fn the_web_ui_and_its_embedded_matgui() {
         "127.0.0.1:0",
         Vec::new(),
         Options {
-            matgui_url: Some("https://cdn.example/matgui@6.13.0/build".to_owned()),
+            matgui_url: Some("https://cdn.example/matgui@6.15.0/build".to_owned()),
             ..Options::default()
         },
     )
@@ -1995,7 +1995,7 @@ fn the_web_ui_and_its_embedded_matgui() {
     let cdn = format!("http://{}", server.address());
     server.spawn();
     let page = get(&cdn, "/$/ui/").unwrap().into_string().unwrap();
-    assert!(page.contains("https://cdn.example/matgui@6.13.0/build/yasgui.min.css"));
+    assert!(page.contains("https://cdn.example/matgui@6.15.0/build/yasgui.min.css"));
 
     let server = Server::bind(
         "127.0.0.1:0",
@@ -2011,10 +2011,11 @@ fn the_web_ui_and_its_embedded_matgui() {
     assert_eq!(status(get(&off, "/$/ui/")), 404);
 }
 
-/// MatGUI's Explain view knows no TripleTrail engine of its own, so the Query page teaches it
-/// one: for this server's `…/sparql` endpoints it POSTs the query to `…/explain` and draws the
-/// plan from `plan.plan`, whose steps carry `name`, `number of results`, `duration in seconds`
-/// and `children`. Before, the view said "No engine recognised" and showed no plan.
+/// MatGUI's Explain view (from 6.15.0, with yasgui-explain-plugin 1.1.0) knows TripleTrail: it
+/// recognises the server by its `Server` header, asks `…/explain` beside the tab's `…/sparql`
+/// with the query as a form, and draws the plan from `plan.plan`, whose steps carry `name`,
+/// `number of results`, `duration in seconds` and `children`. Before, the view said "No engine
+/// recognised" and showed no plan.
 #[test]
 fn the_query_page_explain_view_reads_the_plan_of_this_server() {
     let dir = temp_dir("explain-view");
@@ -2032,30 +2033,28 @@ fn the_query_page_explain_view_reads_the_plan_of_this_server() {
         ),
         200
     );
-    let script = ureq::get(&format!("{}/$/ui/app.js", s.base))
+    // The built-in MatGUI carries the plugin's TripleTrail engine and its detection.
+    let matgui = ureq::get(&format!("{}/$/ui/vendor/matgui/yasgui.min.js", s.base))
         .call()
         .unwrap()
         .into_string()
         .unwrap();
     for wired in [
-        "registerPlugin(\"Explain\", TripleTrailExplain)",
-        "\"/explain\"",
-        "\"Content-Type\": \"application/sparql-query\"",
-        "r.plan.plan",
-        "n[\"number of results\"]",
-        "n[\"duration in seconds\"]",
-        "r.plan[\"planning duration in seconds\"]",
+        "id:\"tripletrail\"",
+        "includes(\"tripletrail\")",
+        "\"number of results\"",
+        "\"duration in seconds\"",
+        "\"planning duration in seconds\"",
     ] {
-        assert!(script.contains(wired), "app.js no longer has {wired}");
+        assert!(matgui.contains(wired), "MatGUI no longer has {wired}");
     }
     // The request the view sends, and the fields it reads from the answer.
     let r = ureq::post(&format!("{}/plan/explain", s.base))
         .set("Accept", "application/json")
-        .set("Content-Type", "application/sparql-query")
-        .set("X-TripleTrail-Client", "ui")
-        .send_string(
+        .send_form(&[(
+            "query",
             "SELECT * WHERE { ?a <http://example.com/p> ?b . ?b <http://example.com/p> ?c }",
-        )
+        )])
         .unwrap();
     assert!(r.content_type().contains("json"));
     // The Server header names TripleTrail, which the Explain plugin recognises (on every

@@ -48,6 +48,17 @@ pub(crate) fn computable(e: &Expression) -> bool {
                     matches!(a, Expression::Literal(_)) || (computable(a) && without_variables(a))
                 })
         }
+        // `IF` on a condition of numbers and dates, and `COALESCE`, of any of these terms.
+        // (Of numbers only, the value kernels compute them, straight to inline ids.)
+        Expression::If(c, a, b) => {
+            crate::idvalue::is_condition(c, &crate::direct::number_computable)
+                && arg(a)
+                && arg(b)
+                && !crate::direct::number_computable(e)
+        }
+        Expression::Coalesce(list) => {
+            !list.is_empty() && list.iter().all(arg) && !crate::direct::number_computable(e)
+        }
         _ => false,
     }
 }
@@ -229,12 +240,39 @@ pub(crate) fn compile<'k>(
                 }))
             })
         }
+        // Only the branch taken is computed, as in the evaluator.
+        Expression::If(c, a, b) => {
+            let (c, a, b) = (
+                crate::idvalue::condition(c, t, snapshot)?,
+                compile(a, t, snapshot)?,
+                compile(b, t, snapshot)?,
+            );
+            Box::new(move |row| match c(row)? {
+                Some(true) => a(row),
+                Some(false) => b(row),
+                None => Some(Err(())),
+            })
+        }
+        Expression::Coalesce(list) => {
+            let list = list
+                .iter()
+                .map(|e| compile(e, t, snapshot))
+                .collect::<Option<Vec<_>>>()?;
+            Box::new(move |row| {
+                for k in &list {
+                    if let Ok(term) = k(row)? {
+                        return Some(Ok(term));
+                    }
+                }
+                Some(Err(()))
+            })
+        }
         // A number the value kernels compute, as the literal the evaluator writes.
         e => {
-            let k = crate::idvalue::compile(e, t, snapshot)?;
+            let k = crate::idvalue::compile_output(e, t, snapshot)?;
             Box::new(move |row| {
                 Some(match k(row)? {
-                    Ok(v) => Ok(crate::idvalue::literal(v)?.into()),
+                    Ok((v, form)) => Ok(crate::idvalue::literal(v, form)?.into()),
                     Err(()) => Err(()),
                 })
             })
