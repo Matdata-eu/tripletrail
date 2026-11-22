@@ -195,14 +195,14 @@ fn computed(p: &GraphPattern, v: &Variable) -> bool {
     }
 }
 
-/// Whether the expression kernels (`idvalue::compile`) may compute `e`, by its form alone: so
-/// that a `BIND` they can't compute leaves the query to the evaluator before any work on ids.
-/// `top`: a constant or a copy is fine there (`BIND(ex:a AS ?k)`), not inside arithmetic.
 /// Whether the value kernels (`idvalue::compile`) may compute `e`, inside an expression.
 pub(crate) fn number_computable(e: &Expression) -> bool {
     computable(e, false)
 }
 
+/// Whether the expression kernels (`idvalue::compile`) may compute `e`, by its form alone: so
+/// that a `BIND` they can't compute leaves the query to the evaluator before any work on ids.
+/// `top`: a constant or a copy is fine there (`BIND(ex:a AS ?k)`), not inside arithmetic.
 fn computable(e: &Expression, top: bool) -> bool {
     use spargebra::algebra::Function as F;
     match e {
