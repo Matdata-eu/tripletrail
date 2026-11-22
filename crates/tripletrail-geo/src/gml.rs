@@ -101,18 +101,28 @@ fn parse_xml(text: &str) -> Option<Element> {
 }
 
 /// The CRS named by a GML `srsName`: an OGC CRS IRI, `urn:ogc:def:crs:EPSG::n` or `EPSG:n`.
-fn srs(name: &str) -> Crs {
+/// `None` when the name holds a character no IRI may hold (a space, a control character, a
+/// quote, angle or curly brackets, a backslash, a caret, a backtick or `|`), since such a CRS
+/// could not be written back in a WKT literal's `<...>`.
+fn srs(name: &str) -> Option<Crs> {
     let name = name.trim();
+    if name.chars().any(|c| {
+        c.is_whitespace()
+            || c.is_control()
+            || matches!(c, '<' | '>' | '"' | '{' | '}' | '|' | '\\' | '^' | '`')
+    }) {
+        return None;
+    }
     let epsg = name
         .strip_prefix("urn:ogc:def:crs:EPSG::")
         .or_else(|| name.strip_prefix("urn:ogc:def:crs:EPSG:6.6:"))
         .or_else(|| name.strip_prefix("EPSG:"))
         .or_else(|| name.strip_prefix("http://www.opengis.net/gml/srs/epsg.xml#"));
-    match epsg {
+    Some(match epsg {
         Some(code) => crs_from_iri(&format!("http://www.opengis.net/def/crs/EPSG/0/{code}")),
         None if name.ends_with("CRS84") => Crs::Crs84,
         None => crs_from_iri(name),
-    }
+    })
 }
 
 struct Gml {
@@ -315,7 +325,10 @@ pub(crate) fn parse_gml(value: &str) -> Option<Geom> {
         ));
     }
     let root = parse_xml(value)?;
-    let crs = root.attr("srsName").map(srs).unwrap_or(Crs::Crs84);
+    let crs = match root.attr("srsName") {
+        Some(name) => srs(name)?,
+        None => Crs::Crs84,
+    };
     let gml = Gml {
         swap: crs == Crs::Epsg4326,
     };
@@ -482,6 +495,25 @@ mod tests {
         );
         assert!(parse_gml("<gml:Point><gml:pos>1</gml:pos></gml:Point>").is_none());
         assert!(parse_gml("not xml").is_none());
+        // An srsName that cannot be an IRI makes the literal invalid, not a CRS that a WKT
+        // literal cannot hold (found by the geo_literals fuzz target).
+        assert!(
+            parse_gml(concat!(
+                "<MultiSurface\rR(\u{e}\u{7}",
+                "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0,\0\0\0",
+                "?=\r\"\u{c}\u{e}\0\"srsName\r=\"\u{e}INz>UR\0\"/>+>"
+            ))
+            .is_none()
+        );
+        for name in ["EPSG:4326 x", "urn:x>y", "http://example.org/{crs}"] {
+            assert!(
+                parse_gml(&format!(
+                    r#"<gml:Point {ns} srsName="{name}"><gml:pos>5 58</gml:pos></gml:Point>"#
+                ))
+                .is_none(),
+                "{name}"
+            );
+        }
     }
 
     #[test]
