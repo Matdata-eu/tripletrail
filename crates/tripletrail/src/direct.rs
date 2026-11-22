@@ -97,37 +97,47 @@ fn select(pattern: &GraphPattern, eval: &Eval, top: bool) -> Option<Selected> {
     if (length.is_some() || (!top && start > 0)) && order.is_none() {
         return None;
     }
-    if !covered(body) {
+    // The order's keys as variables: an expression the kernels compute (`DESC(?a * ?q)`)
+    // becomes a column of the body, under a name of its own (#11).
+    let mut body = std::borrow::Cow::Borrowed(body);
+    let mut by: Vec<(Variable, bool)> = Vec::new();
+    for (i, e) in order.into_iter().flatten().enumerate() {
+        let (e, descending) = match e {
+            OrderExpression::Asc(e) => (e, false),
+            OrderExpression::Desc(e) => (e, true),
+        };
+        match e {
+            // An order on a computed `BIND` value: its ids (made up for values not inline)
+            // don't order, so the evaluator answers it, before any work here.
+            Expression::Variable(v) if computed(&body, v) => return None,
+            Expression::Variable(v) => by.push((v.clone(), descending)),
+            e if computable(e, true) => {
+                let key = Variable::new_unchecked(format!("__tripletrail_order_{i}"));
+                body = std::borrow::Cow::Owned(G::Extend {
+                    inner: Box::new(body.into_owned()),
+                    variable: key.clone(),
+                    expression: e.clone(),
+                });
+                by.push((key, descending));
+            }
+            _ => return None,
+        }
+    }
+    if !covered(&body) {
         return None;
     }
-    // An order on a computed `BIND` value: its ids (made up for values not inline) don't
-    // order, so the evaluator answers it, before any work here.
-    if let Some(expression) = order
-        && expression.iter().any(|e| match e {
-            OrderExpression::Asc(Expression::Variable(v))
-            | OrderExpression::Desc(Expression::Variable(v)) => computed(body, v),
-            _ => true,
-        })
-    {
-        return None;
-    }
-    let t = eval.eval(body)?;
+    let t = eval.eval(&body)?;
     let rows: Vec<usize> = match order {
-        Some(expression) => {
-            let by = expression
-                .iter()
-                .map(|e| match e {
-                    OrderExpression::Asc(Expression::Variable(v)) => Some((v, false)),
-                    OrderExpression::Desc(Expression::Variable(v)) => Some((v, true)),
-                    _ => None,
-                })
-                .collect::<Option<Vec<_>>>()?;
-            // All the rows in order: only the slice is kept below, after DISTINCT.
+        Some(_) => {
+            // All the rows in order: only the slice is kept below, after DISTINCT. A computed
+            // key the ids don't order (a double made up for the query) leaves it to the
+            // evaluator.
             let keep = if distinct {
                 t.len()
             } else {
                 length.map_or(t.len(), |l| start.saturating_add(l).min(t.len()))
             };
+            let by = by.iter().map(|(v, d)| (v, *d)).collect();
             crate::rows::first_rows(&t, by, None, keep, eval.snapshot)?
         }
         None => (0..t.len()).collect(),
