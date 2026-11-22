@@ -280,11 +280,21 @@ test("Records: a reference is picked by name, and the server's problems show at 
   const to = page.locator("#records-edit-to-0");
   await to.waitFor();
   assert.equal(await to.inputValue(), "Liège-Guillemins");
+  // A name that is no record found is not saved as the old reference.
+  await to.fill("Nowhere");
+  const field = page.locator('.records-edit-field[data-key="to"] .records-edit-problem');
+  await field.filter({ hasText: "Pick a record from the list" }).waitFor();
+  let writes = 0;
+  page.on("request", (r) => { if (r.method() === "PATCH" && !r.url().includes("dry=true")) writes++; });
+  await page.click("#records-save");
+  await page.locator(".records-edit-status", { hasText: "Not saved: pick the records" }).waitFor();
+  assert.equal(writes, 0);
   await to.fill("Leu");
   await page.locator("#records-edit-to-0-list option[value='Leuven']").waitFor({ state: "attached" });
   const checked = page.waitForRequest((r) => r.method() === "PATCH" && r.url().includes("dry=true"));
   await to.fill("Leuven");
   assert.deepEqual((await checked).postDataJSON(), { to: EX + "LV" });
+  assert.equal(await field.filter({ hasText: "Pick a record" }).count(), 0);
   await page.fill("#records-edit-maxSpeed-0", "900");
   await page.locator("#records-edit-maxSpeed-0").blur();
   await page.locator('.records-edit-field[data-key="maxSpeed"] .records-edit-problem', { hasText: "At most 350" }).waitFor();

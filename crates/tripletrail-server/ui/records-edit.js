@@ -165,6 +165,9 @@
     const problems = {}; // the problem lists' elements, by key
     let checking = null;
     let checkedFor = null;
+    let answered = {}; // the server's last problems, by key
+    const unpicked = new Map(); // a reference box whose text names no record: its id → key
+    const redraw = []; // each field's draw
     /** Asks the server whether the record as edited would be written (`?dry=true`). */
     async function check() {
       const body = payload();
@@ -176,13 +179,18 @@
         : await call("POST", api + "?dry=true", body);
       if (text !== checkedFor) return;
       show(r.status === 422 ? problemsByKey(r.json) : {});
-      status.textContent = r.status === 200 ? (Object.keys(body).length ? "Ready to save." : "No changes.")
+      status.textContent = unpicked.size ? "Pick the records marked below."
+        : r.status === 200 ? (Object.keys(body).length ? "Ready to save." : "No changes.")
         : r.status === 422 ? "Fix the fields marked below."
         : r.status === 412 ? "Someone changed the record since you opened it."
         : r.text || "Cannot be saved: " + r.status;
     }
     const later = () => { clearTimeout(checking); checking = setTimeout(check, 400); };
-    function show(byKey) {
+    function show(server) {
+      if (server) answered = server;
+      const byKey = {};
+      for (const [k, list] of Object.entries(answered)) byKey[k] = list.slice();
+      for (const k of new Set(unpicked.values())) (byKey[k] ||= []).unshift("Pick a record from the list, or give an IRI.");
       for (const [k, node] of Object.entries(problems)) {
         const list = byKey[k] || [];
         node.replaceChildren(...list.map((m) => el("span", {}, m)));
@@ -221,16 +229,26 @@
       let asking = null;
       input.addEventListener("input", () => {
         const text = input.value.trim();
-        const hit = found.find((r) => (r.label || r.iri) === text);
+        const hit = found.find((r) => r.shown === text);
+        const iri = !text || /^[a-z][a-z0-9+.-]*:\S+$/i.test(text);
+        // Text that names no record found is not a value: the field says so and Save waits.
+        if (hit || iri) unpicked.delete(id);
+        else unpicked.set(id, f.key);
+        show();
         if (hit) { set({ id: hit.iri, label: hit.label }); return; }
-        if (!text || /^[a-z][a-z0-9+.-]*:\S+$/i.test(text)) set(text);
+        if (iri) set(text);
+        else if (unpicked.size) status.textContent = "Pick the records marked below.";
         clearTimeout(asking);
         if (!f.target || text.length < 2) return;
         asking = setTimeout(async () => {
           try {
             const out = await ui.api("GET", "/" + enc(ctx.ds) + "/search/labels", { params: { q: text, class: f.target, limit: "10" } });
             found = out.results || [];
-            options.replaceChildren(...found.map((r) => el("option", { value: r.label || r.iri }, r.iri)));
+            // Records of one label are told apart by their IRI.
+            const seen = {};
+            for (const r of found) seen[r.label || r.iri] = (seen[r.label || r.iri] || 0) + 1;
+            for (const r of found) r.shown = seen[r.label || r.iri] > 1 ? (r.label || r.iri) + " (" + r.iri + ")" : r.label || r.iri;
+            options.replaceChildren(...found.map((r) => el("option", { value: r.shown }, r.iri)));
           } catch (e) { /* no suggestions */ }
         }, 250);
       });
@@ -239,9 +257,10 @@
 
     /** The field of key `f`: its label (required marked), its values, and its problems. */
     function field(f) {
-      const list = values[f.key];
       const rows = el("div", { class: "records-edit-values" });
       const draw = () => {
+        const list = values[f.key]; // replaced after "Keep mine"
+        for (const k of [...unpicked.keys()]) if (k.startsWith("records-edit-" + f.key + "-")) unpicked.delete(k);
         if (!list.length && (f.single || f.lang || f.required)) list.push(f.lang ? { lang: "", text: "" } : f.kind === "boolean" ? null : "");
         rows.replaceChildren(...list.map((_, i) => el("div", { class: "records-edit-value" }, control(f, i),
           f.single && !f.lang ? null : el("button", { type: "button", class: "icon-btn", "aria-label": "Remove this value of " + f.label, title: "Remove",
@@ -249,6 +268,7 @@
         if (!f.single || f.lang) rows.append(el("button", { type: "button", class: "btn small", onclick: () => { list.push(f.lang ? { lang: "", text: "" } : ""); draw(); } }, "+ Add"));
       };
       draw();
+      redraw.push(draw);
       const problem = el("span", { class: "records-edit-problem", role: "alert", hidden: true });
       problems[f.key] = problem;
       return el("div", { class: "shapes-field records-field records-edit-field", "data-key": f.key },
@@ -277,6 +297,7 @@
 
     save.onclick = async () => {
       clearTimeout(checking);
+      if (unpicked.size) { show(); status.textContent = "Not saved: pick the records marked below."; return; }
       const body = payload();
       if (ctx.iri && !Object.keys(body).length) { ctx.closed(); return; }
       save.disabled = true;
@@ -327,6 +348,7 @@
         etag = r.etag;
         original = theirs;
         checkedFor = null;
+        for (const draw of redraw) draw();
       }
       return choice;
     }
