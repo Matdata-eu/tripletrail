@@ -40,9 +40,11 @@ const EPSG4326_TEXT: &str = "http://www.opengis.net/def/crs/EPSG/0/4326";
 pub(crate) fn style_of(text: &str, record: &[u8]) -> Option<[u8; 2]> {
     let flags = flags_of(text);
     let mut out = String::with_capacity(text.len());
+    // Stops at the first number written that differs from the text (#152): a literal whose
+    // text no style writes back (17 significant digits, say) costs a few numbers, not all.
     let mut fits = |style: [u8; 2]| {
         out.clear();
-        write(record, style, &mut out).is_some() && out == text
+        write_to(record, style, &mut out, Some(text.as_bytes())).is_some() && out == text
     };
     if let Some(d) = decimals_of(text)
         && fits([d, flags])
@@ -106,6 +108,12 @@ fn decimals_of(text: &str) -> Option<u8> {
 /// Appends the WKT text of `record` in `style` to `out`; `None` (and `out` holding part of
 /// it) for a record this writer does not write, or a style it does not know.
 pub(crate) fn write(record: &[u8], style: [u8; 2], out: &mut String) -> Option<()> {
+    write_to(record, style, out, None)
+}
+
+/// [`write`], stopping (`None`) once what is written differs from `expect`, if given.
+fn write_to(record: &[u8], style: [u8; 2], out: &mut String, expect: Option<&[u8]>) -> Option<()> {
+    let start = out.len();
     let record = &*crate::geobin::plain(record)?;
     let [decimals, flags] = style;
     if (decimals > MAX_DECIMALS && decimals != SHORTEST) || flags & !FLAGS != 0 {
@@ -117,6 +125,9 @@ pub(crate) fn write(record: &[u8], style: [u8; 2], out: &mut String) -> Option<(
         decimals,
         flags,
         swap: false,
+        expect,
+        start,
+        checked: start,
     };
     match w.u8()? {
         CRS84 => {
@@ -146,6 +157,12 @@ struct Writer<'a, 'o> {
     flags: u8,
     /// EPSG:4326 records hold (longitude, latitude); its text has latitude first.
     swap: bool,
+    /// The text this must write, if any: writing stops at the first difference.
+    expect: Option<&'a [u8]>,
+    /// Where this writer's text starts in `out`.
+    start: usize,
+    /// How much of `out` was compared with `expect`.
+    checked: usize,
 }
 
 impl<'a> Writer<'a, '_> {
@@ -209,7 +226,22 @@ impl<'a> Writer<'a, '_> {
         let (x, y) = if self.swap { (y, x) } else { (x, y) };
         self.number(x)?;
         self.out.push(' ');
-        self.number(y)
+        self.number(y)?;
+        self.check()
+    }
+
+    /// `None` if what was written since the last check differs from the expected text.
+    fn check(&mut self) -> Option<()> {
+        let Some(expect) = self.expect else {
+            return Some(());
+        };
+        let written = &self.out.as_bytes()[self.checked..];
+        let from = self.checked - self.start;
+        if expect.get(from..from + written.len())? != written {
+            return None;
+        }
+        self.checked = self.out.len();
+        Some(())
     }
 
     /// `(x y, x y, …)`; `None` when empty: no part of a geometry is written empty.
