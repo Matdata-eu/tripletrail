@@ -295,6 +295,49 @@ impl Eval<'_> {
                 column.resize(rows, id);
                 false
             }
+            // Strings and IRIs (`STR`, `CONCAT`, `IRI`): a term a row, given its id.
+            e if crate::idstring::computable(e) => {
+                let kernel = crate::idstring::compile(e, &t, self.snapshot)?;
+                // The value depends only on the columns the expression reads: with one or
+                // two, each distinct pair of ids is computed once.
+                let mut names = std::collections::HashSet::new();
+                crate::plan::expression_variables(e, &mut names)?;
+                let cols: Vec<usize> = names
+                    .iter()
+                    .filter_map(|n| t.vars.iter().position(|v| v.as_str() == n))
+                    .collect();
+                let key = |row: &[TermId]| match cols[..] {
+                    [] => Some((TermId(0), TermId(0))),
+                    [a] => Some((row[a], TermId(0))),
+                    [a, b] => Some((row[a], row[b])),
+                    _ => None,
+                };
+                let mut memo: HashMap<(TermId, TermId), TermId> = HashMap::new();
+                let mut unbound = false;
+                for r in 0..rows {
+                    if r % 4096 == 0 && (self.cancelled)() {
+                        return None;
+                    }
+                    let row = t.row(r);
+                    let k = key(row);
+                    let id = match k.and_then(|k| memo.get(&k)) {
+                        Some(id) => *id,
+                        None => {
+                            let id = match kernel(row)? {
+                                Ok(term) => self.snapshot.id_of(term),
+                                Err(()) => TermId(0),
+                            };
+                            if let Some(k) = k {
+                                memo.insert(k, id);
+                            }
+                            id
+                        }
+                    };
+                    unbound |= id == TermId(0);
+                    column.push(id);
+                }
+                unbound
+            }
             _ => {
                 let kernel = crate::idvalue::compile(expression, &t, self.snapshot)?;
                 // Each value once: the same value gives the same id.

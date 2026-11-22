@@ -445,7 +445,7 @@ fn hoist_extends(left: GraphPattern, right: GraphPattern) -> GraphPattern {
 
 /// Adds the variables of `e` to `out`; `None` when `e` holds an `EXISTS` or a function that
 /// gives a new value at each call.
-fn expression_variables(e: &Expression, out: &mut HashSet<Name>) -> Option<()> {
+pub(crate) fn expression_variables(e: &Expression, out: &mut HashSet<Name>) -> Option<()> {
     use spargebra::algebra::Function as F;
     match e {
         Expression::Variable(v) | Expression::Bound(v) => {

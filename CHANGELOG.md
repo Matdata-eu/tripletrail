@@ -25,6 +25,7 @@ versions may change the store format and the API; the release notes say how to u
 ### Changed
 
 - More of one query runs on several cores (#4): the sorted joins of a basic graph pattern (chunks of rows, each walking the index on its own), `GROUP BY` of many rows (split by the hash of the key) and the `SUM`, `AVG`, `MIN`, `MAX` and `SAMPLE` of the groups. The answers, and their order, are those of one core. On 2M orders and 4 cores, a join of three patterns grouped by country went from 500 to 220 ms, a count over three patterns from 480 to 190 ms, and 200,000 customers' sums from 420 to 260 ms. Rows to sort for a join are sorted as (key, row) pairs, which also helps one core (570 → 470 ms). `--query-threads` sizes the pool, as before; see [the server options](docs/server.md#main-options).
+- Under `--executor ids`, `BIND`s of strings and IRIs run on term ids too (#11): `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT` and `REPLACE` with a constant pattern, each computed once per distinct input. On a production rule set of 55 queries, four more stay on ids, with the same answers; the one that rewrites five IRIs with `IRI(REPLACE(STR(?x), …))` takes 142 instead of 239 ms. See [the store](docs/store.md).
 
 ## 0.1.0 - 2026-11-21
 
