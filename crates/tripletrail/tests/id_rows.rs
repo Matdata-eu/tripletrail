@@ -323,6 +323,35 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?v WHERE { VALUES ?v { 2.5e0 \"2.50\"^^xsd:decimal } ?s ex:b ?v }",
         false,
     ),
+    // An order on an expression the kernels compute: a column of its own, ordered on ids.
+    (
+        "SELECT ?s ?x WHERE { ?s ex:n ?x } ORDER BY DESC(?x * 2) ?s LIMIT 9",
+        true,
+    ),
+    (
+        "SELECT ?s ?x WHERE { ?s ex:n ?x } ORDER BY ABS(?x) DESC(?s) LIMIT 12 OFFSET 3",
+        true,
+    ),
+    (
+        "SELECT ?s ?d WHERE { ?s ex:d ?d } ORDER BY (?d - 1) ?s",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } } ORDER BY (?x + 1) ?s",
+        true,
+    ),
+    (
+        "SELECT DISTINCT ?x WHERE { ?s ex:n ?x } ORDER BY DESC(-?x) LIMIT 5",
+        true,
+    ),
+    (
+        "SELECT ?s ?f WHERE { ?s ex:f ?f } ORDER BY DESC(?f * 1.1) ?s LIMIT 4",
+        false,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:label ?l } ORDER BY UCASE(?l) ?s",
+        false,
+    ),
     // Left to the evaluator: an order on a computed value, values the ids don't decide, a
     // division, a string function, an overflow.
     (

@@ -168,8 +168,10 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `2.5`) gets an id made up for the query, which joins only itself; a filter that would have
   to compare it by value (`=`, `IN`, `isLiteral`, `DATATYPE`) leaves the query to the
   evaluator. Before any work, the plan checks that each `BIND` expression is one the kernels
-  compute, so a query with `STR` or a division doesn't run its patterns on ids first. A `LIMIT` without an order, order
-  expressions other than variables, columns the ids don't order, an expression the kernels
+  compute, so a query with `STR` or a division doesn't run its patterns on ids first. An
+  order on an expression the kernels compute (`ORDER BY DESC(?q * 3)`) orders a column of its
+  values, computed as a `BIND` would be (133k orders, `LIMIT 10`: 117 → 15 ms). A `LIMIT`
+  without an order, other order expressions, columns the ids don't order, an expression the kernels
   don't compute (`STR`, a division), and every other operator (`GROUP BY` beyond the count
   shortcuts, property paths outside the tables) leave the query to the evaluator, which then
   runs it as before.
