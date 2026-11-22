@@ -3463,9 +3463,9 @@ impl Snapshot {
                 ids.extend(ranks.id(Kind::Iri, r));
             }
             for o in ranks.covered() + 1..=dict.len() as u32 {
-                let key = dict.raw_key(o);
-                if key.first() == Some(&(Kind::Iri as u8))
-                    && key[1..].starts_with(prefix.as_bytes())
+                if dict
+                    .iri_text(dict.raw_key(o))
+                    .is_some_and(|t| t.starts_with(prefix.as_bytes()))
                 {
                     ids.push(TermId::new(Kind::Iri, u64::from(o)));
                 }
@@ -3834,7 +3834,7 @@ impl Snapshot {
         let key = |id: TermId| {
             let o = id.payload();
             (o != 0 && o as usize <= dict.len())
-                .then(|| ranks::sort_key(dict.raw_key(o as u32)))
+                .then(|| ranks::text_key(&dict, dict.raw_key(o as u32)))
                 .flatten()
         };
         // Texts are in UTF-8, whose byte order is the order of their characters.

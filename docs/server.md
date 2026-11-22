@@ -172,8 +172,8 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   alone from every origin. Pages may send `Authorization`, `Content-Type`, `Accept` and `X-API-Key`, and
   read `X-Result-Incomplete`, `X-Cache`, `X-Truncated` and `Server` from answers. Every answer
   carries `Server: TripleTrail/<version>`, which names the engine so that query tools can
-  recognise it. (The web UI's Query page shows TripleTrail's plan in MatGUI's Explain view
-  without it.)
+  recognise it: MatGUI's Explain view (from 6.15.0) and YASGUI's explain plugin (from 1.1.0)
+  then ask `/{ds}/explain` for the plan.
 - `--union-default-graph kg,build` (or `*`, `TRIPLETRAIL_UNION_DEFAULT_GRAPH`;
   `unionDefaultGraph=true` when creating a dataset over the admin API) makes the default graph
   of queries and updates the union of all graphs, as Fuseki's `tdb2:unionDefaultGraph`: rules
@@ -206,7 +206,7 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
 - `--executor` (`TRIPLETRAIL_EXECUTOR`, `spareval` by default) picks what answers a `SELECT`
   whose pattern runs on term ids (#11). `ids` answers it straight from the id tables (triple
   patterns, joins, `OPTIONAL` (with a filter on the right side's own variables), `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, the filters on ids,
-  `BIND` and `SELECT (expr AS ?v)` of copies, constants, arithmetic, `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT` and `REPLACE`, `VALUES`, sub-selects (with `DISTINCT`, an order and a slice), the `GROUP BY` counts and sums kept as ids, `ORDER BY` of variables and of the expressions the kernels compute, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
+  `BIND` and `SELECT (expr AS ?v)` of copies, constants, arithmetic with division, `ABS`, `CEIL`, `FLOOR`, `ROUND`, `xsd:integer` and `xsd:decimal` casts, `IF`, `COALESCE`, `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT` and `REPLACE` (the full list and its limits are in [the store](store.md)), `VALUES`, sub-selects (with `DISTINCT`, an order and a slice), the `GROUP BY` counts and sums kept as ids, `ORDER BY` of variables and of the expressions the kernels compute, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
   only the terms of the answer, each once, on the query threads; anything else still goes to
   the evaluator. SPARQL JSON, CSV and TSV answers are written from the ids: each distinct term
   is written once and copied into the rows where it occurs (the bytes are those of the usual
@@ -2425,8 +2425,8 @@ then takes it out of the address bar.
 - **Query**: [MatGUI](https://github.com/Matdata-eu/Matgui) on the chosen dataset, with its
   table, map, chart and graph views, and **Explain**, which shows TripleTrail's plan with row counts,
   timings and the spatial and range decisions. MatGUI's own **Explain** tab of the results asks
-  `/{ds}/explain` too for this server's endpoints (its Engine list reads "Detect (TripleTrail)"),
-  and draws the plan as a tree of steps with their rows and times.
+  `/{ds}/explain` too, as it recognises the server by its `Server` header (its Engine list
+  reads "Detect (TripleTrail)"), and draws the plan as a tree of steps with their rows and times.
 - **Map** (`/$/ui/map/{ds}`): the dataset's features on a map, a layer per collection (see
   [Vector tiles](#vector-tiles)), with a layer list, facets to filter each collection with
   their counts, and the features under a click. A feature's describe page opens in a panel
@@ -2615,8 +2615,8 @@ feedback links and **What's new**, the release notes from `crates/tripletrail-se
 returning browser gets a dot on About when a release it has not seen is out.
 
 The admin token is asked for when a change needs it and kept in the browser's local storage.
-MatGUI 6.13.0 (MIT) is built into the binary, so the UI works without internet access;
-`--matgui-url https://cdn.jsdelivr.net/npm/@matdata/yasgui@6.13.0/build/` loads it from a CDN
+MatGUI 6.15.0 (MIT) is built into the binary, so the UI works without internet access;
+`--matgui-url https://cdn.jsdelivr.net/npm/@matdata/yasgui@6.15.0/build/` loads it from a CDN
 instead. `--no-ui` turns the UI off.
 
 ### Importing files
@@ -3726,8 +3726,9 @@ node already stored, give it an IRI, or load its triples in one file.
   (`dict.bin`, `geoms.bin`, `spog.seg`, …), and, read from every key, the dictionary's keys by
   kind of term (`iri`, `blank`, `string`, `langString`, `typed`, `wkt`, `wktBinary` for WKT
   kept in binary form by `--render-wkt`, `geometry` for other geometry literals, `triple`),
-  with the bytes their datatype IRIs or language tags take and, for IRIs, their namespaces
-  (up to the last `/` or `#`). It opens the dataset read-only, so a dataset a server has open
+  with the bytes their datatype IRIs or language tags take and, for the IRIs written in full,
+  their namespaces (up to the last `/` or `#`; an IRI that shares its namespace with an
+  earlier one refers to it, #152). It opens the dataset read-only, so a dataset a server has open
   is refused (stop the server, or run it on a copy of the folder), as is a folder that is not
   TripleTrail storage. The index of key ends (`dict.idx`) is not in the dictionary's count. Keys
   written since the last checkpoint are counted with the dictionary but are still in

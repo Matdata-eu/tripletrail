@@ -82,7 +82,10 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   without `GROUP BY`: IRIs and simple strings compared by their dictionary keys, integers and
   booleans by value; other values (blank nodes, language strings, other typed literals, mixed
   literal kinds) leave the group to the evaluator. Under `ORDER BY` of counts with `LIMIT k`,
-  only the first k groups are kept, before their other aggregates are computed. BSBM 1M:
+  only the first k groups are kept, before their other aggregates are computed. A `GROUP BY`
+  over `BIND`s with few distinct inputs (`BIND(?q * 2 AS ?k) … GROUP BY ?k`) counts the rows
+  per input first and computes the expression once per input, under `--executor ids` too
+  (#11). BSBM 1M:
   `group-by-complex-aggregate` 54 → 16 ms, `group-by-implicit-string-min` 11 → 4 ms.
   Inline integers, decimals, dates and date-times (#125) are read as values from their ids
   (`crates/tripletrail/src/idvalue.rs`, #170): `<`, `<=`, `>`, `>=` and `=` between them and
@@ -274,8 +277,17 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   compact key's geometry may be a packed record (first byte `0x80`, then the number of
   decimals, then the record with varint counts and each coordinate as the zigzag varint
   difference from the one before, in units of that many decimals), used when every coordinate
-  has at most 9 decimals and reads back to the same bits. Formats 4 and 5 both open. `Store::dictionary_usage()` reads every key and
-  counts keys and bytes by kind of term (`tripletrail disk-usage`, #152).
+  has at most 9 decimals and reads back to the same bits. Formats 4 and 5 both open.
+  IRIs keep their namespace once (#152): a namespace is an IRI's text up to one of its last 8
+  `/` or `#`, at least 8 bytes long. A new IRI takes the longest namespace kept, else the
+  longest that an earlier IRI had, which is then kept (in the checkpoint's `namespaces.bin`),
+  so `…/way/1/geom/track` shares `…/way/` with `…/way/1`. Its key is a 0, the namespace's
+  number (a varint) and the rest of the IRI. The key is hashed as the full IRI, so lookups,
+  saved indexes and string ranks work as before; the first IRI of a namespace stays written
+  in full. A piece that may hold such keys is format 6
+  (`OXGSDIC6`), or 7 (`OXGSDIC7`) when it may also hold WKT in binary form, so a binary from
+  before refuses it; earlier formats open and grow. `Store::dictionary_usage()` reads every
+  key and counts keys and bytes by kind of term (`tripletrail disk-usage`, #152).
 
 ## Benchmark
 

@@ -117,7 +117,9 @@ dictionary keys:
 ```
 
 The `datatype` column is what the datatype IRIs repeated in every typed literal take, and
-`namespace` what the IRIs' namespaces (up to the last `/` or `#`) take. `--json` gives the
+`namespace` what the namespaces (up to the last `/` or `#`) of the IRIs written in full take.
+IRIs keep their namespace once: an IRI that shares one with an earlier IRI refers to it, so
+only the first of each namespace is written in full. `--json` gives the
 same as JSON. Keys written since the last checkpoint are counted with the dictionary but are
 still in `wal.log`; the output says so when there are any.
 

@@ -36,7 +36,7 @@ const FORMS_JS: &str = include_str!("../ui/forms.js");
 pub(crate) const WHATS_NEW: &str = include_str!("../ui/whats-new.json");
 const ICON: &str = include_str!("../ui/icon.svg");
 
-/// MatGUI 6.13.0's build files: (name, media type, bytes, gzipped).
+/// MatGUI 6.15.0's build files: (name, media type, bytes, gzipped).
 const MATGUI: &[(&str, &str, &[u8], bool)] = &[
     (
         "yasgui.min.js",
