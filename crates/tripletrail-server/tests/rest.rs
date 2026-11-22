@@ -1021,3 +1021,146 @@ fn embedded_objects_are_written_with_their_record() {
     assert!(!ask("?a ex:city \"Antwerpen\""));
     assert!(ask("?a ex:city \"Brugge\""));
 }
+
+// Records phase 2 (#82): a write checked and not written (`dry=true`), new records' IRIs from
+// `tts:iriTemplate` or `urn:uuid:`, and what the search classes say about writing.
+#[test]
+fn records_are_checked_dry_and_get_new_iris() {
+    let dir = tripletrail_testdir::tempdir("rest-dry");
+    let engine = Engine::new_tripletrail();
+    engine
+        .load(
+            RdfFormat::Turtle,
+            "@prefix ex: <http://example.com/> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             ex:o1 a ex:Operator ; rdfs:label \"Infrabel\" .\n\
+             ex:s1 a ex:Station ; rdfs:label \"Brussels\" ; ex:code \"BXS\" ; ex:hasOperator ex:o1 .\n"
+                .as_bytes(),
+        )
+        .unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 8,
+            admin_token: Some(TOKEN.to_owned()),
+            location: Some(dir.join("data")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let api = format!("{base}/kg/api/v1");
+    let shape = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix ex: <http://example.com/> .\n\
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+        @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+        ex:StationShape a sh:NodeShape ; sh:targetClass ex:Station ; tts:key \"Station\" ;\n\
+          tts:iriTemplate \"http://example.com/station/{code}\" ;\n\
+          sh:property [ sh:path rdfs:label ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 ] ,\n\
+            [ sh:path ex:code ; sh:datatype xsd:string ; sh:maxCount 1 ; sh:pattern \"^[A-Z]{2,4}$\" ] ,\n\
+            [ sh:path ( ex:hasOperator rdfs:label ) ; tts:key \"operatorName\" ] ,\n\
+            [ sh:path ex:hasOperator ; sh:class ex:Operator ; sh:maxCount 1 ] .\n";
+    let saved = ureq::put(&format!("{base}/$/datasets/kg/shapes/files/Station.ttl"))
+        .set("Authorization", &format!("Bearer {TOKEN}"))
+        .send_string(shape);
+    assert!(saved.is_ok(), "{saved:?}");
+    let count = |class: &str| -> usize {
+        let r = ureq::get(&format!("{base}/kg/query"))
+            .query(
+                "query",
+                &format!("SELECT * WHERE {{ ?s a <http://example.com/{class}> }}"),
+            )
+            .set("Accept", "application/sparql-results+json")
+            .call()
+            .unwrap();
+        let v: Value = serde_json::from_str(&r.into_string().unwrap()).unwrap();
+        v["results"]["bindings"].as_array().unwrap().len()
+    };
+
+    // The search classes: where to write, and which keys may be written or are required.
+    let (_, _, classes) = get(&format!("{base}/kg/search/classes"));
+    let station = classes["classes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "Station")
+        .unwrap();
+    assert_eq!(station["writable"], true, "{station}");
+    assert_eq!(station["rest"], "Station");
+    assert_eq!(station["iriTemplate"], "http://example.com/station/{code}");
+    let key = |k: &str| {
+        station["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["key"] == k)
+            .unwrap_or_else(|| panic!("{k} in {station}"))
+            .clone()
+    };
+    assert_eq!(key("label")["required"], true);
+    assert_eq!(key("label")["writable"], true);
+    assert_eq!(key("code")["required"], false);
+    assert_eq!(key("operatorName")["writable"], false);
+
+    // dry=true: checked, nothing written.
+    let (status, answer) = send(
+        "POST",
+        &format!("{api}/Station?dry=true"),
+        Some(&json!({ "label": "Mechelen", "code": "MEC" })),
+    );
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(answer["dry"], true);
+    assert_eq!(answer["id"], "http://example.com/station/MEC");
+    assert_eq!(answer["created"], true);
+    assert_eq!(count("Station"), 1);
+    let (status, answer) = send(
+        "POST",
+        &format!("{api}/Station?dry=true"),
+        Some(&json!({ "label": "Mechelen", "code": "mechelen" })),
+    );
+    assert_eq!(status, 422, "{answer}");
+    assert_eq!(count("Station"), 1);
+    // The template needs its key.
+    let (status, answer) = send(
+        "POST",
+        &format!("{api}/Station"),
+        Some(&json!({ "label": "Mechelen" })),
+    );
+    assert_eq!(status, 422, "{answer}");
+    // Written: the IRI from the template.
+    let (status, made) = send(
+        "POST",
+        &format!("{api}/Station"),
+        Some(&json!({ "label": "Mechelen", "code": "MEC" })),
+    );
+    assert_eq!(status, 201, "{made}");
+    assert_eq!(made["id"], "http://example.com/station/MEC");
+    // Without a template: urn:uuid:.
+    let (status, made) = send(
+        "POST",
+        &format!("{api}/Operator"),
+        Some(&json!({ "label": "SNCB" })),
+    );
+    assert_eq!(status, 201, "{made}");
+    let id = made["id"].as_str().unwrap();
+    assert!(
+        id.starts_with("urn:uuid:") && id.len() == "urn:uuid:".len() + 36,
+        "{id}"
+    );
+    assert_eq!(&id[23..24], "4", "a version 4 UUID: {id}");
+    // A dry delete says how many links to the record would be left.
+    let o1 = "http%3A%2F%2Fexample.com%2Fo1";
+    let (status, answer) = send("DELETE", &format!("{api}/Operator/{o1}?dry=true"), None);
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(answer["referencedBy"], 1);
+    assert_eq!(count("Operator"), 2);
+    let (status, _) = send(
+        "PATCH",
+        &format!("{api}/Operator/{o1}?dry=maybe"),
+        Some(&json!({})),
+    );
+    assert_eq!(status, 400);
+}

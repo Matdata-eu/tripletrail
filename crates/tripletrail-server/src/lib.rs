@@ -2355,7 +2355,14 @@ fn route(
                 .timeout(params.get("timeout").map(parse_timeout).transpose()?);
             let view = View::of(context);
             match what {
-                "classes" => return rest::search::classes(state, &entry, &view),
+                "classes" => {
+                    // Whether the caller may write the records (#82): the Records page edits
+                    // only then.
+                    let writable = !read_only
+                        && view.rows.is_none()
+                        && may_write_as(state, request, context).is_ok();
+                    return rest::search::classes(state, &entry, &view, writable);
+                }
                 // Retrieval for GraphRAG (#219): the resources nearest a vector.
                 "similar" => return similar::similar(&entry, &params, timeout, &view),
                 "sparql" => return rest::search::query_text(state, &entry, &params, &view),

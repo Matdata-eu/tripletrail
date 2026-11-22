@@ -394,7 +394,8 @@ percent-encoded, so a customised set can override it by IRI) with:
   says nothing about the others);
 - reader annotations in the `tts:` vocabulary (`http://w3id.org/tripletrail/shapes#`,
   [`crates/tripletrail/src/shapes/tts.ttl`](../crates/tripletrail/src/shapes/tts.ttl)): `tts:key` (a short name
-  for APIs), `tts:labelPath`, `tts:searchable`, `tts:geometry` (each path to a geometry with
+  for APIs), `tts:labelPath`, `tts:searchable`, `tts:iriTemplate` (never generated: the IRI of a new
+  record, see [writes](#rest-api-json-ld)), `tts:geometry` (each path to a geometry with
   its types), map `tts:color` and `tts:minZoom`, `tts:facet` (`tts:Facet-Values` for a code
   list, `tts:Facet-Range` for numbers and dates, `tts:Facet-Text` for other strings), `tts:time` (never generated: the OGC API's
   `datetime` filter), `tts:drawOrder` (never generated: where the map draws the class), `tts:colorClasses`
@@ -2955,7 +2956,11 @@ reader's shapes, and a limited caller sees only what it can read.
 - `GET /{ds}/search/classes` lists the classes to search: `id` (the REST API's dataset id),
   `title`, `class` (IRI), `count` of instances, `geometry`, and `properties`, each with `key`,
   `title`, `path` (SPARQL), `single`, and `kind`: `text`, `number`, `boolean`, `date`,
-  `reference` (with the `target` class's id), `iri`, `object` or `geometry`.
+  `reference` (with the `target` class's id), `iri`, `object` or `geometry`, and `required`
+  (`sh:minCount` 1 or more). When the caller may write the dataset (#82), a class also has
+  `writable` and `rest`, the REST API's dataset its records are written to, and each property
+  `writable` (its path is one predicate or the inverse of one there); `iriTemplate` is the
+  class's `tts:iriTemplate`.
 - `GET /{ds}/search/results?m=…` runs a search, given as JSON:
   `{"class": "Section", "where": [{"key": "maxSpeed", "op": "gt", "value": 120}], "show": ["lengthKm"]}`.
   At most 20 conditions, all of which must hold, and 20 extra columns. A condition can be
@@ -3428,11 +3433,17 @@ curl http://localhost:7878/kg/api/openapi.json
   embedded object without `id` as a new blank node with its keys' values, of the key's
   `sh:class` when it gives no `type`):
   - `POST /{ds}/api/v1/{dataset}` makes a record, its IRI in `id`: 201 with the record and its
-    URL in `Location`, 409 when it exists.
+    URL in `Location`, 409 when it exists. Without `id` (#82), the IRI comes from the node
+    shape's `tts:iriTemplate` (`{uuid}` a random UUID, `{key}` the body's value of that key,
+    percent-encoded; a missing value is a 422), else it is `urn:uuid:` and a random UUID.
   - `PUT /{ds}/api/v1/{dataset}/{id}` replaces the record's writable keys: a key the body leaves
     out loses its values. It makes the record when it is missing (201).
   - `PATCH` (JSON Merge Patch) changes only the keys in the body; `null` removes a key's values.
   - `DELETE` removes the record's type and its writable keys' values (204).
+  - `?dry=true` on any of them (#82) runs every check (the body, `If-Match`, the shape, the
+    graphs the caller may write) and writes nothing: 200 with `{"dry": true, "id": …,
+    "created": …}`, and for `DELETE` `referencedBy`, the links to the record that would be
+    left; a refusal is the same as the write's.
 
   A record read alone has an `ETag` (plain JSON a tag of its own), and so has the answer of a write. `PUT`, `PATCH` and
   `DELETE` with `If-Match` (that tag, or `*` for any existing record) are refused with 412

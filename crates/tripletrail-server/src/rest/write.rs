@@ -81,9 +81,9 @@ pub(crate) fn write(
     request: &Request<'_>,
 ) -> Result<Reply, HttpError> {
     let allowed: &[&str] = if request.method == Method::Create {
-        &["graph", "timeout"]
+        &["graph", "timeout", "dry"]
     } else {
-        &["timeout"]
+        &["timeout", "dry"]
     };
     if let Some((name, _)) = params
         .0
@@ -95,6 +95,16 @@ pub(crate) fn write(
             allowed.join(", ")
         )));
     }
+    // `dry=true` (#82): every check of the write, and nothing written.
+    let dry = match params.get("dry") {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(other) => {
+            return Err(HttpError::bad_request(format!(
+                "dry is true or false, not {other}"
+            )));
+        }
+    };
     let sets = sets(state, entry, view)?;
     let (set, id) = match (request.method, rest) {
         (Method::Create, ["v1", slug]) => (find(&sets, slug)?, None),
@@ -161,13 +171,25 @@ pub(crate) fn write(
                 ));
             }
         },
-        (_, None) => {
+        (Some(given), None) => {
             return Ok(problem(
                 422,
-                "A new record needs its IRI as id",
-                vec![json!({ "key": "id", "message": "Give the record's IRI as id" })],
+                "The id is not an absolute IRI",
+                vec![json!({ "key": "id", "value": given, "message": "Give the IRI as a string" })],
             ));
         }
+        // A new record without id (#82): its IRI from the dataset's `tts:iriTemplate`, else
+        // `urn:uuid:…`.
+        (None, None) => match new_iri(set.iri_template.as_deref(), &body) {
+            Ok(n) => n,
+            Err(message) => {
+                return Ok(problem(
+                    422,
+                    "The record's IRI cannot be made",
+                    vec![json!({ "key": "id", "message": message })],
+                ));
+            }
+        },
     };
     if let Some(given) = body.get("type") {
         let class = set.class.as_str();
@@ -392,6 +414,45 @@ pub(crate) fn write(
     {
         return Ok(refused);
     }
+    if dry {
+        drop(writing);
+        for (g, _) in removed.iter().chain(&dropped) {
+            if !writable(g.as_ref()) {
+                return Err(HttpError(
+                    403,
+                    format!("The write changes {g}, which you may not write"),
+                ));
+            }
+        }
+        if !writable(target.as_ref()) {
+            return Err(HttpError(
+                403,
+                format!("The write changes {target}, which you may not write"),
+            ));
+        }
+        let mut answer = json!({ "dry": true, "id": named.as_str(), "created": !exists });
+        if request.method == Method::Delete {
+            // The links to the record that a delete leaves behind.
+            let count = format!(
+                "SELECT (COUNT(*) AS ?n) WHERE {{ ?s ?p {named} FILTER(?p != <{}>) }}",
+                rdf::TYPE.as_str()
+            );
+            let n = crate::ogc::run(entry, &count, timeout, view)?
+                .first()
+                .and_then(|row| row.first().cloned().flatten())
+                .and_then(|t| match t {
+                    Term::Literal(l) => l.value().parse::<u64>().ok(),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            answer["referencedBy"] = n.into();
+        }
+        return Ok(Reply::bytes(
+            200,
+            "application/json",
+            answer.to_string().into_bytes(),
+        ));
+    }
     if matches!(store, tripletrail::store::Dataset::TripleTrail(_)) {
         // One transaction of exactly these quads: a blank node can't be named in SPARQL.
         for (g, _) in removed.iter().chain(&dropped) {
@@ -464,6 +525,51 @@ pub(crate) fn write(
             .push(("Location", format!("{base}/v1/{}/{id}", set.slug)));
     }
     Ok(reply)
+}
+
+/// A new record's IRI (#82): `template` with `{uuid}` a random UUID and `{key}` the body's
+/// value of `key`, percent-encoded; without a template, `urn:uuid:` and a random UUID.
+fn new_iri(template: Option<&str>, body: &Map<String, Value>) -> Result<NamedNode, String> {
+    let uuid = {
+        let mut b = [0u8; 16];
+        getrandom::fill(&mut b).map_err(|e| format!("No random numbers: {e}"))?;
+        b[6] = (b[6] & 0x0f) | 0x40;
+        b[8] = (b[8] & 0x3f) | 0x80;
+        let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+        format!(
+            "{}-{}-{}-{}-{}",
+            &h[0..8],
+            &h[8..12],
+            &h[12..16],
+            &h[16..20],
+            &h[20..32]
+        )
+    };
+    let Some(template) = template else {
+        return NamedNode::new(format!("urn:uuid:{uuid}")).map_err(|e| e.to_string());
+    };
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        out.push_str(&rest[..start]);
+        let end = rest[start..]
+            .find('}')
+            .ok_or_else(|| format!("tts:iriTemplate {template} has an unclosed {{"))?;
+        let name = &rest[start + 1..start + end];
+        if name == "uuid" {
+            out.push_str(&uuid);
+        } else {
+            let value = match body.get(name) {
+                Some(Value::String(v)) if !v.is_empty() => v.clone(),
+                Some(Value::Number(n)) => n.to_string(),
+                _ => return Err(format!("The IRI is made from {name}: give it a value")),
+            };
+            out.push_str(&percent_encode(&value));
+        }
+        rest = &rest[start + end + 1..];
+    }
+    out.push_str(rest);
+    NamedNode::new(out.as_str()).map_err(|e| format!("The IRI {out} is not valid: {e}"))
 }
 
 /// The lock the REST writes to a dataset take (by [`Entry::id`]).
