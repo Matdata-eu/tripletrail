@@ -102,9 +102,12 @@ test("Search: a name finds its resource, and the builder runs a query", async (t
 test("Map: the style loads and a layer draws features", async (t) => {
   const page = await open(t);
   const style = page.waitForResponse((r) => r.url() === base + "/ds/tiles/style.json");
-  // A tile of the area the sample lies in, with features in it.
+  // A tile of the area the sample lies in, with features in it. The map cancels the tiles it no
+  // longer needs as it zooms to the data, and the body of a cancelled one cannot be read: such a
+  // tile does not count, rather than failing the wait.
   const tile = page.waitForResponse(async (r) =>
-    /\/ds\/tiles\/[^/]+\/\d+\/\d+\/\d+\.mvt$/.test(r.url()) && r.status() === 200 && (await r.body()).length > 0);
+    /\/ds\/tiles\/[^/]+\/\d+\/\d+\/\d+\.mvt$/.test(r.url()) && r.status() === 200 &&
+    (await r.body().catch(() => Buffer.alloc(0))).length > 0);
   await page.goto(base + "/$/ui/map/ds");
   assert.equal((await style).status(), 200);
   await tile;
