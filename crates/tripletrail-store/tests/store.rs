@@ -1479,6 +1479,11 @@ fn checkpoints_with_segments_in_format_3_open_and_are_rewritten() {
             continue;
         }
         let path = checkpoint.join(name);
+        // Graph-first segments read the others' blocks (#152): they stay as they are.
+        if std::fs::read(&path).unwrap().starts_with(b"OXGSSEG5") {
+            rewritten += &format!("{line}\n");
+            continue;
+        }
         let v3 = segment_as_format_3(&std::fs::read(&path).unwrap());
         std::fs::remove_file(&path).unwrap();
         std::fs::write(&path, &v3).unwrap();
@@ -1510,8 +1515,15 @@ fn checkpoints_with_segments_in_format_3_open_and_are_rewritten() {
     drop(store);
     let [checkpoint] = checkpoints().try_into().unwrap();
     for e in std::fs::read_dir(&checkpoint).unwrap().flatten() {
-        if e.file_name().to_string_lossy().ends_with(".seg") {
-            assert_eq!(format(&e.path()), b"OXGSSEG4", "{:?}", e.file_name());
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".seg") {
+            // Without named graphs, those with the graph first read the others' blocks.
+            let want: &[u8] = if name.starts_with('g') && name.len() == "gspo.seg".len() {
+                b"OXGSSEG5"
+            } else {
+                b"OXGSSEG4"
+            };
+            assert_eq!(format(&e.path()), want, "{name}");
         }
     }
     assert_eq!(sorted(&Store::open(&dir).unwrap()), expected);
@@ -3506,6 +3518,94 @@ fn a_format_4_store_with_compact_keys_opens_and_grows() {
         let id = store.term_id(l.as_ref().into()).expect("found by its text");
         assert_eq!(store.snapshot().term(id).unwrap(), Term::from(l.clone()));
         assert!(store.geometry(l.as_ref().into()).is_some(), "{l}");
+    }
+}
+
+/// Without named graphs, the permutations with the graph first read the blocks of the others
+/// (#152): a checkpoint saves them as small files, and named graphs added (one quad at a
+/// time or in bulk) and removed again give the same answers as Oxigraph throughout, before
+/// and after a checkpoint and a reopen.
+#[test]
+fn graph_first_permutations_read_the_others_until_named_graphs_come() {
+    let current = |d: &Path| {
+        let n = std::fs::read_to_string(d.join("CURRENT")).unwrap();
+        d.join(format!("checkpoint-{}", n.trim()))
+    };
+    let formats = |d: &Path| -> Vec<(String, Vec<u8>)> {
+        let mut f: Vec<(String, Vec<u8>)> = ["gspo", "gpos", "gosp", "gpso"]
+            .iter()
+            .map(|n| {
+                let bytes = std::fs::read(current(d).join(format!("{n}.seg"))).unwrap();
+                (n.to_string(), bytes[..8].to_vec())
+            })
+            .collect();
+        f.sort();
+        f
+    };
+    let all = |magic: &[u8]| -> Vec<(String, Vec<u8>)> {
+        ["gosp", "gpos", "gpso", "gspo"]
+            .iter()
+            .map(|n| (n.to_string(), magic.to_vec()))
+            .collect()
+    };
+    let reference = oxigraph::store::Store::new().unwrap();
+    reference.load_from_slice(RdfFormat::Turtle, DATA).unwrap();
+    let named: Vec<Quad> = oxigraph::io::RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(NAMED.as_bytes())
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for bulk in [false, true] {
+        let dir = temp_dir(if bulk {
+            "graph-first-bulk"
+        } else {
+            "graph-first"
+        });
+        let store = Store::open(&dir).unwrap();
+        store.bulk_load(RdfFormat::Turtle, DATA.as_bytes()).unwrap();
+        store.checkpoint().unwrap();
+        assert_eq!(formats(&dir), all(b"OXGSSEG5"));
+        let spog = std::fs::metadata(current(&dir).join("spog.seg"))
+            .unwrap()
+            .len();
+        let gspo = std::fs::metadata(current(&dir).join("gspo.seg"))
+            .unwrap()
+            .len();
+        assert!(gspo * 4 < spog, "{gspo} bytes against {spog}");
+        assert_same_answers(&reference, &store);
+        drop(store);
+        assert_same_answers(&reference, &Store::open_read_only(&dir).unwrap());
+        let store = Store::open(&dir).unwrap();
+        assert_same_answers(&reference, &store);
+        // Named graphs come.
+        let both = oxigraph::store::Store::new().unwrap();
+        both.load_from_slice(RdfFormat::Turtle, DATA).unwrap();
+        both.load_from_slice(RdfFormat::NQuads, NAMED).unwrap();
+        if bulk {
+            store
+                .bulk_load(RdfFormat::NQuads, NAMED.as_bytes())
+                .unwrap();
+        } else {
+            for q in &named {
+                store.insert(q.as_ref()).unwrap();
+            }
+        }
+        assert_same_answers(&both, &store);
+        store.checkpoint().unwrap();
+        assert_same_answers(&both, &store);
+        assert_eq!(formats(&dir), all(b"OXGSSEG4"));
+        drop(store);
+        let store = Store::open(&dir).unwrap();
+        assert_same_answers(&both, &store);
+        // And go again.
+        for q in &named {
+            assert!(store.remove(q.as_ref()).unwrap(), "{q}");
+        }
+        assert_same_answers(&reference, &store);
+        store.checkpoint().unwrap();
+        assert_same_answers(&reference, &store);
+        drop(store);
+        assert_same_answers(&reference, &Store::open_read_only(&dir).unwrap());
+        assert_same_answers(&reference, &Store::open(&dir).unwrap());
     }
 }
 

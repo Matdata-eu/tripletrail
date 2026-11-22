@@ -99,6 +99,31 @@ const DERIVED: [(usize, usize); PERMS - 1] = [
     (PSOG, SPOG),
     (GPSO, PSOG),
 ];
+/// The permutations with the graph first, each with the one it is built from in [`DERIVED`]:
+/// the same order with the graph last (see [`Segment::graph_first`]).
+pub(crate) const GRAPH_FIRST: [usize; 4] = [GSPO, GPOS, GOSP, GPSO];
+/// The permutation each of [`GRAPH_FIRST`] is with the graph last.
+pub(crate) const GRAPH_LAST: [usize; 4] = [SPOG, POSG, OSPG, PSOG];
+
+/// Sets each permutation of [`GRAPH_FIRST`] to its source read graph first, the quads being
+/// all in the default graph, and takes their counts on every core.
+fn graph_first_from_sources(segments: &mut [Option<Arc<Segment>>; PERMS]) {
+    for (perm, source) in DERIVED {
+        if !GRAPH_FIRST.contains(&perm) {
+            continue;
+        }
+        let source = segments[source].as_mut().expect("built before");
+        // Built here, so not shared yet.
+        let view = Arc::get_mut(source)
+            .and_then(Segment::graph_first)
+            .expect("a segment of the default graph only, held once");
+        segments[perm] = Some(Arc::new(view));
+    }
+    GRAPH_FIRST.par_iter().for_each(|&perm| {
+        segments[perm].as_ref().expect("set").stats();
+    });
+}
+
 pub(crate) const PERM_NAMES: [&str; PERMS] = [
     "spog", "posg", "ospg", "gspo", "gpos", "gosp", "psog", "gpso",
 ];
@@ -871,9 +896,14 @@ impl QuadIndex {
         let len = quads.len();
         let mut segments: [Option<Arc<Segment>>; PERMS] = Default::default();
         segments[SPOG] = Some(Arc::new(Segment::from_sorted_slice(&quads)));
+        let named = quads.par_iter().any(|k| k[3] != 0);
         // Each other permutation is another one with its first column moved to the front: the
         // other one's order, sorted by that column alone (stably), is this one's order.
         for (perm, source) in DERIVED {
+            // Without named graphs, those with the graph first read the blocks of their source.
+            if !named && GRAPH_FIRST.contains(&perm) {
+                continue;
+            }
             let from = inverse(&ORDERS[source]);
             let order = &ORDERS[perm];
             segments[source]
@@ -886,6 +916,9 @@ impl QuadIndex {
             });
             quads.par_sort_by_key(|k| k[0]);
             segments[perm] = Some(Arc::new(Segment::from_sorted_slice(&quads)));
+        }
+        if !named {
+            graph_first_from_sources(&mut segments);
         }
         let perms: Vec<Perm> = segments
             .into_iter()
@@ -924,10 +957,16 @@ impl QuadIndex {
             spill.as_deref(),
         ));
         let len = spog.len;
+        // Without named graphs, those with the graph first read the blocks of their source.
+        let named = !spog.only_default_graph();
+        let built: Vec<(usize, usize)> = DERIVED
+            .into_iter()
+            .filter(|(perm, _)| named || !GRAPH_FIRST.contains(perm))
+            .collect();
         // Every other permutation is sorted from SPOG, [`SORTED_AT_ONCE`] at a time: each has
         // its share of the memory for its chunks, so the merges and the writing of the
         // segments, which run on one thread each, run side by side.
-        let derived: Vec<(usize, Arc<Segment>)> = DERIVED
+        let derived: Vec<(usize, Arc<Segment>)> = built
             .chunks(SORTED_AT_ONCE)
             .flat_map(|orders| {
                 orders
@@ -949,6 +988,9 @@ impl QuadIndex {
         segments[SPOG] = Some(spog);
         for (perm, segment) in derived {
             segments[perm] = Some(segment);
+        }
+        if !named {
+            graph_first_from_sources(&mut segments);
         }
         let perms: Vec<Perm> = segments
             .into_iter()

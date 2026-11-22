@@ -37,7 +37,14 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   same blocks with the sizes first. Stores saved before #169 (varint-delta blocks of 16 or 32
   quads, formats 1 and 2) still open: their segments are converted to column blocks as they are
   read. Folding a delta into a segment copies the blocks it does not touch byte for byte and
-  re-encodes only the others (#213). Writes go to a sorted delta of added and removed quads, kept in a
+  re-encodes only the others (#213). When every quad is in the default graph (graph 0), GSPO,
+  GPOS, GOSP and GPSO hold the quads of SPOG, POSG, OSPG and PSOG in the same order with a
+  constant graph column, so they read those segments' blocks with the columns in their own
+  order and keep only their block index (#152): a load builds four permutations fewer, and a
+  checkpoint saves each as a format 5 file (`OXGSSEG5`) of its block index, a 32nd of the
+  segment's size. The first quad in a named graph makes them segments of their own again (the
+  blocks they fold are re-encoded, not copied), and a checkpoint without named graphs, runs or
+  delta goes back to the shared blocks. Writes go to a sorted delta of added and removed quads, kept in a
   persistent ordered set (`imbl::OrdSet`): a snapshot (an open iterator) keeps its version for
   a reference count, and a write next to it copies only the path it changes. Once the delta
   holds 65,536 quads it is folded into new segments.
