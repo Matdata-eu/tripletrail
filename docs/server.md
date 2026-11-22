@@ -3707,6 +3707,18 @@ node already stored, give it an IRI, or load its triples in one file.
   `--graph IRI` (or `--graph default`) writes one graph, which Turtle, N-Triples and RDF/XML
   need when the dataset has named graphs. Without it they are refused before anything is
   written.
+- `tripletrail disk-usage --location DIR [--dataset ds] [--json]` shows what a dataset
+  folder takes (#152): its files by kind, numbered pieces and runs counted under their kind
+  (`dict.bin`, `geoms.bin`, `spog.seg`, …), and, read from every key, the dictionary's keys by
+  kind of term (`iri`, `blank`, `string`, `langString`, `typed`, `wkt`, `wktBinary` for WKT
+  kept in binary form by `--render-wkt`, `geometry` for other geometry literals, `triple`),
+  with the bytes their datatype IRIs or language tags take and, for IRIs, their namespaces
+  (up to the last `/` or `#`). It opens the dataset read-only, so a dataset a server has open
+  is refused (stop the server, or run it on a copy of the folder), as is a folder that is not
+  TripleTrail storage. The index of key ends (`dict.idx`) is not in the dictionary's count. Keys
+  written since the last checkpoint are counted with the dictionary but are still in
+  `wal.log`, not `dict.bin`: the output says so when the log is not empty (`keysInLog` in
+  JSON).
 - `tripletrail convert files…` reads RDF files as a stream and writes them as N-Quads, in `--to`,
   or in the format of `--output`. `--syntax` names the input format when the extensions
   don't, and `--base` the base IRI. `--validate` only checks each file and prints its first

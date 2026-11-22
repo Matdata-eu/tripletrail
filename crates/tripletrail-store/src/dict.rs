@@ -328,6 +328,12 @@ pub(crate) fn compact(key: &[u8], record: &[u8], out: &mut Vec<u8>) -> bool {
     true
 }
 
+/// The bytes of a typed or language key up to and including the 0 after its datatype or
+/// tag.
+fn prefix_len(key: &[u8]) -> usize {
+    key.iter().position(|&b| b == 0).map_or(0, |i| i + 1)
+}
+
 /// Whether `value` is the canonical lexical form of an `xsd:integer` (no `+`, no leading
 /// zeros, no `-0`), so storing the number loses nothing.
 fn canonical_integer(value: &str) -> bool {
@@ -401,7 +407,81 @@ pub(crate) fn decode(key: &[u8]) -> Term {
     }
 }
 
+/// What the dictionary's keys of one kind of term take (#152): see [`Dictionary::usage`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KindUsage {
+    /// `iri`, `blank`, `string`, `langString`, `typed`, `wkt`, `wktBinary`, `geometry` (other
+    /// geometry literals) or `triple`.
+    pub kind: &'static str,
+    /// Keys of this kind.
+    pub keys: u64,
+    /// Their bytes in `dict.bin`, kind byte, datatype or language tag included.
+    pub bytes: u64,
+    /// Of those, the bytes of the datatype IRI or language tag (typed and geometry
+    /// literals, language strings), written again in every key.
+    pub prefix_bytes: u64,
+    /// For IRIs, the bytes of their namespaces (up to the last `/` or `#`): what
+    /// keeping each namespace once would save at most.
+    pub namespace_bytes: u64,
+}
+
+/// The kinds of [`KindUsage::kind`], in the order [`Dictionary::usage`] lists them.
+const USAGE_KINDS: [&str; 9] = [
+    "iri",
+    "blank",
+    "string",
+    "langString",
+    "typed",
+    "wkt",
+    "wktBinary",
+    "geometry",
+    "triple",
+];
+
 impl Dictionary {
+    /// What the keys take, by kind of term (#152), read from every key: the kinds that have
+    /// keys, in a fixed order. `dict.idx` (each key's end, 8 bytes) is not counted.
+    pub(crate) fn usage(&self) -> Vec<KindUsage> {
+        let mut usage: Vec<KindUsage> = USAGE_KINDS
+            .iter()
+            .map(|&kind| KindUsage {
+                kind,
+                ..KindUsage::default()
+            })
+            .collect();
+        let wkt = wkt_prefix();
+        for p in &self.pieces {
+            for j in 0..p.len() {
+                let key = &p.bytes[p.ends[j] as usize..p.ends[j + 1] as usize];
+                let Some(&k) = key.first() else { continue };
+                let (slot, prefix) = match k {
+                    k if k == Kind::Iri as u8 => (0, 0),
+                    k if k == Kind::Blank as u8 => (1, 0),
+                    k if k == Kind::String as u8 => (2, 0),
+                    k if k == Kind::LangString as u8 => (3, prefix_len(key)),
+                    k if k == Kind::Typed as u8 => (4, prefix_len(key)),
+                    k if k == Kind::Geometry as u8 && is_compact(key) => (6, 0),
+                    k if k == Kind::Geometry as u8 && key.starts_with(&wkt) => (5, wkt.len()),
+                    k if k == Kind::Geometry as u8 => (7, prefix_len(key)),
+                    _ => (8, 0),
+                };
+                let u = &mut usage[slot];
+                u.keys += 1;
+                u.bytes += key.len() as u64;
+                u.prefix_bytes += prefix as u64;
+                if slot == 0 {
+                    let iri = &key[1..];
+                    u.namespace_bytes += iri
+                        .iter()
+                        .rposition(|&b| b == b'/' || b == b'#')
+                        .map_or(0, |i| i as u64 + 1);
+                }
+            }
+        }
+        usage.retain(|u| u.keys > 0);
+        usage
+    }
+
     pub(crate) fn new() -> Self {
         Self::from_pieces(Vec::new())
     }
@@ -815,6 +895,56 @@ fn build_table(hasher: &Hasher, pieces: &[Piece], capacity: usize) -> HashTable<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_by_kind() {
+        let mut dict = Dictionary::new();
+        let mut key = Vec::new();
+        let terms: Vec<Term> = vec![
+            NamedNode::new_unchecked("http://e/a").into(),
+            NamedNode::new_unchecked("http://e/ns#b").into(),
+            Literal::new_simple_literal("x").into(),
+            Literal::new_language_tagged_literal_unchecked("y", "en").into(),
+            Literal::new_typed_literal("z", NamedNode::new_unchecked("http://e/dt")).into(),
+            Literal::new_typed_literal("POINT(1 2)", WKT_LITERAL).into(),
+        ];
+        for t in &terms {
+            if let Encoded::Key(_) = encode(t.as_ref(), &mut key) {
+                dict.get_or_insert(&key);
+            }
+        }
+        let point: Term = Literal::new_typed_literal("POINT(3 4)", WKT_LITERAL).into();
+        let g = tripletrail_geo::parse_wkt_literal_uncached(&point).expect("valid WKT");
+        let mut record = Vec::new();
+        assert!(crate::geobin::encode(&g, &mut record));
+        encode(point.as_ref(), &mut key);
+        let mut compact_key = Vec::new();
+        assert!(compact(&key, &record, &mut compact_key));
+        dict.get_or_insert(&compact_key);
+        let usage = copy(&dict).usage();
+        let kinds: Vec<_> = usage.iter().map(|u| (u.kind, u.keys)).collect();
+        assert_eq!(
+            kinds,
+            [
+                ("iri", 2),
+                ("string", 1),
+                ("langString", 1),
+                ("typed", 1),
+                ("wkt", 1),
+                ("wktBinary", 1)
+            ]
+        );
+        // "http://e/" and "http://e/ns#", and the IRIs' kind bytes.
+        assert_eq!((usage[0].bytes, usage[0].namespace_bytes), (25, 21));
+        assert_eq!(usage[2].prefix_bytes, 4); // the kind byte, "en" and its 0
+        assert_eq!(usage[3].prefix_bytes, 13); // the kind byte, "http://e/dt" and its 0
+        assert_eq!(usage[4].prefix_bytes, wkt_prefix().len() as u64);
+        assert_eq!(usage.iter().map(|u| u.bytes).sum::<u64>(), {
+            let mut n = 0;
+            dict.for_each_run(0, dict.len(), |_, e| n += e[e.len() - 1] - e[0]);
+            n
+        });
+    }
 
     /// A dictionary from the parts of `dict`, as one piece.
     fn copy(dict: &Dictionary) -> Dictionary {

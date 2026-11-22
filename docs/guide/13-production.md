@@ -94,6 +94,55 @@ with every process that maps it. Pipelines can write such a folder for you with 
 step ([chapter 8](08-pipelines.md)). See
 [releasing a new version](../server.md#releasing-a-new-version-without-downtime).
 
+## Disk space
+
+`tripletrail disk-usage` shows what a dataset on disk takes: its files by kind, and the
+dictionary (`dict.bin`, the text of every IRI and literal) by kind of term. It reads the
+dataset without changing it, so run it on a dataset no server has open, here a fresh one:
+
+<!-- test: run -->
+```sh
+tripletrail load --location data --dataset sized network.ttl
+tripletrail disk-usage --location data --dataset sized
+```
+
+<!-- test: output contains -->
+```text
+sized:
+dict.bin
+geoms.bin
+dictionary keys:
+  kind                 keys      bytes      %   datatype  namespace
+  iri                    35
+  wkt                    22
+```
+
+The `datatype` column is what the datatype IRIs repeated in every typed literal take, and
+`namespace` what the IRIs' namespaces (up to the last `/` or `#`) take. `--json` gives the
+same as JSON. Keys written since the last checkpoint are counted with the dictionary but are
+still in `wal.log`; the output says so when there are any.
+
+On spatial data the WKT text is often most of the store, kept once as text in `dict.bin` and
+once as numbers in `geoms.bin`. `--render-wkt` keeps a WKT literal only in binary form when
+its text can be written back from it exactly, as it usually can for data written by a tool
+with a fixed number of decimals:
+
+<!-- test: run -->
+```sh
+tripletrail load --location data --dataset compact --render-wkt network.ttl
+tripletrail disk-usage --location data --dataset compact
+```
+
+<!-- test: output contains -->
+```text
+  wktBinary              22
+```
+
+Queries give the same text. A query that outputs many WKT literals is slower, since each is
+written back (on 290,000 OpenStreetMap geometries, 1.9 s instead of 1.3 s for all of them);
+spatial filters and joins are not. On that OpenStreetMap extract of Norway the store went
+from 731 MB to 364 MB. The setting stays with the dataset. See [the store](../store.md).
+
 ## Read replicas
 
 For more query capacity, or a copy in another place, a replica follows a leader's dataset and
@@ -602,6 +651,8 @@ ones, here `https://data.example.org/`. Each caller sees only the datasets it ma
 
 - Backups are one admin request, run on a schedule; store backups restore fastest.
 - An alias and a swap publish a new version of the data with no downtime and an easy rollback.
+- `tripletrail disk-usage` shows where a store's bytes go, and `--render-wkt` keeps WKT
+  literals once, in binary form.
 - Replicas, limits, metrics and HTTPS are options of the same `tripletrail serve`.
 - `/.well-known/dcat` is a DCAT-AP catalog for data portals; `--catalog` adds titles,
   publisher and licence.

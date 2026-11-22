@@ -39,6 +39,7 @@ pub use bgp::{
     memory_limit, set_join_memory, with_join_memory,
 };
 pub use dataset::{Dataset, DatasetError, QuadIter, RowView};
+pub use dict::KindUsage;
 pub use labels::BlankNodes;
 pub use persist::{LogEntry, STORE_FORMAT};
 
@@ -698,6 +699,12 @@ impl Store {
     /// Whether the store was opened with [`Store::open_read_only`].
     pub fn is_read_only(&self) -> bool {
         self.inner.read_only
+    }
+
+    /// What the dictionary's keys take by kind of term (#152), read from every key, so it
+    /// takes about as long as reading `dict.bin` once.
+    pub fn dictionary_usage(&self) -> Vec<KindUsage> {
+        self.inner.dict.read_unpoisoned().usage()
     }
 
     /// Bytes of checkpoint files this store maps instead of holding on the heap.

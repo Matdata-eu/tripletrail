@@ -524,6 +524,21 @@ enum Command {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// What a dataset on disk takes (#152): its files by kind (`dict.bin`, `geoms.bin`, the
+    /// index segments, …) and, read from every key, the dictionary's bytes by kind of term
+    /// (IRIs, strings, WKT text or binary, other literals), with what their datatypes and
+    /// IRI namespaces take. Reads the dataset without changing it; a dataset a server has
+    /// open is refused (stop the server, or run it on a copy of the folder).
+    DiskUsage {
+        /// Directory of the on-disk datasets.
+        #[arg(long)]
+        location: PathBuf,
+        #[arg(long, default_value = "ds")]
+        dataset: String,
+        /// Prints JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Reads RDF files as a stream and writes them in another format, checks them, or counts
     /// their triples (as Jena's `riot`). Without `--to` or `--output`, writes N-Quads to
     /// standard output.
@@ -3467,6 +3482,11 @@ fn run() -> Result<()> {
             format.as_deref(),
             output.as_deref(),
         ),
+        Command::DiskUsage {
+            location,
+            dataset,
+            json,
+        } => offline::disk_usage(&location, &dataset, json),
         Command::Convert {
             inputs,
             syntax,
