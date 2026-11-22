@@ -227,7 +227,9 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   spatial work unchanged. `--keep-wkt-text` keeps every text, for a new dataset or to turn it
   off on an existing one; `--render-wkt` turns it on for a dataset made before it was the
   default. Without either flag an existing dataset keeps its setting, which stays with the
-  dataset (a `render-wkt` file).
+  dataset (a `render-wkt` file). On-disk datasets the server creates (`POST /$/datasets` with
+  `type=disk`, `serve --location` with a new name) and other storages keep the WKT text, as
+  before.
 - `--threads` (4 by default) is the number of worker threads that answer requests.
   `--query-threads` (`TRIPLETRAIL_QUERY_THREADS`, 0 by default: as many as cores) is the size
   of the pool that large joins (the sorted joins of a basic graph pattern too), `OPTIONAL`,

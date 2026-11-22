@@ -145,7 +145,9 @@ geoms.bin
   wkt                    22
 ```
 
-The setting stays with the dataset. See [the store](../store.md).
+The setting stays with the dataset. Only `tripletrail load` makes binary form the default:
+on-disk datasets the server creates keep the WKT text, as do other storages. See [the
+store](../store.md).
 
 ## Read replicas
 
