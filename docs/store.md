@@ -160,7 +160,8 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   orders 222 → 49 ms; a select expression over a join 197 → 59 ms). A computed double that
   doesn't fit an inline id gets one made up for the query, which doesn't order, so an
   `ORDER BY` of a computed value is left to the evaluator. `STR`, `CONCAT`, `IRI`,
-  `STRLANG`, `STRDT` and `REPLACE` (with a constant pattern and flags, compiled once) of
+  `STRLANG`, `STRDT` and `REPLACE` (with a pattern and flags without variables, such as
+  `STR(ex:)`, compiled once) of
   columns, constants and such numbers are computed the same way (`idstring`), once per
   distinct value of the one or two columns they read, with the evaluator's rules: `STR` of an
   IRI or a literal is a simple literal of its text, `CONCAT` keeps a language every part

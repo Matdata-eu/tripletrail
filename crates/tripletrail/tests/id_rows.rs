@@ -441,6 +441,23 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, STR(?x), \"b\") AS ?y) }",
         false,
     ),
+    // A pattern or flags without variables, computed once.
+    (
+        "SELECT ?s ?i WHERE { ?s ex:p ?o BIND(IRI(CONCAT(STR(ex:), \"_x\", REPLACE(STR(?o), STR(ex:), \"\"))) AS ?i) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, CONCAT(\"A\", \"|b\"), \"_\", CONCAT(\"i\")) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, STR(ex:o1), \"_\", STR(ex:o1)) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, UCASE(\"a\"), \"_\") AS ?y) }",
+        false,
+    ),
     (
         "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(STRLANG(STR(?x), \"en\") AS ?y) }",
         true,
