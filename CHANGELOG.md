@@ -16,6 +16,7 @@ versions may change the store format and the API; the release notes say how to u
 - The Map page's Tools show and copy the coordinates under the pointer in an EPSG code as well (#33), transformed by the server.
 - The Map page's **Time**, **Export** and **Cite this map** (#37): a time slider over the layers' `tts:time` (the tiles and facet counts take `datetime`, as the OGC API's items do), a PNG of the map with a scale bar, a north arrow, the legend and the sources' credit, and a citation with the map's link, the data version (`metadata."tripletrail:dataVersion"` of the style) and each layer's SPARQL. See [the guide](docs/guide/10-maps-and-apis.md#show-the-features-of-a-time) and [vector tiles](docs/server.md#vector-tiles).
 - A **Records** page in the web UI (`/$/ui/records/{ds}`) (#81): the classes with their number of records, a grid of a class's records (sorted, filtered and paged on the server, downloaded as CSV, opened as SPARQL), and a record as a form drawn from the shapes, with the resources that link to it. The search API takes `sort`, `q`, `offset` and `f=csv` for it, and `/{ds}/describe?format=view` takes `reader=forms`.
+- Records can be checked before they are saved, and made without an IRI (#82): `?dry=true` on the REST API's writes runs every check and writes nothing (a dry `DELETE` says how many links would be left), a `POST` without `id` gets its IRI from the shape's new `tts:iriTemplate` or `urn:uuid:`, and `/{ds}/search/classes` says which classes and keys the caller may write and which keys are required.
 
 ### Fixed
 

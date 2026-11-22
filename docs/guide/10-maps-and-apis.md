@@ -816,6 +816,24 @@ curl -s -o /dev/null -w '%{http_code}\n' -X PATCH \
 412
 ```
 
+`?dry=true` runs every check of a write and writes nothing, so a form can show what is wrong
+before it saves. A record without `id` gets one: from the shape's `tts:iriTemplate` (such as
+`https://example.org/rail#{code}`, where `{code}` is the new record's code and `{uuid}` a
+random UUID), else `urn:uuid:` and a random UUID:
+
+<!-- test: run -->
+```sh
+curl -s -X POST 'http://localhost:7878/ds/api/v1/Station?dry=true' \
+  -H 'Content-Type: application/json' -d '{"label": "Vilvoorde", "code": "VV"}' | grep -o '"dry":true'
+```
+
+<!-- test: output -->
+```text
+"dry":true
+```
+
+A dry `DELETE` also says how many links to the record would be left (`referencedBy`).
+
 A value that is a blank node of a class with a shape, such as an address
 (`ex:address [ a ex:Address ; ex:city "Gent" ]`), comes inside the record as an object with
 that shape's keys: `"address": {"type": "…Address", "city": "Gent"}`. Write it the same way:

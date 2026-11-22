@@ -74,6 +74,8 @@ struct ApiSet {
     /// The geometry ways (see [`crate::geometry_ways`]): what `bbox` filters on.
     pub(crate) geometry: Option<crate::geometry_ways::Ways>,
     instances: Option<u64>,
+    /// `tts:iriTemplate` (#82): how a new record's IRI is made, with `{uuid}` and `{key}`.
+    iri_template: Option<String>,
     fields: Vec<Field>,
 }
 
@@ -88,6 +90,8 @@ struct Field {
     predicate: Option<(NamedNode, bool)>,
     /// `sh:maxCount 1`.
     single: bool,
+    /// `sh:minCount` of 1 or more (#82).
+    required: bool,
     datatype: Option<NamedNode>,
     /// Values are IRIs (`sh:nodeKind sh:IRI` or `sh:class`).
     iri: bool,
@@ -619,6 +623,7 @@ fn make_sets(shapes: &Graph) -> Vec<ApiSet> {
             label,
             geometry,
             instances: text(node, &tts("instances")).and_then(|n| n.trim().parse().ok()),
+            iri_template: text(node, &tts("iriTemplate")),
             fields,
         });
     }
@@ -731,6 +736,9 @@ fn fields_of(
             path,
             predicate,
             single: text(p, &sh("maxCount")).is_some_and(|n| n.trim() == "1"),
+            required: text(p, &sh("minCount"))
+                .and_then(|n| n.trim().parse::<u64>().ok())
+                .is_some_and(|n| n >= 1),
             datatype: named("datatype"),
             iri,
             class,

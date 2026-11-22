@@ -108,11 +108,28 @@ pub(crate) fn labels(
 /// label path and whether it has a geometry, and per property its key, title, SPARQL path,
 /// kind (`text`, `number`, `boolean`, `date`, `reference` to another class by id, `iri`,
 /// `geometry`, or `object` for embedded blank nodes) and whether it has one value at most.
-pub(crate) fn classes(state: &State, entry: &Entry, view: &View) -> Result<Reply, HttpError> {
+/// With `writable` (the caller may write the dataset), per class the REST API's dataset its
+/// records are written to (`rest`) and per property whether it is `writable` there (#82);
+/// `required` and the class's `iriTemplate` come from the shapes.
+pub(crate) fn classes(
+    state: &State,
+    entry: &Entry,
+    view: &View,
+    writable: bool,
+) -> Result<Reply, HttpError> {
     let sets = sets_for(state, entry, view, Reader::Search)?;
+    // Where a record is written (#82): the REST API's dataset of the same class.
+    let rest = if writable {
+        Some(super::sets(state, entry, view)?)
+    } else {
+        None
+    };
     let out: Vec<_> = sets
         .iter()
         .map(|s| {
+            let api = rest
+                .as_ref()
+                .and_then(|r| r.iter().find(|a| a.class == s.class));
             let properties: Vec<_> = s
                 .fields
                 .iter()
@@ -132,6 +149,12 @@ pub(crate) fn classes(state: &State, entry: &Entry, view: &View) -> Result<Reply
                         "path": f.path,
                         "kind": kind,
                         "single": f.single,
+                        "required": f.required,
+                        // A key of one predicate (or its inverse) in the REST API's dataset.
+                        "writable": api.is_some_and(|a| a
+                            .fields
+                            .iter()
+                            .any(|k| k.key == f.key && k.predicate.is_some())),
                     });
                     if let Some(t) = target {
                         p["target"] = t.into();
@@ -154,6 +177,13 @@ pub(crate) fn classes(state: &State, entry: &Entry, view: &View) -> Result<Reply
             });
             if let Some(n) = s.instances {
                 c["count"] = n.into();
+            }
+            if let Some(a) = api {
+                c["writable"] = true.into();
+                c["rest"] = a.slug.as_str().into();
+            }
+            if let Some(t) = &s.iri_template {
+                c["iriTemplate"] = t.as_str().into();
             }
             if let Some(l) = &s.label {
                 c["label"] = l.as_str().into();
