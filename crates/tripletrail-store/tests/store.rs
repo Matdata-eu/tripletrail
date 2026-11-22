@@ -3408,3 +3408,102 @@ fn union_copies_stay_right_after_writes() {
     }
     assert!(check(&store, false).is_some());
 }
+
+/// A store whose dictionary is format 4 (#370: compact WKT keys, their records plain) opens
+/// with a binary that writes format 5 (#152: packed records): its literals are found by their
+/// text, a literal loaded again gets no second id, and new literals are packed beside them.
+#[test]
+fn a_format_4_store_with_compact_keys_opens_and_grows() {
+    let wkt_type = NamedNodeRef::new_unchecked("http://www.opengis.net/ont/geosparql#wktLiteral");
+    let wkt = |v: String| Literal::new_typed_literal(v, wkt_type);
+    let quad = |i: usize, l: &Literal| {
+        Quad::new(
+            oxigraph::model::NamedNode::new_unchecked(format!("http://example.com/f{i}")),
+            oxigraph::model::NamedNode::new_unchecked("http://www.opengis.net/ont/geosparql#asWKT"),
+            l.clone(),
+            oxigraph::model::GraphName::DefaultGraph,
+        )
+    };
+    // Full-precision doubles in the shortest style: compact, but not packed, as in format 4.
+    let old: Vec<Literal> = (0..50)
+        .map(|i| {
+            wkt(format!(
+                "POINT({} {})",
+                3.0 + i as f64 / 7.0,
+                51.0 + i as f64 / 11.0
+            ))
+        })
+        .collect();
+    let dir = temp_dir("wkt-format-4");
+    {
+        let store = Store::open(&dir).unwrap();
+        store.set_render_wkt(true).unwrap();
+        for (i, l) in old.iter().enumerate() {
+            store.insert(quad(i, l).as_ref()).unwrap();
+        }
+        store.checkpoint().unwrap();
+    }
+    // Made format 4: its dictionary files' magic, and their checksums.
+    let current = dir.join(format!(
+        "checkpoint-{}",
+        std::fs::read_to_string(dir.join("CURRENT")).unwrap().trim()
+    ));
+    let sums_path = current.join("checksums");
+    let mut sums = std::fs::read_to_string(&sums_path).unwrap();
+    for e in std::fs::read_dir(&current).unwrap().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with("dict") && name.ends_with(".bin")) {
+            continue;
+        }
+        let mut bytes = std::fs::read(e.path()).unwrap();
+        assert_eq!(&bytes[..8], b"OXGSDIC5", "{name}");
+        bytes[..8].copy_from_slice(b"OXGSDIC4");
+        std::fs::write(e.path(), &bytes).unwrap();
+        sums = sums
+            .lines()
+            .map(|line| {
+                if line.split(' ').next() == Some(name.as_str()) {
+                    format!("{name} {} {:08x}", bytes.len(), crc32fast::hash(&bytes))
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+    }
+    std::fs::write(&sums_path, sums).unwrap();
+    let new: Vec<Literal> = (0..50)
+        .map(|i| {
+            wkt(format!(
+                "POINT({:.7} {:.7})",
+                4.0 + i as f64 / 7.0,
+                50.0 + i as f64 / 11.0
+            ))
+        })
+        .collect();
+    {
+        let store = Store::open(&dir).unwrap();
+        assert!(store.render_wkt());
+        for (i, l) in old.iter().enumerate() {
+            let id = store.term_id(l.as_ref().into()).expect("found by its text");
+            assert_eq!(store.snapshot().term(id).unwrap(), Term::from(l.clone()));
+            assert!(store.geometry(l.as_ref().into()).is_some(), "{l}");
+            // Loaded again: the same id, no new quad.
+            store.insert(quad(i, l).as_ref()).unwrap();
+            assert_eq!(store.term_id(l.as_ref().into()), Some(id));
+        }
+        assert_eq!(store.len(), old.len());
+        for (i, l) in new.iter().enumerate() {
+            store.insert(quad(1000 + i, l).as_ref()).unwrap();
+        }
+        store.checkpoint().unwrap();
+    }
+    let store = Store::open(&dir).unwrap();
+    assert_eq!(store.len(), old.len() + new.len());
+    for l in old.iter().chain(&new) {
+        let id = store.term_id(l.as_ref().into()).expect("found by its text");
+        assert_eq!(store.snapshot().term(id).unwrap(), Term::from(l.clone()));
+        assert!(store.geometry(l.as_ref().into()).is_some(), "{l}");
+    }
+}

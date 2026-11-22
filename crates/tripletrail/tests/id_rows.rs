@@ -495,6 +495,83 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s (SUM(IF(?x > 0, 1, 0)) AS ?n) WHERE { ?s ex:n ?x } GROUP BY ?s",
         false,
     ),
+    // A branch is the term it gives: a cast keeps its text (`7`, `1500.0`), a constant its
+    // form (`2.50`), and a cast nested in arithmetic is a computed decimal (`7.0`).
+    (
+        "SELECT ?s ?y ?z WHERE { ?s ex:n ?x ; ex:f ?f BIND(IF(?x > 0, xsd:decimal(?x), xsd:decimal(?f * 2)) AS ?y) BIND(COALESCE(xsd:decimal(?x / 0), xsd:decimal(?x)) AS ?z) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y ?z WHERE { ?s ex:n ?x BIND(IF(?x > 0, \"2.50\"^^xsd:decimal, 1) AS ?y) BIND(COALESCE(?x / 0, \"007\"^^xsd:integer) AS ?z) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y ?z ?w WHERE { ?s ex:n ?x BIND(ABS(xsd:decimal(?x)) AS ?y) BIND(xsd:decimal(?x) * 1 AS ?z) BIND(STR(IF(?x > 0, xsd:decimal(?x), 0)) AS ?w) }",
+        true,
+    ),
+    // Doubles rounded (halves up, -0.5 to -0), and `xsd:integer` and `xsd:decimal` of numbers.
+    (
+        "SELECT ?s ?a ?b ?c ?d WHERE { ?s ex:f ?x BIND(ROUND(?x) AS ?a) BIND(CEIL(?x) AS ?b) BIND(FLOOR(?x) AS ?c) BIND(ABS(?x) AS ?d) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y ?z WHERE { ?s ex:f ?x BIND(ROUND(?x - ?x - 0.5) AS ?y) BIND(CEIL(?x - ?x - 0.5) AS ?z) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:f ?x BIND(ROUND(?x * 1000) / 1000 AS ?y) FILTER(?y > 7.0) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?a ?b ?c WHERE { ?s ex:f ?x ; ex:d ?d ; ex:n ?n BIND(xsd:integer(?x) AS ?a) BIND(xsd:integer(?d) AS ?b) BIND(xsd:integer(?n / 8) AS ?c) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?a ?b ?c WHERE { ?s ex:f ?x ; ex:d ?d ; ex:n ?n BIND(xsd:decimal(?x) AS ?a) BIND(xsd:decimal(?n) AS ?b) BIND(xsd:decimal(?d * 3) AS ?c) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:f ?x BIND(xsd:decimal(?x / 3) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?t ?u WHERE { ?s ex:n ?n BIND(STR(xsd:decimal(?n)) AS ?t) BIND(xsd:decimal(?n) + 0 AS ?u) }",
+        true,
+    ),
+    (
+        "SELECT DISTINCT ?y WHERE { ?s ex:n ?n BIND(xsd:decimal(?n * 0) AS ?y) }",
+        true,
+    ),
+    // The cast keeps the text: `7` of an integer, `1500.0` of a double; a whole decimal is
+    // the evaluator's.
+    (
+        "SELECT DISTINCT ?y WHERE { ?s ex:f ?x BIND(xsd:decimal(?x * 2) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y ?z WHERE { ?s ex:n ?n BIND(xsd:decimal(?n * 2.5e0) AS ?y) BIND(STR(xsd:decimal(?n * 2e0)) AS ?z) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:d ?d BIND(xsd:decimal(ROUND(?d)) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:d ?d BIND(ROUND(xsd:decimal(?d * 2e0)) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?y WHERE { ?s ex:huge ?x BIND(xsd:integer(?x * 1.0e3) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(xsd:double(?x) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(xsd:integer(?l) AS ?y) }",
+        false,
+    ),
     // `REPLACE` with a constant pattern (and flags), `STRLANG`, `STRDT`.
     (
         "SELECT ?s ?i WHERE { ?s ex:p ?o BIND(IRI(REPLACE(STR(?o), \"example\", \"other\")) AS ?i) }",

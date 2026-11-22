@@ -269,10 +269,10 @@ pub(crate) fn compile<'k>(
         }
         // A number the value kernels compute, as the literal the evaluator writes.
         e => {
-            let k = crate::idvalue::compile(e, t, snapshot)?;
+            let k = crate::idvalue::compile_output(e, t, snapshot)?;
             Box::new(move |row| {
                 Some(match k(row)? {
-                    Ok(v) => Ok(crate::idvalue::literal(v)?.into()),
+                    Ok((v, form)) => Ok(crate::idvalue::literal(v, form)?.into()),
                     Err(()) => Err(()),
                 })
             })
