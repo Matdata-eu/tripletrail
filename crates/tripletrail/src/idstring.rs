@@ -44,10 +44,9 @@ pub(crate) fn computable(e: &Expression) -> bool {
             matches!(args.len(), 3 | 4)
                 && arg(&args[0])
                 && arg(&args[2])
-                && args[1..]
-                    .iter()
-                    .step_by(2)
-                    .all(|a| matches!(a, Expression::Literal(_)))
+                && args[1..].iter().step_by(2).all(|a| {
+                    matches!(a, Expression::Literal(_)) || (computable(a) && without_variables(a))
+                })
         }
         _ => false,
     }
@@ -192,7 +191,14 @@ pub(crate) fn compile<'k>(
             })
         }
         Expression::FunctionCall(F::Replace, args) if matches!(args.len(), 3 | 4) => {
-            let regex = compile_pattern(constant(args.get(1))??, constant(args.get(3))?)?;
+            let (pattern, flags) = (
+                folded(&args[1], t, snapshot)?,
+                match args.get(3) {
+                    Some(f) => Some(folded(f, t, snapshot)?),
+                    None => None,
+                },
+            );
+            let regex = compile_pattern(&pattern, flags.as_deref())?;
             let a = compile(&args[0], t, snapshot)?;
             let replacement = compile(&args[2], t, snapshot)?;
             Box::new(move |row| {
@@ -237,6 +243,24 @@ pub(crate) fn compile<'k>(
 }
 
 /// A constant string argument: `Some(None)` when there is none, `None` when it isn't one.
+/// A constant string argument, such as a `REPLACE` pattern: a simple literal, or an
+/// expression without variables whose value is one (`STR(ex:)`), computed once. `None` for
+/// anything else.
+fn folded(e: &Expression, t: &Table, snapshot: &Snapshot) -> Option<String> {
+    if let Expression::Literal(_) = e {
+        return constant(Some(e)).map(|c| c.unwrap_or_default().to_owned());
+    }
+    if !without_variables(e) {
+        return None;
+    }
+    simple(compile(e, t, snapshot)?(&[])?)
+}
+
+fn without_variables(e: &Expression) -> bool {
+    let mut names = std::collections::HashSet::new();
+    crate::plan::expression_variables(e, &mut names).is_some() && names.is_empty()
+}
+
 fn constant(e: Option<&Expression>) -> Option<Option<&str>> {
     match e {
         None => Some(None),
