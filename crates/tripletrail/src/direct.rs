@@ -308,6 +308,11 @@ fn covered(p: &GraphPattern) -> bool {
             right,
             expression: None,
         } => covered(left) && covered(right),
+        G::LeftJoin {
+            left,
+            right,
+            expression: Some(e),
+        } => crate::idtree::filter_covered(e) && covered(left) && covered(right),
         G::Filter { expr, inner } => crate::idtree::filter_covered(expr) && covered(inner),
         other => crate::rows::covered(other),
     }
