@@ -323,6 +323,35 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?v WHERE { VALUES ?v { 2.5e0 \"2.50\"^^xsd:decimal } ?s ex:b ?v }",
         false,
     ),
+    // An order on an expression the kernels compute: a column of its own, ordered on ids.
+    (
+        "SELECT ?s ?x WHERE { ?s ex:n ?x } ORDER BY DESC(?x * 2) ?s LIMIT 9",
+        true,
+    ),
+    (
+        "SELECT ?s ?x WHERE { ?s ex:n ?x } ORDER BY ABS(?x) DESC(?s) LIMIT 12 OFFSET 3",
+        true,
+    ),
+    (
+        "SELECT ?s ?d WHERE { ?s ex:d ?d } ORDER BY (?d - 1) ?s",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } } ORDER BY (?x + 1) ?s",
+        true,
+    ),
+    (
+        "SELECT DISTINCT ?x WHERE { ?s ex:n ?x } ORDER BY DESC(-?x) LIMIT 5",
+        true,
+    ),
+    (
+        "SELECT ?s ?f WHERE { ?s ex:f ?f } ORDER BY DESC(?f * 1.1) ?s LIMIT 4",
+        false,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:label ?l } ORDER BY UCASE(?l) ?s",
+        false,
+    ),
     // Strings and IRIs (`STR`, `CONCAT`, `IRI`), as terms of their own; blank nodes and other
     // literals errors where the evaluator's are.
     (
@@ -432,6 +461,33 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(STRDT(CONCAT(\"0\", STR(?x)), xsd:integer) AS ?y) }",
         false,
     ),
+    // Filters on such values (left to the evaluator: the filter kernels don't compare
+    // strings they compute), a count of distinct ones and a join of a made geometry to a
+    // stored one (on ids).
+    (
+        "SELECT ?o ?y WHERE { ?o ex:q ?v BIND(CONCAT(STR(?v), \"\") AS ?y) FILTER(?y = \"v3\") }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(CONCAT(STR(?o), \"/x\") AS ?y) FILTER(?y = \"http://example.org/o1/x\") }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(STR(?o) AS ?y) FILTER(STRSTARTS(?y, \"http://example.org/o1\")) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(STRLANG(STR(?l), \"nl\") AS ?y) FILTER(LANG(?y) = \"nl\") }",
+        false,
+    ),
+    (
+        "SELECT (COUNT(DISTINCT ?y) AS ?n) WHERE { ?s ex:p ?o BIND(REPLACE(STR(?o), \"[0-9]$\", \"\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?g WHERE { ?s ex:n ?x BIND(STRDT(CONCAT(\"POINT(\", STR(?x), \" 1)\"), <http://www.opengis.net/ont/geosparql#wktLiteral>) AS ?w) ?g ex:wkt ?w }",
+        true,
+    ),
     // Left to the evaluator: an order on a computed value, values the ids don't decide, a
     // division, a string function the kernels don't have, an overflow.
     (
@@ -525,6 +581,12 @@ fn binds_on_ids_are_the_evaluators() {
             "ex:s{i} ex:n {n} ; ex:d {}.{} ; ex:f \"{n}.5\"^^<http://www.w3.org/2001/XMLSchema#double> .\n",
             n / 7,
             i % 9 + 1,
+        ));
+    }
+    for i in (0..400_i64).step_by(4) {
+        let n = (i - 200) * 37;
+        numbers.push_str(&format!(
+            "ex:g{i} ex:wkt \"POINT({n} 1)\"^^<http://www.opengis.net/ont/geosparql#wktLiteral> .\n"
         ));
     }
     numbers.push_str("ex:big ex:huge 9223372036854775000 .\n");
