@@ -262,7 +262,7 @@ test("Records: a record is created, edited, kept on a conflict and deleted in it
   // Deleted, after saying what links to it.
   await page.click("#records-edit");
   await page.click("#records-delete");
-  await page.locator("#confirm-dialog", { hasText: "No other resource links to this record." }).waitFor();
+  await page.locator("#confirm-dialog", { hasText: "No link you can see from another resource points to this record." }).waitFor();
   await page.click("#confirm-ok");
   await page.locator("#records-count", { hasText: "10 records" }).waitFor();
   assert.equal((await fetch(url + "?f=json")).status, 404);

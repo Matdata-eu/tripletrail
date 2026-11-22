@@ -336,8 +336,9 @@
       if (dry.status !== 200) { status.textContent = "Cannot be deleted: " + (dry.text || dry.status); return; }
       const links = (dry.json && dry.json.referencedBy) || 0;
       const answer = await ui.confirmDialog("Delete " + (ctx.label || ctx.iri),
-        links ? `${links} link${links === 1 ? "" : "s"} from other resources to this record will be left pointing at nothing.`
-          : "No other resource links to this record.");
+        // Counted under the caller's view: links they cannot read are not in it.
+        links ? `${links} link${links === 1 ? "" : "s"} you can see from other resources to this record will be left pointing at nothing.`
+          : "No link you can see from another resource points to this record.");
       if (!answer.ok) return;
       const r = await call("DELETE", api + "/" + enc(ctx.iri), undefined, etag ? { "If-Match": etag } : {});
       if (r.status === 204) { ui.toast("Deleted", "ok"); ctx.deleted(); return; }

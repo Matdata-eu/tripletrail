@@ -345,7 +345,7 @@ with `*`.
 - A new record takes the IRI you give it, else one from the shape's `tts:iriTemplate`, else a
   `urn:uuid:` IRI.
 - **Delete…** first says how many links from other resources would be left pointing at the
-  record.
+  record (the links you can see: those you may not read are not counted).
 - A key whose path is more than one property, an embedded object and the geometry are shown but
   not edited here.
 
