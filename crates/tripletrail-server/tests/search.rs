@@ -768,3 +768,84 @@ fn text_properties_for_every_dataset_reach_one_created_later() {
         .unwrap();
     assert!(found("fresh", "freshcode").contains("http://example.com/f"));
 }
+
+// The Records grid (#81): a search sorted by a key, filtered by its label, paged by `offset`,
+// and downloaded as CSV; and the describe view read for the forms reader.
+
+fn get(url: &str, query: &[(&str, &str)]) -> (u16, String, String) {
+    let mut request = ureq::get(url);
+    for (k, v) in query {
+        request = request.query(k, v);
+    }
+    match request.call() {
+        Ok(r) => {
+            let kind = r.content_type().to_owned();
+            (200, kind, r.into_string().unwrap())
+        }
+        Err(ureq::Error::Status(code, r)) => (code, String::new(), r.into_string().unwrap()),
+        Err(e) => panic!("{e}"),
+    }
+}
+
+#[test]
+fn records_are_sorted_paged_filtered_and_downloaded() {
+    let base = network();
+    let url = format!("{base}/net/search/results");
+    // The longest sections first; equal lengths by label (here the IRI); a page further on.
+    let m = json!({"class": "Section", "show": ["lengthKm"], "sort": {"key": "lengthKm", "desc": true}});
+    let (code, _, body) = get(&url, &[("m", &m.to_string()), ("limit", "3")]);
+    assert_eq!(code, 200, "{body}");
+    let answer: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(ids(&answer), ["S07", "S11", "S12"]);
+    let (_, _, body) = get(
+        &url,
+        &[("m", &m.to_string()), ("limit", "3"), ("offset", "1")],
+    );
+    let answer: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(ids(&answer), ["S11", "S12", "S08"]);
+    assert_eq!(answer["offset"], 1);
+    assert_eq!(answer["count"], 12);
+    // Ascending, as a plain key.
+    let up = json!({"class": "Section", "show": ["lengthKm"], "sort": "lengthKm"});
+    let (_, _, body) = get(&url, &[("m", &up.to_string()), ("limit", "2")]);
+    assert_eq!(ids(&serde_json::from_str(&body).unwrap()), ["S01", "S02"]);
+    // The label filter, case aside.
+    let q = json!({"class": "Station", "q": "brussels"});
+    let (_, _, body) = get(&url, &[("m", &q.to_string())]);
+    let answer: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(answer["count"], 3);
+    assert_eq!(ids(&answer), ["BXC", "BXN", "BXS"]);
+    // CSV: the IRI, the label, a column per key.
+    let (code, kind, csv) = get(&url, &[("m", &q.to_string()), ("f", "csv")]);
+    assert_eq!(code, 200);
+    assert!(kind.starts_with("text/csv"), "{kind}");
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], "iri,label");
+    assert_eq!(lines[1], "https://example.org/rail#BXC,Brussels-Central");
+    assert_eq!(lines.len(), 4);
+    // Refused: an unknown sort key, an offset too far, an unknown format.
+    let bad = json!({"class": "Section", "sort": "nope"});
+    assert_eq!(get(&url, &[("m", &bad.to_string())]).0, 422);
+    assert_eq!(
+        get(&url, &[("m", &m.to_string()), ("offset", "99999999")]).0,
+        400
+    );
+    assert_eq!(get(&url, &[("m", &m.to_string()), ("f", "xml")]).0, 400);
+}
+
+#[test]
+fn the_describe_view_reads_for_the_forms_reader() {
+    let base = network();
+    let url = format!("{base}/net/describe");
+    let iri = "https://example.org/rail#S01";
+    let (code, _, body) = get(
+        &url,
+        &[("iri", iri), ("format", "view"), ("reader", "forms")],
+    );
+    assert_eq!(code, 200, "{body}");
+    let view: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(view["iri"], iri);
+    assert!(!view["groups"].as_array().unwrap().is_empty());
+    let (code, _, body) = get(&url, &[("iri", iri), ("format", "view"), ("reader", "map")]);
+    assert_eq!(code, 400, "{body}");
+}

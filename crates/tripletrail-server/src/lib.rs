@@ -2143,6 +2143,17 @@ fn route(
             let doc = linked_data::negotiate(request, &params)?;
             let entry = context.dataset.clone().expect("set above");
             let rows = row_view(engine, context)?;
+            // `reader=forms`: the rows the record forms show (Records, #81), with the shapes'
+            // `tts:hiddenFrom`/`tts:onlyFor` for forms in place of those for describe pages.
+            let reader = match params.get("reader") {
+                None | Some("describe") => tripletrail::shapes::Reader::Describe,
+                Some("forms") => tripletrail::shapes::Reader::Forms,
+                Some(other) => {
+                    return Err(HttpError::bad_request(format!(
+                        "Unknown reader {other}: describe or forms"
+                    )));
+                }
+            };
             // With `preview=`, the shapes of a preview (`POST /{ds}/tiles/preview`) in place
             // of the dataset's own, kept in the links to other resources.
             let preview = params.get("preview");
@@ -2162,19 +2173,10 @@ fn route(
                 None => local_href(state, iri).unwrap_or_else(|| describe_url(iri)),
             };
             let shapes = || match &files {
-                Some(files) => shapes::projected_with(
-                    state,
-                    &entry,
-                    tripletrail::shapes::Reader::Describe,
-                    &View::of(context),
-                    files,
-                ),
-                None => shapes::projected(
-                    state,
-                    &entry,
-                    tripletrail::shapes::Reader::Describe,
-                    &View::of(context),
-                ),
+                Some(files) => {
+                    shapes::projected_with(state, &entry, reader, &View::of(context), files)
+                }
+                None => shapes::projected(state, &entry, reader, &View::of(context)),
             };
             return linked_data::answer(
                 request,

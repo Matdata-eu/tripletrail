@@ -741,3 +741,39 @@ body[data-page=workbench] main { max-width: none; padding: 8px 12px; }
 .map-time-row { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
 .map-time-row input[type=range] { width: 100%; }
 .map-cite { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 11px; margin-top: 6px; }
+
+/* Records (#81): classes, a grid of a class's records, and one record as a form. */
+.records { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 8px; height: calc(100dvh - var(--top-h) - 96px); min-height: 360px; }
+.records:has(.records-record:not([hidden])) { grid-template-columns: 240px minmax(0, 1fr) minmax(320px, 36%); }
+.records > .card { min-height: 0; overflow: auto; padding: 10px 12px; }
+.records-nav { display: flex; flex-direction: column; gap: 8px; }
+.records-nav select { width: 100%; }
+.records-class-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.records-class { display: flex; justify-content: space-between; gap: 8px; width: 100%; text-align: left; padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--text); cursor: pointer; }
+.records-class:hover { background: var(--surface-2); }
+.records-class.active { background: var(--surface-2); font-weight: 600; }
+.records-grid { display: flex; flex-direction: column; gap: 8px; }
+.records-grid-head, .records-record-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.records-grid-head h2, .records-record-head h2 { margin: 0; font-size: 16px; }
+.records-grid-head .grow { flex: 1; }
+.records-table { flex: 1; min-height: 240px; }
+.records-record-head { justify-content: space-between; align-items: flex-start; }
+.records-record-head .mono { word-break: break-all; margin: 2px 0 0; }
+.records-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.records-group { border: 1px solid var(--border); border-radius: 6px; margin: 8px 0; padding: 6px 10px; }
+.records-group legend, .records-group summary { font-weight: 600; font-size: 13px; }
+.records-field { display: grid; grid-template-columns: minmax(120px, 34%) 1fr; gap: 8px; padding: 4px 0; align-items: baseline; }
+.records-label { color: var(--muted); font-size: 13px; }
+.records-subtable { border-collapse: collapse; font-size: 12px; }
+.records-subtable th, .records-subtable td { border: 1px solid var(--border); padding: 2px 6px; text-align: left; }
+.records-incoming-list { margin: 4px 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
+.records-incoming-list dd { margin: 0; }
+@media (max-width: 1000px) {
+  .records, .records:has(.records-record:not([hidden])) { grid-template-columns: 1fr; height: auto; }
+  .records-table { min-height: 400px; }
+}
+.records .tabulator .tabulator-header .tabulator-col.tabulator-frozen, .records .tabulator .tabulator-footer { background: var(--surface-2); color: var(--text-2); border-color: var(--border); }
+.records .tabulator .tabulator-row .tabulator-cell.tabulator-frozen { background: inherit; }
+.records .tabulator .tabulator-footer .tabulator-page { background: var(--surface); color: var(--text-2); border-color: var(--border); }
+.records .tabulator .tabulator-footer .tabulator-page.active { color: var(--text); font-weight: 600; }
+@media (hover: hover) and (pointer: fine) { .records .tabulator .tabulator-header .tabulator-col.tabulator-sortable.tabulator-col-sorter-element:hover { background-color: var(--surface-3); color: var(--text); } }
