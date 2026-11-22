@@ -2960,7 +2960,9 @@ reader's shapes, and a limited caller sees only what it can read.
   (`sh:minCount` 1 or more). When the caller may write the dataset (#82), a class also has
   `writable` and `rest`, the REST API's dataset its records are written to, and each property
   `writable` (its path is one predicate or the inverse of one there); `iriTemplate` is the
-  class's `tts:iriTemplate`.
+  class's `tts:iriTemplate`. The **Records** page edits a record through these: `+ New` and
+  `Edit` only for a `writable` class, a field for each `writable` key, checked with
+  `?dry=true` on the REST API's writes and saved with `If-Match`.
 - `GET /{ds}/search/results?m=…` runs a search, given as JSON:
   `{"class": "Section", "where": [{"key": "maxSpeed", "op": "gt", "value": 120}], "show": ["lengthKm"]}`.
   At most 20 conditions, all of which must hold, and 20 extra columns. A condition can be

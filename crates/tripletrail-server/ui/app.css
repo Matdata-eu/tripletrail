@@ -777,3 +777,17 @@ body[data-page=workbench] main { max-width: none; padding: 8px 12px; }
 .records .tabulator .tabulator-footer .tabulator-page { background: var(--surface); color: var(--text-2); border-color: var(--border); }
 .records .tabulator .tabulator-footer .tabulator-page.active { color: var(--text); font-weight: 600; }
 @media (hover: hover) and (pointer: fine) { .records .tabulator .tabulator-header .tabulator-col.tabulator-sortable.tabulator-col-sorter-element:hover { background-color: var(--surface-3); color: var(--text); } }
+/* Records' edit form (#82) */
+.records-edit-values { display: flex; flex-direction: column; gap: 4px; }
+.records-edit-value { display: flex; gap: 4px; align-items: center; }
+.records-edit-value input[type="text"], .records-edit-value input[type="url"], .records-edit-value input[type="number"] { flex: 1; min-width: 0; }
+.records-edit-lang { display: flex; gap: 4px; flex: 1; }
+.records-edit-langtag { flex: 0 0 4em; }
+.records-required { color: var(--danger); }
+.records-edit-problem { display: flex; flex-direction: column; color: var(--danger); font-size: 12px; }
+.records-edit-problem[hidden] { display: none; }
+.records-edit-field:has(.records-edit-problem:not([hidden])) input { border-color: var(--danger); }
+.records-edit-iri { display: flex; gap: 6px; align-items: center; margin: 8px 0; }
+.records-edit-iri input { flex: 1; }
+.records-actions .grow { flex: 1; }
+.records-conflict table { width: 100%; }

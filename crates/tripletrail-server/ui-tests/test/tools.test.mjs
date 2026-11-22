@@ -217,3 +217,80 @@ test("Records: markup in the data stays text in the grid", async (t) => {
   assert.equal(await page.evaluate(() => window.ran), undefined);
   assert.match(await page.locator("#records-table").innerText(), /onerror/);
 });
+
+test("Records: a record is created, edited, kept on a conflict and deleted in its form", async (t) => {
+  const page = await open(t);
+  await page.goto(base + "/$/ui/records/ds?class=Station");
+  await page.locator("#records-count", { hasText: "10 records" }).waitFor();
+  // A new station: the server checks it as it is typed, and gives it an IRI.
+  await page.click("#records-new");
+  await page.locator(".records-record-head h2", { hasText: "New Station" }).waitFor();
+  await page.fill("#records-edit-iri", EX + "DUF");
+  await page.fill("#records-edit-label-0", "Duffel");
+  await page.fill("#records-edit-code-0", "DUF");
+  await page.locator("#records-edit-code-0").blur();
+  await page.locator(".records-edit-status", { hasText: "Ready to save." }).waitFor();
+  await page.click("#records-save");
+  await page.locator(".records-record-head h2", { hasText: "Duffel" }).waitFor();
+  await page.locator("#records-count", { hasText: "11 records" }).waitFor();
+  // Edited: only the key that changed is sent, with the record's ETag.
+  await page.click("#records-edit");
+  await page.locator("#records-edit-label-0").waitFor();
+  const sent = page.waitForRequest((r) => r.method() === "PATCH" && !r.url().includes("dry=true"));
+  await page.fill("#records-edit-label-0", "Duffel-Centrum");
+  await page.locator("#records-edit-label-0").blur();
+  await page.click("#records-save");
+  const patch = await sent;
+  assert.deepEqual(patch.postDataJSON(), { label: "Duffel-Centrum" });
+  assert.ok(patch.headers()["if-match"], "the ETag goes with the change");
+  await page.locator(".records-record-head h2", { hasText: "Duffel-Centrum" }).waitFor();
+  // Someone else saves the record meanwhile: a dialog shows theirs against mine.
+  await page.click("#records-edit");
+  await page.locator("#records-edit-code-0").waitFor();
+  const url = base + "/ds/api/v1/Station/" + encodeURIComponent(EX + "DUF");
+  const r = await fetch(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: "DFL" }) });
+  assert.equal(r.status, 200);
+  await page.fill("#records-edit-code-0", "DFF");
+  await page.locator("#records-edit-code-0").blur();
+  await page.click("#records-save");
+  const dialog = page.locator("dialog.records-conflict");
+  await dialog.waitFor();
+  assert.match((await dialog.innerText()).replace(/\s+/g, " "), /code DFL DFF/);
+  await dialog.locator("button", { hasText: "Keep mine" }).click();
+  await page.locator("#records-edit").waitFor(); // the record again, saved
+  assert.equal((await (await fetch(url + "?f=json")).json()).code, "DFF");
+  // Deleted, after saying what links to it.
+  await page.click("#records-edit");
+  await page.click("#records-delete");
+  await page.locator("#confirm-dialog", { hasText: "No other resource links to this record." }).waitFor();
+  await page.click("#confirm-ok");
+  await page.locator("#records-count", { hasText: "10 records" }).waitFor();
+  assert.equal((await fetch(url + "?f=json")).status, 404);
+});
+
+test("Records: a reference is picked by name, and the server's problems show at their fields", async (t) => {
+  const page = await open(t);
+  // The shapes of the sample network ask nothing more, so the check's answer is the server's 422 as a shape would give it.
+  await page.route(/\/ds\/api\/v1\/Section\/[^?]+\?dry=true/, (route) => route.fulfill({
+    status: 422, contentType: "application/problem+json",
+    body: JSON.stringify({ title: "Not valid", errors: [{ key: "maxSpeed", value: 900, message: "At most 350", constraint: "sh:maxInclusive" }] }),
+  }));
+  await page.goto(base + "/$/ui/records/ds?class=Section&iri=" + encodeURIComponent(EX + "S07"));
+  await page.click("#records-edit");
+  const to = page.locator("#records-edit-to-0");
+  await to.waitFor();
+  assert.equal(await to.inputValue(), "Liège-Guillemins");
+  await to.fill("Leu");
+  await page.locator("#records-edit-to-0-list option[value='Leuven']").waitFor({ state: "attached" });
+  const checked = page.waitForRequest((r) => r.method() === "PATCH" && r.url().includes("dry=true"));
+  await to.fill("Leuven");
+  assert.deepEqual((await checked).postDataJSON(), { to: EX + "LV" });
+  await page.fill("#records-edit-maxSpeed-0", "900");
+  await page.locator("#records-edit-maxSpeed-0").blur();
+  await page.locator('.records-edit-field[data-key="maxSpeed"] .records-edit-problem', { hasText: "At most 350" }).waitFor();
+  assert.match(await page.locator(".records-edit-status").innerText(), /Fix the fields/);
+  // Left without saving: the record is as it was.
+  await page.click("text=Cancel");
+  await page.locator("#records-edit").waitFor();
+  assert.match(await page.locator("#records-record").innerText(), /Liège-Guillemins/);
+});
