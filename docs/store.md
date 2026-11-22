@@ -107,7 +107,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   a number are cast as the evaluator casts: towards zero to an integer, and a double to the
   shortest decimal that reads back as it. `xsd:decimal` keeps the text of its argument, as
   Jena's: `7` of the integer 7, `1500.0` of the double 1500; a whole decimal argument (`3` or
-  `3.0`) stays with the evaluator, and so does `xsd:double`, which keeps the text too. Dictionary literals
+  `3.0`) stays with the evaluator, and so does `xsd:double`, which keeps the text too. `IF`
+  and `COALESCE` are computed too: the condition of `IF` is a comparison of such values, `!`,
+  `&&`, `||` (with SPARQL's errors) or `BOUND`, and only the branch taken is computed. Their
+  branches may be numbers (inline ids) or any term the string kernels make
+  (`IF(?q > 50, "big", "small")`); a cast to `xsd:decimal` in a branch keeps its text there
+  too. Dictionary literals
   (`1.5E2`), a double result that is not finite, overflow, decimal products with more than 18
   fraction digits (they are exact on 256 bits otherwise), decimal quotients that don't end
   within 18 fraction digits (`1 / 3`: the evaluator's 24 digits are its own literal), dates
