@@ -295,7 +295,8 @@ impl Eval<'_> {
                 column.resize(rows, id);
                 false
             }
-            // Strings and IRIs (`STR`, `CONCAT`, `IRI`): a term a row, given its id.
+            // Strings and IRIs (`STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT`, `REPLACE`): a term a
+            // row, given its id.
             e if crate::idstring::computable(e) => {
                 let kernel = crate::idstring::compile(e, &t, self.snapshot)?;
                 // The value depends only on the columns the expression reads: with one or
