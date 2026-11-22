@@ -1,6 +1,6 @@
 #[cfg(feature = "sparql-12")]
 use crate::ExpressionTriple;
-use crate::dataset::{ExpressionTerm, decimal_divide};
+use crate::dataset::{ExpressionTerm, decimal_divide, decimal_multiply};
 use md5::{Digest, Md5};
 use oxiri::Iri;
 use oxrdf::vocab::{rdf, xsd};
@@ -408,9 +408,9 @@ pub fn build_expression_evaluator<'a, C: ExpressionEvaluatorContext<'a>>(
                     NumericBinaryOperands::Integer(v1, v2) => {
                         ExpressionTerm::IntegerLiteral(v1.checked_mul(v2)?)
                     }
-                    NumericBinaryOperands::Decimal(v1, v2) => {
-                        ExpressionTerm::DecimalLiteral(v1.checked_mul(v2)?)
-                    }
+                    // tripletrail: as Jena, exact (`oxsdatatypes` refuses a product with more
+                    // than 18 fraction digits).
+                    NumericBinaryOperands::Decimal(v1, v2) => decimal_multiply(v1, v2)?,
                     #[cfg(feature = "sep-0002")]
                     _ => return None,
                 })

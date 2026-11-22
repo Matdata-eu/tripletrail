@@ -322,3 +322,45 @@ fn decimal_division_keeps_24_fraction_digits_as_jena() {
     );
     assert_eq!(r, ["\"0.333333333333333333333333\""]);
 }
+
+/// Decimal products as Jena (`BigDecimal.multiply`): exact, also past the 18 fraction digits the
+/// evaluator computes at, where it used to give an error (no value).
+#[test]
+fn decimal_products_are_exact_as_jena() {
+    let engine = Engine::new_tripletrail();
+    let d = |s: &str| format!("\"{s}\"^^<http://www.w3.org/2001/XMLSchema#decimal>");
+    for (expression, expected) in [
+        ("0.5 * 0.5", d("0.25")),
+        ("0.1234567891 * 0.123456789", d("0.0152415787625361999")),
+        ("-0.000000001 * 0.0000000001", d("-0.0000000000000000001")),
+        (
+            "0.000000000000000001 * 0.000000000000000001",
+            d("0.000000000000000000000000000000000001"),
+        ),
+        (
+            "123456789.123456789 * 3.0000000001",
+            d("370370367.3827160459123456789"),
+        ),
+        (
+            "12345678901234567890.5 * 0.0000000001",
+            d("1234567890.12345678905"),
+        ),
+        ("2 * 0.25", d("0.5")),
+        // A long product is still a number: arithmetic reads it at 18 fraction digits.
+        ("(0.1234567891 * 0.123456789) + 0", d("0.0152415787625362")),
+    ] {
+        let r = column(&engine, &format!("SELECT ({expression} AS ?r) {{}}"));
+        assert_eq!(r, [expected.as_str()], "{expression}");
+    }
+    engine
+        .load(
+            RdfFormat::Turtle,
+            "<urn:p> <urn:ic> 0.1234567891 ; <urn:len> 0.123456789 .".as_bytes(),
+        )
+        .unwrap();
+    let r = column(
+        &engine,
+        "SELECT (?ic * ?len AS ?r) { <urn:p> <urn:ic> ?ic ; <urn:len> ?len }",
+    );
+    assert_eq!(r, [d("0.0152415787625361999")]);
+}
