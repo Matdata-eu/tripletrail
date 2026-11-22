@@ -120,10 +120,16 @@ enum Command {
         /// Keep WKT literals only in binary form when their text can be written back from
         /// it exactly, which saves about the size of their text on disk; results show the
         /// same text, but queries that output many WKT texts are slower (each is written
-        /// back: about 0.5 µs per geometry); spatial work is unaffected. Kept with the dataset
+        /// back: about 2 µs per geometry); spatial work is unaffected. The default for a new
+        /// dataset (#152); this turns it on for an existing one. Kept with the dataset
         /// (TripleTrail storage only).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "keep_wkt_text")]
         render_wkt: bool,
+        /// Keep the text of every WKT literal, as well as its geometry, instead of
+        /// `--render-wkt`: for a new dataset, or to turn it off on an existing one (literals
+        /// already in binary form stay so until a checkpoint rewrites them).
+        #[arg(long)]
+        keep_wkt_text: bool,
         /// Files (format from the extension: .ttl, .nt, .nq, .trig, .rdf..., and .parquet
         /// for GeoParquet).
         files: Vec<PathBuf>,
@@ -2907,17 +2913,31 @@ fn run() -> Result<()> {
             parquet,
             memory_limit,
             render_wkt,
+            keep_wkt_text,
             files,
         } => {
             if let Some(bytes) = memory_limit {
                 tripletrail::store::Store::set_memory_limit(bytes);
             }
+            // A new dataset keeps WKT in binary form unless --keep-wkt-text (#152); an
+            // existing one keeps its setting unless a flag changes it.
+            let new = !location.join(&dataset).join("FORMAT").exists();
             let engine = open(Some(&location), &dataset, store)?;
-            if render_wkt {
-                match engine.store() {
-                    tripletrail::store::Dataset::TripleTrail(s) => s.set_render_wkt(true)?,
-                    _ => return Err("--render-wkt needs TripleTrail storage".into()),
+            let set = if keep_wkt_text {
+                Some(false)
+            } else if render_wkt || new {
+                Some(true)
+            } else {
+                None
+            };
+            match (engine.store(), set) {
+                (tripletrail::store::Dataset::TripleTrail(s), Some(on)) => s.set_render_wkt(on)?,
+                (_, None) => {}
+                (_, Some(_)) if render_wkt || keep_wkt_text => {
+                    return Err("--render-wkt and --keep-wkt-text need TripleTrail storage".into());
                 }
+                // Another storage keeps WKT as it does.
+                (_, Some(_)) => {}
             }
             for file in &files {
                 load_file_with(&engine, file, graph.as_deref(), &parquet)?;
