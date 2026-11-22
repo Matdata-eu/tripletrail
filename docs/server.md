@@ -206,7 +206,7 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
 - `--executor` (`TRIPLETRAIL_EXECUTOR`, `spareval` by default) picks what answers a `SELECT`
   whose pattern runs on term ids (#11). `ids` answers it straight from the id tables (triple
   patterns, joins, `OPTIONAL`, `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, the filters on ids,
-  `BIND` and `SELECT (expr AS ?v)` of copies, constants, arithmetic, `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT` and `REPLACE`, `VALUES`, sub-selects (with `DISTINCT`, an order and a slice), the `GROUP BY` counts and sums kept as ids, `ORDER BY` of variables and of the expressions the kernels compute, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
+  `BIND` and `SELECT (expr AS ?v)` of copies, constants, arithmetic with division, `ABS`, `CEIL`, `FLOOR`, `ROUND`, `xsd:integer` and `xsd:decimal` casts, `IF`, `COALESCE`, `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT` and `REPLACE` (the full list and its limits are in [the store](store.md)), `VALUES`, sub-selects (with `DISTINCT`, an order and a slice), the `GROUP BY` counts and sums kept as ids, `ORDER BY` of variables and of the expressions the kernels compute, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
   only the terms of the answer, each once, on the query threads; anything else still goes to
   the evaluator. SPARQL JSON, CSV and TSV answers are written from the ids: each distinct term
   is written once and copied into the rows where it occurs (the bytes are those of the usual
