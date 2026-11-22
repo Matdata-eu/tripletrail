@@ -27,7 +27,7 @@ The CRS argument of `geof:transform` may be an IRI, or an `xsd:anyURI` or string
 one (as Jena accepts).
 
 Geometry literals can be `geo:wktLiteral`, `geo:geoJSONLiteral`, `geo:gmlLiteral` (GML 3.2 simple
-features and GML 2 coordinates, CRS from `srsName`), `geo:kmlLiteral` or an H3 cell list. The
+features and GML 2 coordinates, CRS from `srsName`, which must be an IRI or `EPSG:n`), `geo:kmlLiteral` or an H3 cell list. The
 spatial index covers them all, on any predicate.
 
 ### DGGS
