@@ -1,4 +1,5 @@
-//! `BIND`s of strings and IRIs on term ids (#11): `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT`
+//! `BIND`s of strings and IRIs on term ids (#11): `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT`,
+//! `UCASE`, `LCASE`, `STRLEN`, `SUBSTR` (integer constants), `STRBEFORE`, `STRAFTER`
 //! and `REPLACE` (a constant pattern and flags) of columns,
 //! constants and numbers the value kernels compute, with the evaluator's rules
 //! (`spareval::expression`): `STR` of an IRI or a literal is a simple literal of its text,
@@ -10,7 +11,7 @@
 //! the evaluator answers the query.
 
 use oxigraph::model::vocab::xsd;
-use oxigraph::model::{Literal, NamedNode, Term};
+use oxigraph::model::{BaseDirection, Literal, NamedNode, Term};
 use regex::{Regex, RegexBuilder};
 use spargebra::algebra::{Expression, Function};
 use std::cell::RefCell;
@@ -36,8 +37,17 @@ pub(crate) fn computable(e: &Expression) -> bool {
     match e {
         Expression::FunctionCall(F::Str | F::Iri, args) => args.len() == 1 && arg(&args[0]),
         Expression::FunctionCall(F::Concat, args) => args.iter().all(arg),
-        Expression::FunctionCall(F::StrLang | F::StrDt, args) => {
+        Expression::FunctionCall(F::StrLang | F::StrDt | F::StrBefore | F::StrAfter, args) => {
             args.len() == 2 && args.iter().all(arg)
+        }
+        Expression::FunctionCall(F::UCase | F::LCase | F::StrLen, args) => {
+            args.len() == 1 && arg(&args[0])
+        }
+        // A start and length that are integer constants.
+        Expression::FunctionCall(F::SubStr, args) => {
+            matches!(args.len(), 2 | 3)
+                && arg(&args[0])
+                && args[1..].iter().all(|a| integer(a).is_some())
         }
         // A pattern and flags that are constants, compiled once.
         Expression::FunctionCall(F::Replace, args) => {
@@ -240,6 +250,69 @@ pub(crate) fn compile<'k>(
                 }))
             })
         }
+        Expression::FunctionCall(F::UCase | F::LCase, args) if args.len() == 1 => {
+            let upper = matches!(e, Expression::FunctionCall(F::UCase, _));
+            let a = compile(&args[0], t, snapshot)?;
+            Box::new(move |row| {
+                Some(string_and_language(a(row)?).map(|(text, tag)| {
+                    let text = if upper {
+                        text.to_uppercase()
+                    } else {
+                        text.to_lowercase()
+                    };
+                    plain(text, tag)
+                }))
+            })
+        }
+        Expression::FunctionCall(F::StrLen, args) if args.len() == 1 => {
+            let a = compile(&args[0], t, snapshot)?;
+            Box::new(move |row| {
+                Some(match string_and_language(a(row)?) {
+                    Ok((text, _)) => {
+                        let n = i64::try_from(text.chars().count()).map_err(|_| ());
+                        n.map(|n| Literal::from(n).into())
+                    }
+                    Err(()) => Err(()),
+                })
+            })
+        }
+        Expression::FunctionCall(F::SubStr, args) if matches!(args.len(), 2 | 3) => {
+            let start = integer(&args[1])?;
+            let length = match args.get(2) {
+                Some(l) => Some(integer(l)?),
+                None => None,
+            };
+            let a = compile(&args[0], t, snapshot)?;
+            Box::new(move |row| {
+                Some(string_and_language(a(row)?).and_then(|(text, tag)| {
+                    let part = substring(&text, start, length).ok_or(())?;
+                    Ok(plain(part.to_owned(), tag))
+                }))
+            })
+        }
+        Expression::FunctionCall(F::StrBefore | F::StrAfter, args) if args.len() == 2 => {
+            let before = matches!(e, Expression::FunctionCall(F::StrBefore, _));
+            let (a, b) = (
+                compile(&args[0], t, snapshot)?,
+                compile(&args[1], t, snapshot)?,
+            );
+            Box::new(move |row| {
+                let a = string_and_language(a(row)?);
+                let b = string_and_language(b(row)?);
+                let (Ok((text, tag)), Ok((needle, needle_tag))) = (a, b) else {
+                    return Some(Err(()));
+                };
+                // The second argument's language, if any, is the first's.
+                if needle_tag.is_some() && needle_tag != tag {
+                    return Some(Err(()));
+                }
+                Some(Ok(match text.find(needle.as_str()) {
+                    Some(at) if before => plain(text[..at].to_owned(), tag),
+                    Some(at) => plain(text[at + needle.len()..].to_owned(), tag),
+                    None => Literal::new_simple_literal("").into(),
+                }))
+            })
+        }
         // Only the branch taken is computed, as in the evaluator.
         Expression::If(c, a, b) => {
             let (c, a, b) = (
@@ -307,6 +380,65 @@ fn constant(e: Option<&Expression>) -> Option<Option<&str>> {
         }
         _ => None,
     }
+}
+
+/// A language tag with its base direction, if any.
+type Language = Option<(String, Option<BaseDirection>)>;
+
+/// A string literal's text and language (the evaluator's `to_string_and_language`), or
+/// `Err(())` for any other term or an error.
+fn string_and_language(t: Result<Term, ()>) -> Result<(String, Language), ()> {
+    let Ok(Term::Literal(l)) = t else {
+        return Err(());
+    };
+    match l.destruct() {
+        (text, None, tag, direction) => Ok((text, tag.map(|tag| (tag, direction)))),
+        (text, Some(d), None, _) if d.as_ref() == xsd::STRING => Ok((text, None)),
+        _ => Err(()),
+    }
+}
+
+/// A simple or language-tagged literal of `text` (the evaluator's `build_plain_literal`).
+fn plain(text: String, language: Language) -> Term {
+    match language {
+        Some((tag, Some(direction))) => {
+            Literal::new_directional_language_tagged_literal_unchecked(text, tag, direction).into()
+        }
+        Some((tag, None)) => Literal::new_language_tagged_literal_unchecked(text, tag).into(),
+        None => Literal::new_simple_literal(text).into(),
+    }
+}
+
+/// An `xsd:integer` constant, as the evaluator reads it.
+fn integer(e: &Expression) -> Option<i64> {
+    match e {
+        Expression::Literal(l) if l.datatype() == xsd::INTEGER => l
+            .value()
+            .parse::<oxsdatatypes::Integer>()
+            .ok()
+            .map(i64::from),
+        Expression::UnaryMinus(e) => integer(e)?.checked_neg(),
+        _ => None,
+    }
+}
+
+/// `SUBSTR` on character positions, from 1 (the evaluator's `substring`).
+fn substring(source: &str, start: i64, length: Option<i64>) -> Option<&str> {
+    let start = start.checked_sub(1)?;
+    let end = match length {
+        Some(length) => Some(start.checked_add(length)?),
+        None => None,
+    };
+    let mut start_position = None;
+    for (position, (byte_position, _)) in source.char_indices().enumerate() {
+        let position = i64::try_from(position).ok()?;
+        if start <= position && end.is_none_or(|end| position < end) {
+            start_position.get_or_insert(byte_position);
+        } else if let Some(start_position) = start_position {
+            return Some(&source[start_position..byte_position]);
+        }
+    }
+    Some(start_position.map_or("", |start_position| &source[start_position..]))
 }
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";

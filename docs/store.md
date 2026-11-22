@@ -192,12 +192,17 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   doesn't fit an inline id gets one made up for the query, which doesn't order, so an
   `ORDER BY` of a computed value is left to the evaluator. `STR`, `CONCAT`, `IRI`,
   `STRLANG`, `STRDT` and `REPLACE` (with a pattern and flags without variables, such as
-  `STR(ex:)`, compiled once) of
+  `STR(ex:)`, compiled once), `UCASE`, `LCASE`, `STRLEN`, `SUBSTR` (with an integer start
+  and length), `STRBEFORE` and `STRAFTER` of
   columns, constants and such numbers are computed the same way (`idstring`), once per
   distinct value of the one or two columns they read, with the evaluator's rules: `STR` of an
   IRI or a literal is a simple literal of its text, `CONCAT` keeps a language every part
-  shares, `REPLACE` keeps the language of its text, and `IRI` of an absolute IRI string
-  without dot segments is that IRI. A direction-tagged string, a string `IRI` would resolve
+  shares, `REPLACE`, `UCASE`, `LCASE` and `SUBSTR` keep the language (and direction) of their
+  text, `STRBEFORE` and `STRAFTER` too when they find the second string (a language the first
+  doesn't have is an error, no match a simple empty string), `STRLEN` counts characters, and
+  `IRI` of an absolute IRI string
+  without dot segments is that IRI. A direction-tagged string in `CONCAT` or
+  `REPLACE`, a string `IRI` would resolve
   against a base, and `STRDT` to an XML Schema type other than `xsd:string` (whose lexical
   form the store would not keep) leave the query to the evaluator. `VALUES` is a table of the ids of
   its terms (`UNDEF` an unbound cell), and a sub-select's projection the columns it keeps, so
