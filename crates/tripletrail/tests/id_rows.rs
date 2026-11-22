@@ -352,8 +352,117 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s WHERE { ?s ex:label ?l } ORDER BY UCASE(?l) ?s",
         false,
     ),
+    // Strings and IRIs (`STR`, `CONCAT`, `IRI`), as terms of their own; blank nodes and other
+    // literals errors where the evaluator's are.
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(STR(?o) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(STR(?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:r ?b BIND(STR(?b) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(CONCAT(?l, \"-\", STR(?s)) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(CONCAT(?l, ?l) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(CONCAT(?l, \"x\"@en) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(CONCAT(\"v:\", ?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?i WHERE { ?s ex:p ?o BIND(IRI(CONCAT(STR(?o), \"/part\")) AS ?i) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?i WHERE { ?s ex:n ?x BIND(IRI(CONCAT(\"http://example.org/n/\", STR(?x * 2))) AS ?i) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?i WHERE { ?s ex:p ?o BIND(IRI(?o) AS ?i) ?i ex:q ?v }",
+        true,
+    ),
+    (
+        "SELECT ?s ?i WHERE { ?s ex:label ?l BIND(IRI(?l) AS ?i) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:label ?l } BIND(CONCAT(STR(?o), ?l) AS ?y) }",
+        false,
+    ),
+    // (The labels hold a direction-tagged string, whose concatenation is the evaluator's;
+    // without it, on ids.)
+    (
+        "SELECT ?s ?y ?z WHERE { ?s ex:label ?l BIND(CONCAT(STR(?l), \"x\"@en) AS ?y) BIND(CONCAT(\"a\"@en, \"b\"@en, ?y) AS ?z) BIND(CONCAT(\"a\"@en, \"b\"@en) AS ?w) }",
+        true,
+    ),
+    (
+        "SELECT DISTINCT ?y WHERE { ?s ex:label ?l BIND(STR(?l) AS ?y) }",
+        true,
+    ),
+    // `REPLACE` with a constant pattern (and flags), `STRLANG`, `STRDT`.
+    (
+        "SELECT ?s ?i WHERE { ?s ex:p ?o BIND(IRI(REPLACE(STR(?o), \"example\", \"other\")) AS ?i) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(REPLACE(STR(?o), \"^(.*)/([a-z]+)$\", \"$2-$1\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, \"A\", \"_\", \"i\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, \".\", \"*\", \"q\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, \"a\", ?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, \"a\", \"b\", \"z\") AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, STR(?x), \"b\") AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(STRLANG(STR(?x), \"en\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(STRLANG(STR(?x), \"not a tag\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(STRDT(CONCAT(\"POINT(\", STR(?o), \")\"), <http://www.opengis.net/ont/geosparql#wktLiteral>) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(STRDT(STR(?x), ex:type) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(STRDT(CONCAT(\"0\", STR(?x)), xsd:integer) AS ?y) }",
+        false,
+    ),
     // Left to the evaluator: an order on a computed value, values the ids don't decide, a
-    // division, a string function, an overflow.
+    // division, a string function the kernels don't have, an overflow.
     (
         "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x * 2 AS ?y) } ORDER BY DESC(?y) ?s LIMIT 9",
         false,

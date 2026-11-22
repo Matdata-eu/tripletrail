@@ -159,7 +159,15 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   expression itself, under the `BIND` (`BIND(?a * ?q AS ?g) FILTER(?g > 400000)` on 133k
   orders 222 → 49 ms; a select expression over a join 197 → 59 ms). A computed double that
   doesn't fit an inline id gets one made up for the query, which doesn't order, so an
-  `ORDER BY` of a computed value is left to the evaluator. `VALUES` is a table of the ids of
+  `ORDER BY` of a computed value is left to the evaluator. `STR`, `CONCAT`, `IRI`,
+  `STRLANG`, `STRDT` and `REPLACE` (with a constant pattern and flags, compiled once) of
+  columns, constants and such numbers are computed the same way (`idstring`), once per
+  distinct value of the one or two columns they read, with the evaluator's rules: `STR` of an
+  IRI or a literal is a simple literal of its text, `CONCAT` keeps a language every part
+  shares, `REPLACE` keeps the language of its text, and `IRI` of an absolute IRI string
+  without dot segments is that IRI. A direction-tagged string, a string `IRI` would resolve
+  against a base, and `STRDT` to an XML Schema type other than `xsd:string` (whose lexical
+  form the store would not keep) leave the query to the evaluator. `VALUES` is a table of the ids of
   its terms (`UNDEF` an unbound cell), and a sub-select's projection the columns it keeps, so
   the groups a count pass reads back from a table of ids are answered from that table. A
   sub-select's `DISTINCT`, `REDUCED`, order of variables and slice (under an order; a slice
@@ -168,12 +176,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `2.5`) gets an id made up for the query, which joins only itself; a filter that would have
   to compare it by value (`=`, `IN`, `isLiteral`, `DATATYPE`) leaves the query to the
   evaluator. Before any work, the plan checks that each `BIND` expression is one the kernels
-  compute, so a query with `STR` or a division doesn't run its patterns on ids first. An
+  compute, so a query with `UCASE` or a division doesn't run its patterns on ids first. An
   order on an expression the kernels compute (`ORDER BY DESC(?q * 3)`) orders a column of its
   values, computed as a `BIND` would be (133k orders, `LIMIT 10`: 117 → 15 ms). Rows with
   equal keys may come in another order than under `spareval`. A `LIMIT`
   without an order, other order expressions, columns the ids don't order, an expression the kernels
-  don't compute (`STR`, a division), and every other operator (`GROUP BY` beyond the count
+  don't compute (`UCASE`, a division), and every other operator (`GROUP BY` beyond the count
   shortcuts, property paths outside the tables) leave the query to the evaluator, which then
   runs it as before.
 - **Geometries.** Geometry literals (`geo:wktLiteral`, `geoJSONLiteral`, `gmlLiteral`,

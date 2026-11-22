@@ -23,6 +23,7 @@ mod equality;
 pub mod geoparquet;
 pub mod hints;
 mod hnsw;
+mod idstring;
 mod idtree;
 mod idvalue;
 mod measures;
