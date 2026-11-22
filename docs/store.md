@@ -82,7 +82,10 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   without `GROUP BY`: IRIs and simple strings compared by their dictionary keys, integers and
   booleans by value; other values (blank nodes, language strings, other typed literals, mixed
   literal kinds) leave the group to the evaluator. Under `ORDER BY` of counts with `LIMIT k`,
-  only the first k groups are kept, before their other aggregates are computed. BSBM 1M:
+  only the first k groups are kept, before their other aggregates are computed. A `GROUP BY`
+  over `BIND`s with few distinct inputs (`BIND(?q * 2 AS ?k) … GROUP BY ?k`) counts the rows
+  per input first and computes the expression once per input, under `--executor ids` too
+  (#11). BSBM 1M:
   `group-by-complex-aggregate` 54 → 16 ms, `group-by-implicit-string-min` 11 → 4 ms.
   Inline integers, decimals, dates and date-times (#125) are read as values from their ids
   (`crates/tripletrail/src/idvalue.rs`, #170): `<`, `<=`, `>`, `>=` and `=` between them and

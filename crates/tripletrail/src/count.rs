@@ -674,6 +674,18 @@ impl Pass<'_> {
                         ],
                     };
                 }
+                // Over a `BIND`, counting the rows per distinct input first computes the
+                // expression once per input value, not once per row: under the id executor
+                // the grouped counts below would compute it for every row (#11).
+                let computed = matches!(*inner, G::Extend { .. })
+                    || matches!(&*inner, G::Filter { inner, .. } if matches!(**inner, G::Extend { .. }));
+                if computed
+                    && crate::executor_ids()
+                    && let Some(group) = self.eager_group(&inner, &variables, &aggregates)
+                {
+                    self.done += 1;
+                    return group;
+                }
                 // Without keys, counts are answered above; MIN, MAX and SAMPLE here.
                 if (!variables.is_empty() || count_aggregates(&aggregates).is_none())
                     && let Some(values) =

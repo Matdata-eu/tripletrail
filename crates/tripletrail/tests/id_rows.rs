@@ -797,6 +797,20 @@ fn binds_on_ids_are_the_evaluators() {
 /// Groups a count pass reads back from a table of ids (1,024 or more): the id executor answers
 /// the query from that table (#11), with the evaluator's answers.
 const GROUPS: &[(&str, bool)] = &[
+    // Over a `BIND` with few distinct inputs: counted per input first, the expression then
+    // computed per input (#11).
+    (
+        "SELECT ?k (COUNT(*) AS ?n) WHERE { ?o ex:q ?q BIND(?q * 2 AS ?k) } GROUP BY ?k",
+        false,
+    ),
+    (
+        "SELECT ?k (SUM(?q) AS ?t) (MAX(?q) AS ?m) WHERE { ?o ex:q ?q BIND(?q - 3 AS ?k) FILTER(?k > 1) } GROUP BY ?k",
+        false,
+    ),
+    (
+        "SELECT ?c (COUNT(DISTINCT ?k) AS ?n) WHERE { ?o ex:by ?c ; ex:q ?q BIND(?q / 2 AS ?k) } GROUP BY ?c",
+        false,
+    ),
     (
         "SELECT ?c (COUNT(*) AS ?n) WHERE { ?o ex:by ?c } GROUP BY ?c",
         true,
