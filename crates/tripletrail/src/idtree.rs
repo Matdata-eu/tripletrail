@@ -1530,12 +1530,12 @@ fn lang_matches(tag: &str, range: &str) -> bool {
 }
 
 /// Whether `e` is made of what [`crate::idvalue::compile`] reads: variables, literals,
-/// `+ - *` and the number and date functions it knows.
+/// `+ - * /` and the number and date functions it knows.
 pub(crate) fn value_expression(e: &Expression) -> bool {
     use Expression as E;
     match e {
         E::Variable(_) | E::Literal(_) => true,
-        E::Add(a, b) | E::Subtract(a, b) | E::Multiply(a, b) => {
+        E::Add(a, b) | E::Subtract(a, b) | E::Multiply(a, b) | E::Divide(a, b) => {
             value_expression(a) && value_expression(b)
         }
         E::UnaryMinus(a) => value_expression(a),

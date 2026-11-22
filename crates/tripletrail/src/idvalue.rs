@@ -112,11 +112,12 @@ pub(crate) fn compile<'k>(
             let value = constant(l, snapshot)?;
             Box::new(move |_| Some(Ok(value)))
         }
-        E::Add(a, b) | E::Subtract(a, b) | E::Multiply(a, b) => {
+        E::Add(a, b) | E::Subtract(a, b) | E::Multiply(a, b) | E::Divide(a, b) => {
             let op = match e {
                 E::Add(..) => Op::Add,
                 E::Subtract(..) => Op::Subtract,
-                _ => Op::Multiply,
+                E::Multiply(..) => Op::Multiply,
+                _ => Op::Divide,
             };
             let (a, b) = (compile(a, t, snapshot)?, compile(b, t, snapshot)?);
             Box::new(move |row| {
@@ -124,6 +125,13 @@ pub(crate) fn compile<'k>(
                     (Ok(x), Ok(y)) => (x, y),
                     _ => return Some(Err(())),
                 };
+                // A decimal or integer divided by zero: an error, as the evaluator's.
+                if matches!(op, Op::Divide)
+                    && matches!(y, Value::Integer(0) | Value::Decimal(0))
+                    && !matches!(x, Value::Double(_))
+                {
+                    return Some(Err(()));
+                }
                 arithmetic(op, x, y).map(Ok)
             })
         }
@@ -310,6 +318,7 @@ enum Op {
     Add,
     Subtract,
     Multiply,
+    Divide,
 }
 
 #[derive(Clone, Copy)]
@@ -336,13 +345,31 @@ fn arithmetic(op: Op, x: Value, y: Value) -> Option<Value> {
                 Op::Add => a + b,
                 Op::Subtract => a - b,
                 Op::Multiply => a * b,
+                Op::Divide => a / b,
             };
             r.is_finite().then_some(Value::Double(r))
+        }
+        // A quotient of integers or decimals is a decimal, the evaluator's
+        // (`spareval::decimal_divide`, as Jena: exact, else 24 fraction digits, which the
+        // evaluator writes as a literal of its own and the kernels give up on). By zero is an
+        // error, which the caller tells apart.
+        (Value::Integer(_) | Value::Decimal(_), Value::Integer(_) | Value::Decimal(_))
+            if matches!(op, Op::Divide) =>
+        {
+            let (a, b) = (decimal(x)?, decimal(y)?);
+            let dec = |d: i128| oxsdatatypes::Decimal::from_be_bytes(d.to_be_bytes());
+            match spareval::decimal_divide(dec(a), dec(b))? {
+                spareval::ExpressionTerm::DecimalLiteral(q) => {
+                    Some(Value::Decimal(i128::from_be_bytes(q.to_be_bytes())))
+                }
+                _ => None,
+            }
         }
         (Value::Integer(a), Value::Integer(b)) => Some(Value::Integer(match op {
             Op::Add => a.checked_add(b)?,
             Op::Subtract => a.checked_sub(b)?,
             Op::Multiply => a.checked_mul(b)?,
+            Op::Divide => unreachable!(),
         })),
         (Value::Integer(_) | Value::Decimal(_), Value::Integer(_) | Value::Decimal(_)) => {
             let (a, b) = (decimal(x)?, decimal(y)?);
@@ -350,6 +377,7 @@ fn arithmetic(op: Op, x: Value, y: Value) -> Option<Value> {
                 Op::Add => a.checked_add(b)?,
                 Op::Subtract => a.checked_sub(b)?,
                 Op::Multiply => scaled_product(a, b)?,
+                Op::Divide => unreachable!(),
             }))
         }
         _ => None,

@@ -412,6 +412,35 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT DISTINCT ?y WHERE { ?s ex:label ?l BIND(STR(?l) AS ?y) }",
         true,
     ),
+    // Division: of integers and decimals a decimal (exact, or the evaluator's 24 digits, which
+    // give up), of doubles a double, by zero an error; in filters and orders too.
+    ("SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x / 2 AS ?y) }", true),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:d ?x BIND(ROUND(?x * 1000) / 1000 AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x / 3 AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x / (?x - ?x) AS ?y) }",
+        true,
+    ),
+    ("SELECT ?s ?y WHERE { ?s ex:f ?x BIND(?x / 4 AS ?y) }", true),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:f ?x BIND(?x / 0 AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:d ?x ; ex:n ?n BIND(?x / ?n AS ?y) }",
+        false,
+    ),
+    ("SELECT ?s WHERE { ?s ex:n ?x FILTER(?x / 4 > 100) }", true),
+    (
+        "SELECT ?s ?x WHERE { ?s ex:n ?x } ORDER BY DESC(?x / 8) ?s LIMIT 7",
+        true,
+    ),
     // `REPLACE` with a constant pattern (and flags), `STRLANG`, `STRDT`.
     (
         "SELECT ?s ?i WHERE { ?s ex:p ?o BIND(IRI(REPLACE(STR(?o), \"example\", \"other\")) AS ?i) }",
@@ -506,7 +535,7 @@ const BINDS: &[(&str, bool)] = &[
         true,
     ),
     // Left to the evaluator: an order on a computed value, values the ids don't decide, a
-    // division, a string function the kernels don't have, an overflow.
+    // string function the kernels don't have, an overflow.
     (
         "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x * 2 AS ?y) } ORDER BY DESC(?y) ?s LIMIT 9",
         false,
@@ -517,10 +546,6 @@ const BINDS: &[(&str, bool)] = &[
     ),
     (
         "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(?x + 1 AS ?y) }",
-        false,
-    ),
-    (
-        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x / 2 AS ?y) }",
         false,
     ),
     (
