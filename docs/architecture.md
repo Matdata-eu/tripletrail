@@ -112,7 +112,8 @@ flowchart TB
 ### 2.2 Quad indexes
 - ✅ Eight permutations (SPOG, POSG, OSPG, GSPO, GPOS, GOSP, and PSOG / GPSO for predicate scans
   sorted by subject, #168), each an immutable segment of sorted
-  quads in blocks of 16, delta-varint encoded, plus a sorted write delta folded into new
+  quads in blocks of at most 64, each column bit-packed against the block's smallest value
+  (#169), plus a sorted write delta folded into new
   segments at 65,536 quads.
 - ✅ Exact counts for a pattern from the block index (two end blocks read), used by the cost
   model.

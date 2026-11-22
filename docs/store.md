@@ -27,10 +27,17 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   star), so neither side of a subject star is sorted first (#168). Plain scans and the SPARQL
   evaluator read POSG / GPOS as before. Stores saved with six permutations build the other two
   from SPOG when they open, and save them at the next checkpoint. Each one is an immutable segment of sorted quads cut into
-  blocks of 16 (32 in stores saved by earlier versions; they still open, and are rewritten with
-  16 at the next compaction). A block keeps its first quad as is; each later quad stores only how it differs
-  from the one before, as varints (the first column that changes, the gap in that column, then
-  the remaining columns). Writes go to a sorted delta of added and removed quads, kept in a
+  blocks of at most 64 (#169). The first quad of each block is kept as is in the block index,
+  which a lookup searches by binary search. A block stores each of the four columns on its own,
+  bit-packed with a frame of reference: the column's smallest value in the block, then each
+  value minus it in as many bits as the largest needs. Sorted quads share long prefixes, so the
+  leading columns of a block take a few bits or none, and any quad of a block is read without
+  decoding the ones before it. Segment files are format 4 (`OXGSSEG4`: the blocks first and the
+  sizes last, so a segment is written front to back while it is built, #218); format 3 has the
+  same blocks with the sizes first. Stores saved before #169 (varint-delta blocks of 16 or 32
+  quads, formats 1 and 2) still open: their segments are converted to column blocks as they are
+  read. Folding a delta into a segment copies the blocks it does not touch byte for byte and
+  re-encodes only the others (#213). Writes go to a sorted delta of added and removed quads, kept in a
   persistent ordered set (`imbl::OrdSet`): a snapshot (an open iterator) keeps its version for
   a reference count, and a write next to it copies only the path it changes. Once the delta
   holds 65,536 quads it is folded into new segments.
@@ -292,7 +299,9 @@ network builder needs no strings, is part of switching the engine over.
 
 ### Cheaper lookups
 
-A lookup with subject and predicate bound finds its block by binary search, then decodes the
+(History: this measured the varint-delta blocks used before #169; segments now use the
+bit-packed column blocks described under [Design](#design), which read any quad of a block
+directly.) A lookup with subject and predicate bound finds its block by binary search, then decodes the
 block from its first quad up to the match. That decoding was most of a lookup. Three changes:
 blocks of 16 quads instead of 32 (half the decoding per lookup), a decoder unrolled by the
 column that changes, and scans that take one reference count instead of four and skip the
