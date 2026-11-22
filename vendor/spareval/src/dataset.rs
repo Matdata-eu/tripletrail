@@ -817,6 +817,55 @@ pub fn decimal_lexical(value: Decimal) -> String {
     s
 }
 
+/// tripletrail: `a * b` on decimals as Jena multiplies them (`BigDecimal.multiply`): exact. A
+/// product that fits [`Decimal`] (18 fraction digits) is a decimal value; a longer one (up to 36
+/// fraction digits) is the literal with all its digits, as a long quotient is (see
+/// [`decimal_divide`]). `None` when the whole part of the product doesn't fit 128 bits.
+pub fn decimal_multiply(a: Decimal, b: Decimal) -> Option<ExpressionTerm> {
+    if let Some(p) = a.checked_mul(b) {
+        return Some(ExpressionTerm::DecimalLiteral(p));
+    }
+    let (ra, rb) = (
+        i128::from_be_bytes(a.to_be_bytes()),
+        i128::from_be_bytes(b.to_be_bytes()),
+    );
+    let negative = (ra < 0) != (rb < 0);
+    // The product of the scaled values is the product times 10^36.
+    let (high, low) = wide_mul(ra.unsigned_abs(), rb.unsigned_abs());
+    const E18: u128 = 1_000_000_000_000_000_000;
+    let mut limbs = [low as u64, (low >> 64) as u64, high as u64, (high >> 64) as u64];
+    let mut fraction = [0_u128; 2];
+    for part in fraction.iter_mut().rev() {
+        let mut rest = 0_u128;
+        for limb in limbs.iter_mut().rev() {
+            let current = (rest << 64) | u128::from(*limb);
+            *limb = (current / E18) as u64;
+            rest = current % E18;
+        }
+        *part = rest;
+    }
+    if limbs[2] != 0 || limbs[3] != 0 {
+        return None;
+    }
+    let whole = (u128::from(limbs[1]) << 64) | u128::from(limbs[0]);
+    let digits = format!("{:018}{:018}", fraction[0], fraction[1]);
+    let digits = digits.trim_end_matches('0');
+    let mut text = String::with_capacity(digits.len() + 42);
+    if negative {
+        text.push('-');
+    }
+    text.push_str(&whole.to_string());
+    text.push('.');
+    text.push_str(if digits.is_empty() { "0" } else { digits });
+    Some(match text.parse::<Decimal>() {
+        Ok(value) => ExpressionTerm::DecimalLiteral(value),
+        Err(_) => ExpressionTerm::OtherTypedLiteral {
+            value: text,
+            datatype: oxrdf::vocab::xsd::DECIMAL.into(),
+        },
+    })
+}
+
 /// Fraction digits Jena keeps in a decimal division that does not end (`XSDFuncOp`,
 /// `DIVIDE_PRECISION`).
 const DIVIDE_FRACTION_DIGITS: usize = 24;

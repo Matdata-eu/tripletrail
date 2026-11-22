@@ -3791,7 +3791,9 @@ same instant by their text: XSD leaves `2020-01-01T03:00:00` and `2020-01-01T02:
 unordered, which made a sort of such values panic. `NaN` sorts after every other number. A division of decimals or integers, `AVG` and `win:avg` give
 what Jena's `XSDFuncOp.decimalDivide` gives (#8): the exact quotient when it ends (`1 / 8` is
 `0.125`), else 24 digits after the point rounded half to even (`2 / 3` is
-`0.666666666666666666666667`). Arithmetic and comparisons read a decimal with more than 18
+`0.666666666666666666666667`). A product of decimals is exact, as Jena's `BigDecimal` product
+is (`0.1234567891 * 0.123456789` is `0.0152415787625361999`); it used to give no value past 18
+digits after the point. Arithmetic and comparisons read a decimal with more than 18
 digits after the point, computed or loaded, at 18 digits rounded half to even. [Conformance](conformance.md) lists the W3C test results.
 
 ### Configuration file

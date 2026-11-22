@@ -641,6 +641,21 @@ third,eighth,avg
 0.666666666666666666666667,0.125,1.333333333333333333333333
 ```
 
+A product of decimals is exact, as Jena's is, also when it has more than 18 digits after the
+point:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/kg/sparql -H 'Accept: text/csv' \
+  --data-urlencode 'query=SELECT (0.1234567891 * 0.123456789 AS ?product) WHERE {}'
+```
+
+<!-- test: output -->
+```text
+product
+0.0152415787625361999
+```
+
 `ORDER BY` over dates and times with and without a timezone reads a value without one as UTC,
 as Jena's F&O comparison does, where XSD would leave `2020-01-01T03:00:00` and
 `2020-01-01T02:00:00+02:00` unordered; values at the same instant come in the order of their
