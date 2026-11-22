@@ -170,7 +170,8 @@ window.TripleTrailRecords = (function () {
     const sparql = el("button", { type: "button", class: "btn small", title: "Open the grid's query on the Query page" }, "Open as SPARQL");
     const holder = el("div", { class: "records-table", id: "records-table" });
     box.replaceChildren(
-      el("div", { class: "records-grid-head" }, el("h2", {}, c.title || c.id), count, el("span", { class: "grow" }), q, csv, sparql),
+      el("div", { class: "records-grid-head" }, el("h2", {}, c.title || c.id), count, el("span", { class: "grow" }), q, csv, sparql,
+        c.writable ? el("button", { type: "button", class: "btn small primary", id: "records-new", onclick: () => edit(null) }, "+ New") : null),
       holder);
     let last = null; // the search of the page shown
     // Read with the caller's token (a plain link would carry none), then saved from a blob.
@@ -274,6 +275,7 @@ window.TripleTrailRecords = (function () {
         try { sessionStorage.setItem("tripletrail-open-query", text); } catch (e) { /* the query page opens empty */ }
         ui.go("query/" + enc(state.ds));
       } }, "Open as SPARQL"),
+      state.cls && state.cls.writable ? el("button", { type: "button", class: "btn small primary", id: "records-edit", onclick: () => edit(iri, view.label) }, "Edit") : null,
       el("button", { type: "button", class: "btn small", "aria-label": "Close the record", title: "Close", onclick: () => { state.iri = null; closeRecord(); writeLink(); } }, "×"));
     const groups = (view.groups || []).filter((g) => g.rows && g.rows.length).map((g) =>
       el("fieldset", { class: "records-group" }, el("legend", {}, g.label || "Properties"),
@@ -285,6 +287,21 @@ window.TripleTrailRecords = (function () {
       el("p", { class: "muted small" }, (view.classes || []).map((k) => k.label || k.iri.replace(/^.*[#/]/, "")).join(", ")),
       ...(groups.length ? groups : [el("p", { class: "muted" }, "Nothing to show for this record.")]),
       el("details", { class: "records-group records-incoming", id: "records-incoming", open: true }, el("summary", {}, "Referenced by"), referencedBy(view)));
+  }
+
+  /** The record `iri` (null for a new one) in the edit form of records-edit.js (#82). */
+  function edit(iri, label) {
+    const box = document.getElementById("records-record");
+    if (!box || !state.cls || !window.TripleTrailRecordEdit) return;
+    box.hidden = false;
+    const cls = state.cls;
+    const refresh = () => { if (state.table && state.cls === cls) state.table.setData(); };
+    window.TripleTrailRecordEdit.open(ui, {
+      box, ds: state.ds, cls, iri, label: label || null,
+      saved: (id) => { refresh(); record(id); },
+      closed: () => (iri ? record(iri) : (state.iri = null, closeRecord(), writeLink())),
+      deleted: () => { state.iri = null; closeRecord(); writeLink(); refresh(); },
+    });
   }
 
   /** One row of the record: its label and its values, drawn by its viewer, or a table for `sh:node` values. */

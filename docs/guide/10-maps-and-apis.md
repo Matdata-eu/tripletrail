@@ -327,6 +327,43 @@ https://example.org/rail#BXS,Brussels-South
 The form is the describe view read for the forms reader:
 `/ds/describe?iri=…&format=view&reader=forms`.
 
+### Edit a record
+
+When you may write the dataset (on a server with tokens, see
+[Access control](12-access-control.md)), the grid has **+ New** and a record has **Edit**. Both open the record as a form of
+the keys you can write: a box per value, drawn by its editor (a checkbox for a boolean, a date
+picker for a date, a number box for a number), a row per language for text with a language,
+and **+ Add** for a key that takes several values. A reference to another record is found by
+its name: type a few letters and pick it from the list. A key the shapes require is marked
+with `*`.
+
+- Each change is checked by the server as you make it, against the record's shape, and what it
+  refuses shows under its field, so the form is wrong before it is saved, never after.
+- **Save** sends only the keys you changed. If someone saved the record since you opened it, a
+  dialog shows their values beside yours: **Keep mine** saves yours over theirs (the keys you
+  did not change keep theirs), **Take theirs** opens the record as it is now.
+- A new record takes the IRI you give it, else one from the shape's `tts:iriTemplate`, else a
+  `urn:uuid:` IRI.
+- **Delete…** first says how many links from other resources would be left pointing at the
+  record (the links you can see: those you may not read are not counted).
+- A key whose path is more than one property, an embedded object and the geometry are shown but
+  not edited here.
+
+The page does it with the REST API's writes [below](#the-rest-api) (with `?dry=true` for the
+checks). Which classes and keys you may write is in `/ds/search/classes`: per class `writable`
+and `rest` (where its records are written), per key `writable` and `required`:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/ds/search/classes | grep -o '"rest":"[^"]*","title":"[^"]*","writable":true'
+```
+
+<!-- test: output -->
+```text
+"rest":"Section","title":"Section","writable":true
+"rest":"Station","title":"Station","writable":true
+```
+
 ## The Explore page
 
 <http://localhost:7878/$/ui/explore/ds?iri=https://example.org/rail%23BXC> draws the graph
