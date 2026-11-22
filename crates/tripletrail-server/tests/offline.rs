@@ -472,3 +472,69 @@ fn loading_a_dump_again_does_not_lengthen_labels() {
     assert_ne!(labels[0], labels[1]);
     assert_ne!(labels[1], labels[2]);
 }
+
+/// `tripletrail load` keeps WKT in binary form in a new dataset (#152), `--keep-wkt-text`
+/// keeps the text, an existing dataset keeps its setting unless a flag changes it, and the
+/// results show the same text either way.
+#[test]
+fn load_keeps_wkt_in_binary_form_in_a_new_dataset() {
+    let dir = scratch("load-wkt");
+    let wkt = "POINT(4.3357 50.8355)";
+    std::fs::write(
+        dir.join("p.nt"),
+        format!(
+            "<http://ex/p> <http://www.opengis.net/ont/geosparql#asWKT> \"{wkt}\"^^<http://www.opengis.net/ont/geosparql#wktLiteral> .\n"
+        ),
+    )
+    .unwrap();
+    let binary = |db: &str| dir.join(db).join("ds").join("render-wkt").is_file();
+    let text = |db: &str| {
+        ok(tripletrail(
+            &dir,
+            &[
+                "query",
+                "--location",
+                db,
+                "--format",
+                "csv",
+                "--query",
+                "SELECT ?w { ?p <http://www.opengis.net/ont/geosparql#asWKT> ?w }",
+            ],
+        ))
+    };
+    ok(tripletrail(&dir, &["load", "--location", "on", "p.nt"]));
+    assert!(binary("on"));
+    ok(tripletrail(
+        &dir,
+        &["load", "--location", "off", "--keep-wkt-text", "p.nt"],
+    ));
+    assert!(!binary("off"));
+    // An existing dataset keeps its setting, and a flag changes it.
+    ok(tripletrail(&dir, &["load", "--location", "off", "a.ttl"]));
+    assert!(!binary("off"));
+    ok(tripletrail(
+        &dir,
+        &["load", "--location", "off", "--render-wkt", "a.ttl"],
+    ));
+    assert!(binary("off"));
+    ok(tripletrail(
+        &dir,
+        &["load", "--location", "on", "--keep-wkt-text", "a.ttl"],
+    ));
+    assert!(!binary("on"));
+    for db in ["on", "off"] {
+        assert_eq!(text(db), format!("w\r\n{wkt}\r\n"), "{db}");
+    }
+    let both = tripletrail(
+        &dir,
+        &[
+            "load",
+            "--location",
+            "x",
+            "--render-wkt",
+            "--keep-wkt-text",
+            "p.nt",
+        ],
+    );
+    assert!(!both.status.success());
+}
