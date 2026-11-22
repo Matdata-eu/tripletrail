@@ -3726,8 +3726,9 @@ node already stored, give it an IRI, or load its triples in one file.
   (`dict.bin`, `geoms.bin`, `spog.seg`, …), and, read from every key, the dictionary's keys by
   kind of term (`iri`, `blank`, `string`, `langString`, `typed`, `wkt`, `wktBinary` for WKT
   kept in binary form by `--render-wkt`, `geometry` for other geometry literals, `triple`),
-  with the bytes their datatype IRIs or language tags take and, for IRIs, their namespaces
-  (up to the last `/` or `#`). It opens the dataset read-only, so a dataset a server has open
+  with the bytes their datatype IRIs or language tags take and, for the IRIs written in full,
+  their namespaces (up to the last `/` or `#`; an IRI that shares its namespace with an
+  earlier one refers to it, #152). It opens the dataset read-only, so a dataset a server has open
   is refused (stop the server, or run it on a copy of the folder), as is a folder that is not
   TripleTrail storage. The index of key ends (`dict.idx`) is not in the dictionary's count. Keys
   written since the last checkpoint are counted with the dictionary but are still in

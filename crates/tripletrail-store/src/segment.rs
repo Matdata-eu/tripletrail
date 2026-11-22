@@ -44,7 +44,7 @@ pub(crate) struct Segment {
     pub(crate) file: Option<Arc<RunFile>>,
 }
 
-fn put_varint(out: &mut Vec<u8>, mut v: u64) {
+pub(crate) fn put_varint(out: &mut Vec<u8>, mut v: u64) {
     while v >= 0x80 {
         out.push((v as u8) | 0x80);
         v >>= 7;
@@ -53,7 +53,7 @@ fn put_varint(out: &mut Vec<u8>, mut v: u64) {
 }
 
 /// A varint at `*pos`, or `None` past the end of `bytes` or after ten bytes.
-fn get_varint(bytes: &[u8], pos: &mut usize) -> Option<u64> {
+pub(crate) fn get_varint(bytes: &[u8], pos: &mut usize) -> Option<u64> {
     let mut v = 0u64;
     for shift in (0..70).step_by(7) {
         let b = *bytes.get(*pos)?;
