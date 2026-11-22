@@ -68,7 +68,7 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, transitive paths and filters over them run on tables of ids (`crates/tripletrail/src/idtree.rs`). A small left side passes its values to the right
   side, which then looks them up instead of scanning (`Snapshot::join_ids_from`). Shapes whose
   result on ids isn't certain (a shared variable that may be unbound, `=` between different
-  literals) are evaluated as usual. Under `--executor ids`, an `OPTIONAL { … FILTER(e) }` runs on ids too when `e` reads only variables the right side always binds or the left side never binds, so the filter is the right side's own (#11); one that compares with a value from the left side goes to the evaluator. Filters on ids: `BOUND`, `!`,
+  literals) are evaluated as usual. An `OPTIONAL { … FILTER(e) }` is counted on ids, and under `--executor ids` answered on ids, when `e` reads only variables the right side always binds or the left side never binds, so the filter is the right side's own (#11); one that compares with a value from the left side goes to the evaluator. Filters on ids: `BOUND`, `!`,
   `&&`, `||` (with SPARQL's error rules), `sameTerm`, `=` and `!=` between variables, IRIs and
   literals (values of different literals are compared by the evaluator), `isIRI` /
   `isBlank` / `isLiteral` / `isNumeric`, `LANG(?v) = "x"`, `langMatches(LANG(?v), "x")` and
