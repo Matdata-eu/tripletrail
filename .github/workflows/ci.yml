@@ -168,6 +168,10 @@ jobs:
           if-no-files-found: ignore
       - name: Tests of the vendored SPARQL optimizer
         run: cargo test --manifest-path vendor/sparopt/Cargo.toml --features sep-0006 --lib
+      # The vendored evaluator's own tests (#148: ORDER BY's order is total), built as the
+      # workspace builds it (a patched dependency: `cargo test --all` leaves it out).
+      - name: Tests of the vendored SPARQL evaluator
+        run: cargo test -p spareval --lib
       # On pull requests too, so a green pull request means a green main.
       - name: Engine and server tests on Oxigraph's store
         run: cargo test -p tripletrail -p tripletrail-server

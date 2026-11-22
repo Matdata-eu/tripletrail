@@ -3126,6 +3126,70 @@ fn cmp_values_as_jena(a: &ExpressionTerm, b: &ExpressionTerm) -> Ordering {
         .then_with(|| a.datatype().as_str().cmp(b.datatype().as_str()))
 }
 
+/// tripletrail (#148): a duration as one number of seconds, a month being 1/12 of 365.2425
+/// days (2,629,746 s); `None` for other values, or when it overflows.
+#[cfg(feature = "sep-0002")]
+fn duration_seconds(t: &ExpressionTerm) -> Option<Decimal> {
+    let (months, days, hours, minutes, seconds) = match t {
+        ExpressionTerm::DurationLiteral(d) => (
+            d.years().checked_mul(12)?.checked_add(d.months())?,
+            d.days(),
+            d.hours(),
+            d.minutes(),
+            d.seconds(),
+        ),
+        ExpressionTerm::YearMonthDurationLiteral(d) => (
+            d.years().checked_mul(12)?.checked_add(d.months())?,
+            0,
+            0,
+            0,
+            Decimal::from(0),
+        ),
+        ExpressionTerm::DayTimeDurationLiteral(d) => {
+            (0, d.days(), d.hours(), d.minutes(), d.seconds())
+        }
+        _ => return None,
+    };
+    let whole = i128::from(months) * 2_629_746
+        + i128::from(days) * 86_400
+        + i128::from(hours) * 3_600
+        + i128::from(minutes) * 60;
+    Decimal::from(i64::try_from(whole).ok()?).checked_add(seconds)
+}
+
+#[cfg(not(feature = "sep-0002"))]
+fn duration_seconds(_: &ExpressionTerm) -> Option<Decimal> {
+    None
+}
+
+/// tripletrail (#148): a number for sorting, as its value in a double, then, for an integer or
+/// a decimal, its exact value. Comparing an integer or decimal with a double in a double alone
+/// ties numbers that differ (`9007199254740993` and `9007199254740992` both equal the double
+/// `9007199254740992.0`), which is not an order; the exact value orders those ties.
+fn number_key(t: &ExpressionTerm) -> Option<(f64, Option<Decimal>)> {
+    match t {
+        ExpressionTerm::IntegerLiteral(i) => {
+            let d = Decimal::from(*i);
+            Some((f64::from(Double::from(d)), Some(d)))
+        }
+        ExpressionTerm::DecimalLiteral(d) => Some((f64::from(Double::from(*d)), Some(*d))),
+        ExpressionTerm::FloatLiteral(f) => Some((f64::from(Double::from(*f)), None)),
+        ExpressionTerm::DoubleLiteral(d) => Some((f64::from(*d), None)),
+        _ => None,
+    }
+}
+
+/// [`number_key`]s in order: `NaN` after every other number, equal doubles first, then
+/// integers and decimals by exact value.
+fn cmp_number_keys((x, ex): (f64, Option<Decimal>), (y, ey): (f64, Option<Decimal>)) -> Ordering {
+    match (x.is_nan(), y.is_nan()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => x.partial_cmp(&y).unwrap_or(Ordering::Equal).then_with(|| ex.cmp(&ey)),
+    }
+}
+
 /// Comparison for ordering
 fn cmp_terms(a: Option<&ExpressionTerm>, b: Option<&ExpressionTerm>) -> Ordering {
     match (a, b) {
@@ -3159,21 +3223,36 @@ fn cmp_terms(a: Option<&ExpressionTerm>, b: Option<&ExpressionTerm>) -> Ordering
                         // and `"1z" < 2` as written would make a cycle. Within a kind, values
                         // that don't compare (of different datatypes, or language strings of
                         // different tags) go by datatype, then as written.
-                        let kind = jena_kind(&a.value_ref()).cmp(&jena_kind(&b.value_ref()));
+                        let (va, vb) = (a.value_ref(), b.value_ref());
+                        let kind = jena_kind(&va).cmp(&jena_kind(&vb));
+                        let written = || {
+                            if let (Term::Literal(a), Term::Literal(b)) =
+                                (a.clone().into(), b.clone().into())
+                            {
+                                (a.datatype(), a.value(), a.language()).cmp(&(
+                                    b.datatype(),
+                                    b.value(),
+                                    b.language(),
+                                ))
+                            } else {
+                                Ordering::Equal // Should never happen
+                            }
+                        };
                         if kind != Ordering::Equal {
                             kind
+                        } else if let (Some(x), Some(y)) =
+                            (duration_seconds(&va), duration_seconds(&vb))
+                        {
+                            // XSD leaves a number of months and a number of days unordered
+                            // (`P1M` and `P30D`): all durations are read as one number of
+                            // seconds, which extends XSD's order, then by datatype and text.
+                            x.cmp(&y).then_with(written)
+                        } else if let (Some(x), Some(y)) = (number_key(&va), number_key(&vb)) {
+                            cmp_number_keys(x, y)
                         } else if let Some(ord) = order_cmp_literals(a, b) {
                             ord
-                        } else if let (Term::Literal(a), Term::Literal(b)) =
-                            (a.clone().into(), b.clone().into())
-                        {
-                            (a.datatype(), a.value(), a.language()).cmp(&(
-                                b.datatype(),
-                                b.value(),
-                                b.language(),
-                            ))
                         } else {
-                            Ordering::Equal // Should never happen
+                            written()
                         }
                     }
                 },
@@ -6319,3 +6398,54 @@ pub(crate) fn with_custom_function_call<R>(
     f()
 }
 
+
+#[cfg(test)]
+/// tripletrail (#148): `cmp_terms` is a total order (or `ORDER BY`'s sort panics), over
+/// every triple of a zoo of terms: all kinds of literals with bad lexical forms, NaN, INF, dates
+/// with and without timezones, durations of months and of days, IRIs, blank nodes, unbound.
+mod order_is_total {
+    use super::*;
+    use oxrdf::{Literal, NamedNode, BlankNode};
+    #[test]
+    fn cmp_terms_is_a_total_order() {
+        let x = "http://www.w3.org/2001/XMLSchema#";
+        let mut zoo: Vec<Term> = Vec::new();
+        for (v, dts) in [
+            (&["0", "1", "-1", "2", "10", "01", "+1", "9223372036854775807", "-9223372036854775808", "99999999999999999999999", "9007199254740992", "9007199254740993", "-50699387048463032", "-50699387048463031", "abc", ""][..], &["integer", "int", "long", "short", "byte", "nonNegativeInteger", "unsignedInt"][..]),
+            (&["0.0", "-0.0", "1.0", "1.50", "2.5", "10", "1", "1e3", "x", "123456789012345678901234567890.5", "0.1", "0.100000000000000001", "0.100000000000000002", "9007199254740992.5"][..], &["decimal"][..]),
+            (&["0", "-0", "0.0", "1", "1.0", "1.0E0", "2.5", "NaN", "INF", "-INF", "1e308", "1e-320", "10", "abc", "0.1", "9007199254740992", "-50699387048463032"][..], &["double", "float"][..]),
+            (&["true", "false", "1", "0", "x"][..], &["boolean"][..]),
+            (&["2024-01-05T10:00:00Z", "2024-01-05T10:00:00", "2024-01-05T12:00:00+02:00", "2024-01-05T23:00:00-14:00", "2024-01-06T00:00:00+14:00", "2024-01-05T10:00:00.5", "bad"][..], &["dateTime", "dateTimeStamp"][..]),
+            (&["2024-01-05", "2024-01-05Z", "2024-01-05+14:00", "2024-01-04-14:00", "2023-12-31", "bad"][..], &["date"][..]),
+            (&["10:00:00", "10:00:00Z", "12:00:00+02:00", "23:59:59-14:00", "00:00:00+14:00"][..], &["time"][..]),
+            (&["P1M", "P30D", "P29D", "P27D", "P31D", "P1Y", "P365D", "P366D", "P12M", "PT24H", "P1D", "PT0S", "-P1M", "P1M1D", "P28D", "P1Y1D", "P13M"][..], &["duration", "yearMonthDuration", "dayTimeDuration"][..]),
+            (&["2024", "2023", "2024Z", "2024+14:00", "2024-14:00"][..], &["gYear"][..]),
+            (&["2024-01", "2024-02Z", "2024-01+14:00"][..], &["gYearMonth"][..]),
+            (&["--01-05", "--01-05Z", "---05", "---05Z", "--01", "--01Z"][..], &["gMonthDay", "gDay", "gMonth"][..]),
+            (&["a", "1", "1z", "10", "2", "", "NaN", "true", "2024-01-05"][..], &["string", "anyURI", "hexBinary", "token"][..]),
+        ] {
+            for v in v { for d in dts { zoo.push(Literal::new_typed_literal(*v, NamedNode::new_unchecked(format!("{x}{d}"))).into()); } }
+        }
+        for v in ["a", "b", "1", "10", "2", "", "1z"] {
+            zoo.push(Literal::new_simple_literal(v).into());
+            for l in ["en", "fr", "en-gb", "de"] { zoo.push(Literal::new_language_tagged_literal_unchecked(v, l).into()); }
+            zoo.push(Literal::new_typed_literal(v, NamedNode::new_unchecked("http://example.org/dt")).into());
+            zoo.push(Literal::new_typed_literal(v, NamedNode::new_unchecked("http://example.org/dt2")).into());
+            zoo.push(NamedNode::new_unchecked(format!("http://e/{v}")).into());
+            zoo.push(BlankNode::new_unchecked(format!("b{}", v.len())).into());
+        }
+        let e: Vec<Option<ExpressionTerm>> = std::iter::once(None).chain(zoo.iter().cloned().map(|t| Some(ExpressionTerm::from(t)))).collect();
+        let n = e.len();
+        let c: Vec<Vec<Ordering>> = e.iter().map(|a| e.iter().map(|b| cmp_terms(a.as_ref(), b.as_ref())).collect()).collect();
+        let show = |i: usize| if i == 0 { "UNBOUND".to_owned() } else { zoo[i - 1].to_string() };
+        let (mut anti, mut trans, mut eqtrans) = (0, 0, 0);
+        for i in 0..n { for j in 0..n {
+            if c[i][j] != c[j][i].reverse() { anti += 1; if anti <= 5 { eprintln!("ANTISYM {} {} {:?} {:?}", show(i), show(j), c[i][j], c[j][i]); } }
+        } }
+        for i in 0..n { for j in 0..n { if c[i][j] == Ordering::Greater { continue; } for k in 0..n {
+            if c[i][j] == Ordering::Less && c[j][k] == Ordering::Less && c[i][k] != Ordering::Less { trans += 1; if trans <= 12 { eprintln!("CYCLE {} < {} < {} but first vs third {:?}", show(i), show(j), show(k), c[i][k]); } }
+            if c[i][j] == Ordering::Equal && c[j][k] != c[i][k] { eqtrans += 1; if eqtrans <= 12 { eprintln!("EQ {} == {} but vs {}: {:?} and {:?}", show(i), show(j), show(k), c[i][k], c[j][k]); } }
+        } } }
+        assert_eq!((anti, trans, eqtrans), (0, 0, 0), "{n} terms: antisymmetry, cycles, equal ones ordered differently");
+    }
+}
