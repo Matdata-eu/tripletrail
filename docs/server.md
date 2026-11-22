@@ -222,8 +222,9 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   memory.
 - `tripletrail load` makes a new dataset that keeps a WKT literal only in binary form when
   its text can be written back from the geometry exactly (#152, from #370's `--render-wkt`):
-  about the size of the text less on disk (an OpenStreetMap extract of Norway: 364 MB instead
-  of 731 MB), the same text in results, about 2 µs more per WKT literal a result writes out,
+  about the size of the text less on disk, and coordinates with at most 9 decimals are kept as
+  fixed-point differences, 2 or 3 bytes each instead of 8 (an OpenStreetMap extract of Norway:
+  178 MB instead of 731 MB), the same text in results, about 2 µs more per WKT literal a result writes out,
   spatial work unchanged. `--keep-wkt-text` keeps every text, for a new dataset or to turn it
   off on an existing one; `--render-wkt` turns it on for a dataset made before it was the
   default. Without either flag an existing dataset keeps its setting, which stays with the

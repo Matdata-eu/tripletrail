@@ -324,7 +324,11 @@ pub(crate) fn compact(key: &[u8], record: &[u8], out: &mut Vec<u8>) -> bool {
     out.extend_from_slice(&[Kind::Geometry as u8, 0]);
     out.extend_from_slice(&h.to_le_bytes());
     out.extend_from_slice(&style);
-    out.extend_from_slice(record);
+    // Packed when its coordinates are fixed-point numbers (#152), else as it is.
+    let hint = (style[0] != crate::wkt::SHORTEST).then_some(style[0]);
+    if !crate::geobin::pack_any(record, hint, out) {
+        out.extend_from_slice(record);
+    }
     true
 }
 

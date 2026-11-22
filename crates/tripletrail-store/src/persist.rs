@@ -58,9 +58,19 @@ const DICT_MAGIC: &[u8; 8] = b"OXGSDIC3";
 /// form, or after it by a store that may still hold such keys. A binary from before them refuses
 /// such a piece, as it would misread its keys (#428).
 const DICT_MAGIC_COMPACT: &[u8; 8] = b"OXGSDIC4";
+/// As v4, in a piece whose compact WKT keys may hold packed records (#152, see
+/// [`crate::geobin::PACKED`]): what a piece that may hold compact keys is written as now. A
+/// binary from before packed records refuses such a piece, as it could not read those keys.
+const DICT_MAGIC_PACKED: &[u8; 8] = b"OXGSDIC5";
 /// The dictionary formats read, oldest first: their position is the version.
-const DICT_MAGICS: [&[u8; 8]; 4] = [DICT_MAGIC_V1, DICT_MAGIC_V2, DICT_MAGIC, DICT_MAGIC_COMPACT];
-/// The version of [`DICT_MAGIC_COMPACT`].
+const DICT_MAGICS: [&[u8; 8]; 5] = [
+    DICT_MAGIC_V1,
+    DICT_MAGIC_V2,
+    DICT_MAGIC,
+    DICT_MAGIC_COMPACT,
+    DICT_MAGIC_PACKED,
+];
+/// The first version that may hold compact keys ([`DICT_MAGIC_COMPACT`] and after).
 const DICT_COMPACT: usize = 3;
 /// A saved index of a dictionary piece: keys, slots and [`index_check`], then the slots.
 const INDEX_MAGIC: &[u8; 8] = b"OXGSDIX1";
@@ -1834,7 +1844,7 @@ fn write_dict(path: &Path, dict: &Dictionary, from: usize, keys: usize) -> io::R
     let mut w = summing(path)?;
     // Keys copied from a dictionary that may hold compact ones may be compact.
     w.write_all(if dict.may_hold_compact() {
-        DICT_MAGIC_COMPACT
+        DICT_MAGIC_PACKED
     } else {
         DICT_MAGIC
     })?;
@@ -2023,7 +2033,7 @@ fn write_dict_compact(
         .into_inner()
         .map_err(io::IntoInnerError::into_error)?;
     let mut header = Vec::with_capacity(HEADER);
-    header.extend_from_slice(DICT_MAGIC_COMPACT);
+    header.extend_from_slice(DICT_MAGIC_PACKED);
     header.extend_from_slice(&len.to_le_bytes());
     header.extend_from_slice(&(keys as u64 + 1).to_le_bytes());
     file.seek(SeekFrom::Start(0))?;
@@ -2956,7 +2966,7 @@ fn read_parts(dir: &Path, keep_mapped: bool, check: Check) -> Result<Parts, Stor
             .collect::<Result<Vec<_>, _>>()?;
         let version = pieces[0].2;
         let current = pieces.iter().all(|p| p.2 >= 2);
-        let compact = pieces.iter().any(|p| p.2 == DICT_COMPACT);
+        let compact = pieces.iter().any(|p| p.2 >= DICT_COMPACT);
         // Saved indexes are used when the keys stay mapped (copied to the heap, the table
         // is smaller).
         let indexes: Vec<Option<(SavedIndex, Sum)>> = names

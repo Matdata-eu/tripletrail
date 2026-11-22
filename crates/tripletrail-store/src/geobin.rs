@@ -4,7 +4,8 @@
 //! The text of a literal stays in the dictionary as the source of truth (results show it as it
 //! was loaded); this is a cache of its parsed form. A store that keeps WKT literals in binary
 //! form (#370) keeps the record in the literal's dictionary key instead, when [`crate::wkt`]
-//! writes its text back exactly from it. Each geometry is one record of
+//! writes its text back exactly from it, packed ([`PACKED`], #152) when its coordinates are
+//! fixed-point numbers. Each geometry is one record of
 //! little-endian values: the CRS, then the geometry as a type tag followed by counts and flat
 //! `f64` coordinate pairs (`x y x y ...`), parts and rings nested in order. Decoding reads the
 //! coordinates straight into `geo` structures, with none of the number parsing WKT needs.
@@ -151,7 +152,8 @@ fn geometry(g: &Geometry, out: &mut Vec<u8>) {
 
 /// The geometry of a record, or `None` if it is malformed.
 pub(crate) fn decode(bytes: &[u8]) -> Option<Geom> {
-    let mut r = Reader(bytes);
+    let bytes = plain(bytes)?;
+    let mut r = Reader(&bytes);
     let crs = r.crs()?;
     let g = r.geometry(0)?;
     r.0.is_empty().then(|| Geom::new(g, crs))
@@ -161,7 +163,8 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<Geom> {
 /// decoding the geometry: `Some((crs, None))` for an empty geometry, `None` if the record is
 /// malformed. The box holds every coordinate (also those of polygon holes).
 pub(crate) fn bbox(bytes: &[u8]) -> Option<(Crs, Option<[f64; 4]>)> {
-    let mut r = Reader(bytes);
+    let bytes = plain(bytes)?;
+    let mut r = Reader(&bytes);
     let crs = r.crs()?;
     let mut b = [
         f64::INFINITY,
@@ -184,7 +187,13 @@ pub(crate) const BOX_MIN: usize = 64;
 /// empty geometry. `None` for a short record, or one in another CRS (whose IRI the record
 /// holds): those are read from the record.
 pub(crate) fn saved_box(record: &[u8]) -> Option<(u8, [u64; 4])> {
-    if record.len() <= BOX_MIN {
+    // A packed record takes about a third of the bytes of the plain one it is read as.
+    let min = if record.first() == Some(&PACKED) {
+        BOX_MIN / 3
+    } else {
+        BOX_MIN
+    };
+    if record.len() <= min {
         return None;
     }
     let (crs, b) = bbox(record)?;
@@ -497,6 +506,227 @@ impl Saved {
     }
 }
 
+/// The first byte of a packed record (#152): a record whose coordinates all have at most
+/// [`MAX_PACKED_DECIMALS`] decimals, kept as fixed-point integers, each the difference from the
+/// one before (zigzag LEB128 varints, as in TWKB and OSM PBF), with varint counts. A WKT literal
+/// written with 7 decimals (OpenStreetMap's) takes 2 or 3 bytes per ordinate instead of 8.
+/// [`unpack`] gives back the plain record bit for bit. A plain record never starts with it (its
+/// first byte is a CRS tag).
+pub(crate) const PACKED: u8 = 0x80;
+
+/// The most decimals a packed record holds.
+const MAX_PACKED_DECIMALS: u8 = 9;
+
+const POWERS: [f64; 10] = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9];
+
+/// The plain record of `record`: itself when it is not packed, `None` when it is malformed.
+pub(crate) fn plain(record: &[u8]) -> Option<std::borrow::Cow<'_, [u8]>> {
+    if record.first() == Some(&PACKED) {
+        unpack(record).map(std::borrow::Cow::Owned)
+    } else {
+        Some(std::borrow::Cow::Borrowed(record))
+    }
+}
+
+/// Appends the packed form of the plain `record` to `out` with `decimals` decimals, if every
+/// coordinate is exactly such a number (and unpacks to the same bits): `false` (and `out`
+/// unchanged) otherwise.
+pub(crate) fn pack(record: &[u8], decimals: u8, out: &mut Vec<u8>) -> bool {
+    if decimals > MAX_PACKED_DECIMALS {
+        return false;
+    }
+    let at = out.len();
+    out.push(PACKED);
+    out.push(decimals);
+    let mut t = Transcode {
+        r: record,
+        out,
+        to_packed: true,
+        scale: POWERS[decimals as usize],
+        prev: [0, 0],
+    };
+    let ok = t.crs().is_some() && t.geometry(0).is_some() && t.r.is_empty();
+    if !ok {
+        out.truncate(at);
+    }
+    ok
+}
+
+/// Appends the packed form of `record` with the fewest decimals that hold it exactly, trying
+/// `hint` first: `false` (and `out` unchanged) when none does.
+pub(crate) fn pack_any(record: &[u8], hint: Option<u8>, out: &mut Vec<u8>) -> bool {
+    if let Some(d) = hint
+        && pack(record, d, out)
+    {
+        return true;
+    }
+    (0..=MAX_PACKED_DECIMALS).any(|d| Some(d) != hint && pack(record, d, out))
+}
+
+/// The plain record of a packed one, or `None` if it is malformed.
+fn unpack(record: &[u8]) -> Option<Vec<u8>> {
+    let (&decimals, rest) = record.get(1..)?.split_first()?;
+    if decimals > MAX_PACKED_DECIMALS {
+        return None;
+    }
+    let mut out = Vec::with_capacity(rest.len() * 4);
+    let mut t = Transcode {
+        r: rest,
+        out: &mut out,
+        to_packed: false,
+        scale: POWERS[decimals as usize],
+        prev: [0, 0],
+    };
+    t.crs()?;
+    t.geometry(0)?;
+    t.r.is_empty().then_some(out)
+}
+
+/// Reads a record in one form and writes it in the other.
+struct Transcode<'a, 'o> {
+    r: &'a [u8],
+    out: &'o mut Vec<u8>,
+    to_packed: bool,
+    scale: f64,
+    prev: [i64; 2],
+}
+
+impl Transcode<'_, '_> {
+    fn u8(&mut self) -> Option<u8> {
+        let (&b, rest) = self.r.split_first()?;
+        self.r = rest;
+        Some(b)
+    }
+
+    fn varint(&mut self) -> Option<u64> {
+        let mut v = 0u64;
+        for shift in (0..64).step_by(7) {
+            let b = self.u8()?;
+            v |= u64::from(b & 0x7f) << shift;
+            if b & 0x80 == 0 {
+                return Some(v);
+            }
+        }
+        None
+    }
+
+    fn put_varint(&mut self, mut v: u64) {
+        while v >= 0x80 {
+            self.out.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        self.out.push(v as u8);
+    }
+
+    /// A count, copied from one form to the other; a packed count is checked against what is
+    /// left (each item takes at least `min` bytes), so a malformed one allocates nothing.
+    fn count(&mut self, min: usize) -> Option<usize> {
+        if self.to_packed {
+            let n = u32::from_le_bytes(self.r.get(..4)?.try_into().ok()?) as usize;
+            self.r = &self.r[4..];
+            self.put_varint(n as u64);
+            Some(n)
+        } else {
+            let n = usize::try_from(self.varint()?).ok()?;
+            if n.checked_mul(min)? > self.r.len() {
+                return None;
+            }
+            self.out
+                .extend_from_slice(&u32::try_from(n).ok()?.to_le_bytes());
+            Some(n)
+        }
+    }
+
+    fn crs(&mut self) -> Option<()> {
+        let tag = self.u8()?;
+        self.out.push(tag);
+        match tag {
+            CRS84 | EPSG4326 => Some(()),
+            OTHER => {
+                let n = self.count(1)?;
+                let (iri, rest) = self.r.split_at_checked(n)?;
+                self.out.extend_from_slice(iri);
+                self.r = rest;
+                Some(())
+            }
+            _ => None,
+        }
+    }
+
+    fn coords(&mut self, n: usize) -> Option<()> {
+        for _ in 0..n {
+            for axis in 0..2 {
+                if self.to_packed {
+                    let (b, rest) = self.r.split_first_chunk::<8>()?;
+                    self.r = rest;
+                    let x = f64::from_le_bytes(*b);
+                    let scaled = (x * self.scale).round();
+                    if !scaled.is_finite() || scaled.abs() >= 9_007_199_254_740_992.0 {
+                        return None;
+                    }
+                    let v = scaled as i64;
+                    // Exactly the same bits back, so -0.0 and inexact numbers stay plain.
+                    if (v as f64 / self.scale).to_bits() != x.to_bits() {
+                        return None;
+                    }
+                    let d = v.wrapping_sub(self.prev[axis]);
+                    self.prev[axis] = v;
+                    self.put_varint(((d << 1) ^ (d >> 63)) as u64);
+                } else {
+                    let z = self.varint()?;
+                    let d = ((z >> 1) as i64) ^ -((z & 1) as i64);
+                    let v = self.prev[axis].wrapping_add(d);
+                    self.prev[axis] = v;
+                    if v.unsigned_abs() >= 1 << 53 {
+                        return None;
+                    }
+                    self.out
+                        .extend_from_slice(&(v as f64 / self.scale).to_le_bytes());
+                }
+            }
+        }
+        Some(())
+    }
+
+    fn ring(&mut self) -> Option<()> {
+        let n = self.count(2)?;
+        self.coords(n)
+    }
+
+    fn rings(&mut self) -> Option<()> {
+        let n = self.count(1)?;
+        (0..n).try_for_each(|_| self.ring())
+    }
+
+    fn geometry(&mut self, depth: usize) -> Option<()> {
+        if depth > 64 {
+            return None;
+        }
+        let tag = self.u8()?;
+        self.out.push(tag);
+        match tag {
+            POINT => self.coords(1),
+            LINE | RECT => self.coords(2),
+            TRIANGLE => self.coords(3),
+            LINE_STRING | MULTI_POINT => self.ring(),
+            POLYGON => self.rings(),
+            MULTI_LINE_STRING => {
+                let n = self.count(1)?;
+                (0..n).try_for_each(|_| self.ring())
+            }
+            MULTI_POLYGON => {
+                let n = self.count(1)?;
+                (0..n).try_for_each(|_| self.rings())
+            }
+            COLLECTION => {
+                let n = self.count(1)?;
+                (0..n).try_for_each(|_| self.geometry(depth + 1))
+            }
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,6 +739,90 @@ mod tests {
             NamedNode::new_unchecked("http://www.opengis.net/ont/geosparql#wktLiteral"),
         );
         (*parse_wkt_literal_uncached(&Term::Literal(lit)).unwrap()).clone()
+    }
+
+    /// Packed records (#152) unpack to the plain record bit for bit, are smaller for
+    /// fixed-point coordinates, and are refused when a coordinate has more decimals.
+    #[test]
+    fn packed_records_unpack_exactly() {
+        for (wkt, decimals) in [
+            ("POINT(1.5 -2.25)", 2),
+            (
+                "LINESTRING(7.5240150 58.1965462, 7.5236656 58.1967575, 7.5226876 58.1973698)",
+                7,
+            ),
+            (
+                "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0), (1 1, 2 1, 2 2, 1 1))",
+                0,
+            ),
+            ("MULTIPOINT((0 0), (1 1))", 0),
+            ("MULTILINESTRING((0 0, 1 1), (2 2, 3 3, 4 4))", 0),
+            (
+                "MULTIPOLYGON(((0 0, 1 0, 1 1, 0 0)), ((5 5, 6 5, 6 6, 5 5)))",
+                0,
+            ),
+            ("GEOMETRYCOLLECTION(POINT(1 2), LINESTRING(0 0, 3 3))", 0),
+            ("GEOMETRYCOLLECTION EMPTY", 0),
+            (
+                "<http://www.opengis.net/def/crs/EPSG/0/4326> POINT(50.123456789 4)",
+                9,
+            ),
+            (
+                "<http://www.opengis.net/def/crs/EPSG/0/31370> POINT(150000.25 170000)",
+                2,
+            ),
+            ("POINT(-180 -90)", 0),
+        ] {
+            let mut plain_record = Vec::new();
+            assert!(encode(&parse(wkt), &mut plain_record), "{wkt}");
+            let mut packed = Vec::new();
+            assert!(pack_any(&plain_record, None, &mut packed), "{wkt}");
+            assert_eq!(packed[1], decimals, "{wkt}: the fewest decimals");
+            assert_eq!(&*plain(&packed).unwrap(), &plain_record[..], "{wkt}");
+            assert_eq!(
+                decode(&packed).unwrap().geometry,
+                parse(wkt).geometry,
+                "{wkt}"
+            );
+            assert_eq!(bbox(&packed), bbox(&plain_record), "{wkt}");
+            if plain_record.len() > 40 && !wkt.starts_with('<') {
+                assert!(
+                    packed.len() * 2 < plain_record.len(),
+                    "{wkt}: {} bytes",
+                    packed.len()
+                );
+            }
+            // A hint that holds it is taken as it is.
+            let mut hinted = Vec::new();
+            assert!(pack_any(&plain_record, Some(9), &mut hinted));
+            assert_eq!(&*plain(&hinted).unwrap(), &plain_record[..]);
+        }
+        // Not exactly a number of 9 decimals or fewer, or -0.0: stays plain.
+        for wkt in [
+            "POINT(0.1234567891 1)",
+            "POINT(-0.0 1)",
+            "POINT(1e300 1)",
+            "POINT(35.335507039952923 25.1)",
+        ] {
+            let mut plain_record = Vec::new();
+            assert!(encode(&parse(wkt), &mut plain_record), "{wkt}");
+            let mut packed = vec![7];
+            assert!(!pack_any(&plain_record, Some(7), &mut packed), "{wkt}");
+            assert_eq!(packed, [7], "{wkt}: out unchanged");
+        }
+        // Malformed packed records are refused, not panicked on.
+        let mut packed = Vec::new();
+        let mut plain_record = Vec::new();
+        assert!(encode(
+            &parse("LINESTRING(0 0, 1 1, 2 2)"),
+            &mut plain_record
+        ));
+        assert!(pack(&plain_record, 0, &mut packed));
+        for cut in 0..packed.len() {
+            assert!(plain(&packed[..cut]).is_none() || cut == 0, "cut at {cut}");
+        }
+        assert!(plain(&[PACKED, 0, CRS84, LINE_STRING, 0xff, 0xff, 0xff, 0xff, 0x0f]).is_none());
+        assert!(plain(&[PACKED, 10, CRS84, POINT, 0, 0]).is_none());
     }
 
     #[test]

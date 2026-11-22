@@ -2577,7 +2577,8 @@ fn wkt_literals_kept_in_binary_form_read_back_exactly() {
     assert!(!current(&plain).join("compact-keys").exists());
     assert!(current(&dir).join("compact-keys").exists());
     // Pieces that may hold compact keys have a magic of their own, which a binary from before
-    // them refuses (#428); the others keep the v3 one.
+    // them refuses (#428), v5 since their records may be packed (#152); the others keep the
+    // v3 one.
     let magics = |d: &Path| -> Vec<Vec<u8>> {
         let mut m: Vec<Vec<u8>> = std::fs::read_dir(current(d))
             .unwrap()
@@ -2592,7 +2593,7 @@ fn wkt_literals_kept_in_binary_form_read_back_exactly() {
     };
     assert_eq!(magics(&plain), [b"OXGSDIC3".to_vec()]);
     assert!(
-        magics(&dir).contains(&b"OXGSDIC4".to_vec()),
+        magics(&dir).contains(&b"OXGSDIC5".to_vec()),
         "{:?}",
         magics(&dir)
     );
