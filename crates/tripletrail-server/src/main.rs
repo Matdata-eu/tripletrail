@@ -527,7 +527,8 @@ enum Command {
     /// What a dataset on disk takes (#152): its files by kind (`dict.bin`, `geoms.bin`, the
     /// index segments, …) and, read from every key, the dictionary's bytes by kind of term
     /// (IRIs, strings, WKT text or binary, other literals), with what their datatypes and
-    /// IRI namespaces take. Reads the dataset without changing it, so it may be served.
+    /// IRI namespaces take. Reads the dataset without changing it; a dataset a server has
+    /// open is refused (stop the server, or run it on a copy of the folder).
     DiskUsage {
         /// Directory of the on-disk datasets.
         #[arg(long)]

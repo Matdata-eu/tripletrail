@@ -119,7 +119,8 @@ dictionary keys:
 
 The `datatype` column is what the datatype IRIs repeated in every typed literal take, and
 `namespace` what the IRIs' namespaces (up to the last `/` or `#`) take. `--json` gives the
-same as JSON.
+same as JSON. Keys written since the last checkpoint are counted with the dictionary but are
+still in `wal.log`; the output says so when there are any.
 
 On spatial data the WKT text is often most of the store, kept once as text in `dict.bin` and
 once as numbers in `geoms.bin`. `--render-wkt` keeps a WKT literal only in binary form when

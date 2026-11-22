@@ -474,14 +474,37 @@ pub(crate) fn disk_usage(location: &Path, dataset: &str, json: bool) -> Result<(
             }
         }
     }
+    // A TripleTrail store has a FORMAT file; another folder (an Oxigraph store, any
+    // directory) is refused rather than reported as empty.
+    if !dir.join("FORMAT").is_file() {
+        return Err(format!(
+            "{} is not a TripleTrail store (no FORMAT file): disk-usage reads TripleTrail storage only",
+            dir.display()
+        )
+        .into());
+    }
     let total: u64 = files.values().sum();
-    let store = tripletrail::store::Store::open_read_only(&dir)?;
+    let store = match tripletrail::store::Store::open_read_only(&dir) {
+        Ok(store) => store,
+        Err(tripletrail::store::StoreError::Locked(_)) => {
+            return Err(format!(
+                "dataset {dataset:?} is open in a server: stop the server, or copy the folder and run disk-usage on the copy"
+            )
+            .into());
+        }
+        Err(e) => return Err(e.into()),
+    };
     let usage = store.dictionary_usage();
+    // Keys written since the last checkpoint are in the log, not yet in dict.bin.
+    let in_log = files
+        .iter()
+        .any(|(name, &bytes)| name.starts_with("wal") && name.ends_with(".log") && bytes > 0);
     if json {
         let out = serde_json::json!({
             "dataset": dataset,
             "bytes": total,
             "files": files,
+            "keysInLog": in_log,
             "dictionary": usage.iter().map(|u| serde_json::json!({
                 "kind": u.kind,
                 "keys": u.keys,
@@ -512,6 +535,11 @@ pub(crate) fn disk_usage(location: &Path, dataset: &str, json: bool) -> Result<(
     }
     let keys: u64 = usage.iter().map(|u| u.bytes).sum();
     println!("dictionary keys: {}", size(keys));
+    if in_log {
+        println!(
+            "  (keys written since the last checkpoint are counted here but are still in wal.log, not dict.bin)"
+        );
+    }
     println!(
         "  {:<11} {:>13} {:>10} {:>6} {:>10} {:>10}",
         "kind", "keys", "bytes", "%", "datatype", "namespace"
