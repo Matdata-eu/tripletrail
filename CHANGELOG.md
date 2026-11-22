@@ -23,6 +23,7 @@ versions may change the store format and the API; the release notes say how to u
 
 - A `geo:gmlLiteral` whose `srsName` holds a character no IRI may hold (a space, a control character, `<`, `>`, a quote, …) is now an invalid literal. It was read with that name as its CRS, which the WKT the store writes for it could not hold, so the geometry could not be read back (found by the `geo_literals` fuzz target).
 - Building the image for linux/amd64 and linux/arm64 together (the Release and Docker image workflows) no longer fails now and then with `failed to unpack package … File exists`: each architecture's build has its own crate cache.
+- `ORDER BY` over a mix of numbers, strings and other literals (with `NaN` or `INF` among the numbers, say) no longer fails with a 500, "comparison function does not correctly implement a total order" (#148). Literals are ordered by kind first (plain strings, language-tagged strings, numbers, booleans, dates and times, other datatypes), as `MIN` and `MAX` order them, then by value; durations by one number of seconds (a month as 1/12 of 365.2425 days), as XSD leaves months and days unordered; an integer or decimal and a double that are equal as doubles by their exact values (`9007199254740993` after `9007199254740992`).
 
 ### Changed
 
