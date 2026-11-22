@@ -271,10 +271,7 @@ fn tree_counts_match_the_rows() {
             true,
         ),
         // One that reads a variable of the left side: the evaluator decides.
-        (
-            "?s a ?c OPTIONAL { ?s ex:feat ?f FILTER(?f != ?c) }",
-            false,
-        ),
+        ("?s a ?c OPTIONAL { ?s ex:feat ?f FILTER(?f != ?c) }", false),
     ];
     let aggregates = [
         "(COUNT(*) AS ?n)",
