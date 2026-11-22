@@ -284,7 +284,9 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   so `…/way/1/geom/track` shares `…/way/` with `…/way/1`. Its key is a 0, the namespace's
   number (a varint) and the rest of the IRI. The key is hashed as the full IRI, so lookups,
   saved indexes and string ranks work as before; the first IRI of a namespace stays written
-  in full. A piece that may hold such keys is format 6
+  in full. Which namespace an IRI gets depends on the order the IRIs come in, since a shorter
+  namespace already kept wins over a longer one not kept yet; the answers do not. The
+  namespaces are held on the heap, with a hash table of them. A piece that may hold such keys is format 6
   (`OXGSDIC6`), or 7 (`OXGSDIC7`) when it may also hold WKT in binary form, so a binary from
   before refuses it; earlier formats open and grow. `Store::dictionary_usage()` reads every
   key and counts keys and bytes by kind of term (`tripletrail disk-usage`, #152).
