@@ -208,7 +208,13 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   and predicates that are not IRIs leave a triple out, blank nodes of the template are new for
   each solution, and a triple without blank nodes is given once (on 133k orders, copying two
   properties 500 → 210 ms, a join into a new property 280 → 120 ms; a blank node per row is
-  on par). `BIND` and `SELECT (expr AS ?v)` are a
+  on par). `GRAPH <g> { … }` evaluates its pattern on the quads of that graph, and
+  `GRAPH ?g { … }` in each graph that holds quads (at most 256, one seek each to list them),
+  each graph's rows with its name in `?g` (a pattern that binds `?g` itself keeps the rows
+  where it is that name), unless the default graph is the union of the graphs; a graph the
+  store doesn't know, and a zero-length path in a named graph, are left to the evaluator (on
+  133k orders in 8 graphs, `GRAPH ?g { ?o ex:qty ?q }` 90 → 50 ms, one graph's join
+  40 → 18 ms, counts and sums per graph 34 → 22 ms). `BIND` and `SELECT (expr AS ?v)` are a
   column of the table too (`idtree::Eval::extend`): a copy of a column, a constant, or a
   number the expression kernels above compute, as the literal the evaluator writes (decimals
   in Jena's form, doubles as `oxsdatatypes` writes them): a number the store inlines is made

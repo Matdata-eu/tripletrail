@@ -318,6 +318,16 @@ impl Eval<'_> {
                 let t = self.eval(inner)?;
                 project(t, variables)
             }
+            // `GRAPH`, while the id executor answers whole queries (#11): the pattern in that
+            // graph, or in each graph with its name in the variable. Not over a default graph
+            // that is the union of the graphs (its view hides the copies of triples).
+            GraphPattern::Graph { name, inner }
+                if crate::executor_ids()
+                    && self.graph == GraphSelector::Default
+                    && !matches!(&**inner, GraphPattern::Bgp { patterns } if patterns.is_empty()) =>
+            {
+                self.named(name, inner)?
+            }
             // `BIND`, while the id executor answers whole queries (#11).
             GraphPattern::Extend {
                 inner,
@@ -542,6 +552,69 @@ impl Eval<'_> {
         })
     }
 
+    /// `GRAPH name { inner }`: `inner` in the graph `name`, or for a variable in each graph
+    /// that holds quads, its rows joined with the graph's name. `None` for a graph the store
+    /// doesn't know, or more than [`MAX_GRAPHS`] graphs.
+    fn named(&self, name: &NamedNodePattern, inner: &GraphPattern) -> Option<Table> {
+        let within = |g: TermId| Eval {
+            snapshot: self.snapshot,
+            cancelled: self.cancelled,
+            graph: GraphSelector::Graph(g),
+        };
+        let v = match name {
+            NamedNodePattern::NamedNode(n) => {
+                return within(self.snapshot.term_id(n.as_ref().into())?).eval(inner);
+            }
+            NamedNodePattern::Variable(v) => v,
+        };
+        let graphs = self.snapshot.graph_ids();
+        if graphs.is_empty() || graphs.len() > MAX_GRAPHS {
+            return None;
+        }
+        let mut all: Option<Table> = None;
+        for g in graphs {
+            let mut t = within(g).eval(inner)?;
+            match t.col(v) {
+                // The pattern binds the variable too: rows where it is the graph's name (an
+                // unbound cell takes it).
+                Some(c) => {
+                    let width = t.width();
+                    let mut ids = Vec::with_capacity(t.ids.len());
+                    let mut ones = 0;
+                    for r in 0..t.len() {
+                        let row = t.row(r);
+                        if row[c] == g || row[c] == UNBOUND {
+                            let start = ids.len();
+                            ids.extend_from_slice(row);
+                            ids[start + c] = g;
+                            ones += 1;
+                        }
+                    }
+                    debug_assert_eq!(ids.len(), ones * width);
+                    t.ids = ids;
+                    t.ones = ones;
+                    t.maybe[c] = false;
+                }
+                None => {
+                    let width = t.width();
+                    let mut ids = Vec::with_capacity(t.len() * (width + 1));
+                    for r in 0..t.len() {
+                        ids.extend_from_slice(t.row(r));
+                        ids.push(g);
+                    }
+                    t.ids = ids;
+                    t.vars.push(v.clone());
+                    t.maybe.push(false);
+                }
+            }
+            all = Some(match all {
+                None => t,
+                Some(a) => union(a, t)?,
+            });
+        }
+        all
+    }
+
     /// `?s <p>+ ?o`, `?s ^<p>+ ?o`, and with a constant end `<p>*` too (#11): the pairs of
     /// the transitive closure of the predicate's edges, each end once per start (as SPARQL's
     /// paths give them). The starts are a constant end, else the values `seed` (the rows the
@@ -599,6 +672,10 @@ impl Eval<'_> {
                 },
             },
         };
+        // Which nodes a zero-length path matches in a named graph is the evaluator's to say.
+        if zero && matches!(self.graph, GraphSelector::Graph(_)) {
+            return None;
+        }
         if zero && starts.is_none() {
             // A zero-length path between two free variables: every term of the graph.
             return None;
@@ -2509,6 +2586,9 @@ fn shared_loose(a: &Table, b: &Table) -> Option<(Keys, Keys)> {
 
 /// Pairs of columns, (in `a`, in `b`).
 type Keys = Vec<(usize, usize)>;
+
+/// The most graphs `GRAPH ?g { … }` evaluates its pattern in, one by one.
+const MAX_GRAPHS: usize = 256;
 
 /// The most row pairs a join on variables that may be unbound checks one by one (`VALUES`
 /// with `UNDEF`, a value an `OPTIONAL` may leave unbound).

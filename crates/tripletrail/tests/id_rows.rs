@@ -1832,6 +1832,87 @@ fn alternative_paths_on_ids_are_the_evaluators() {
     }
 }
 
+/// `GRAPH` on ids: the pattern in one named graph, or in each with its name bound, is the
+/// evaluator's, also when the pattern binds the graph's variable itself.
+#[test]
+fn graph_patterns_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..200 {
+        data.push_str(&format!("ex:s{i} ex:p ex:o{} .\n", i % 30));
+    }
+    for g in 0..4 {
+        data.push_str(&format!("ex:g{g} {{\n"));
+        for i in 0..150 {
+            if (i + g) % 3 == 0 {
+                continue;
+            }
+            data.push_str(&format!("ex:s{i} ex:p ex:o{} .\n", (i + g) % 30));
+            data.push_str(&format!("ex:s{i} ex:q {} .\n", i % 7));
+            if i % 10 == g {
+                data.push_str(&format!("ex:s{i} ex:p ex:g{} .\n", (g + i) % 4));
+                data.push_str(&format!("ex:o{} ex:r ex:g{g} .\n", i % 30));
+            }
+            if i % 5 == 0 {
+                data.push_str(&format!("ex:o{} ex:p ex:o{} .\n", i % 30, (i + 1) % 30));
+            }
+        }
+        data.push_str("}\n");
+    }
+    engine.load(RdfFormat::TriG, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for (q, on_ids) in [
+        ("SELECT * WHERE { GRAPH ?g { ?s ex:p ?o } }", true),
+        (
+            "SELECT * WHERE { GRAPH ex:g2 { ?s ex:p ?o ; ex:q ?v } }",
+            true,
+        ),
+        ("SELECT * WHERE { GRAPH ex:nothing { ?s ex:p ?o } }", false),
+        (
+            "SELECT * WHERE { ?s ex:p ?o . GRAPH ?g { ?s ex:q ?v } }",
+            true,
+        ),
+        ("SELECT * WHERE { GRAPH ?g { ?s ex:p ?g } }", true),
+        (
+            "SELECT * WHERE { GRAPH ?g { ?s ex:p ?o OPTIONAL { ?o ex:r ?g } } }",
+            true,
+        ),
+        (
+            "SELECT ?g (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } } GROUP BY ?g",
+            true,
+        ),
+        ("SELECT DISTINCT ?g WHERE { GRAPH ?g { ?s ex:q 3 } }", true),
+        ("SELECT * WHERE { GRAPH ?g { ex:o0 ex:p+ ?o } }", true),
+        ("SELECT * WHERE { GRAPH ?g { ex:o0 ex:p* ?o } }", false),
+        (
+            "SELECT ?x WHERE { { SELECT * WHERE { GRAPH ?g { ?x ex:q ?y } } } }",
+            true,
+        ),
+        (
+            "SELECT * WHERE { GRAPH ?g { ?s ex:q ?v FILTER(?v > 4) } } ORDER BY ?g ?s LIMIT 5",
+            true,
+        ),
+        (
+            "SELECT ?s ?g WHERE { ?s ex:p ?o MINUS { GRAPH ?g { ?s ex:q 1 } } }",
+            true,
+        ),
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert_eq!(run("ids"), expected, "{q}");
+        assert_eq!(rows(&engine, &format!("{prefix} {q}")), expected, "{q}");
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}");
+    }
+}
+
 /// Groups on a computed string, ordered on it: the strings the store does not hold get ids
 /// made up for the view the rewrites read, and the evaluator reads them back on that view
 /// (more than ~1,300 groups used to fail with "unknown term Ephemeral#0").
