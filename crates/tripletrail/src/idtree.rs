@@ -152,6 +152,33 @@ impl Eval<'_> {
                 let r = self.right(&l, right)?;
                 left_join(&l, &r, self.cancelled)?
             }
+            // `OPTIONAL { … FILTER(e) }` (#11): the filter is on the merged row, so it is the
+            // right side's own when every variable it reads is either always bound on the
+            // right side or never on the left (then both rows give it the same value, or
+            // leave it unbound). Otherwise the evaluator takes it.
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression: Some(e),
+            } => {
+                let l = self.eval(left)?;
+                let r = self.right(&l, right)?;
+                let mut names = std::collections::HashSet::new();
+                crate::plan::expression_variables(e, &mut names)?;
+                let own = names.iter().all(|n| {
+                    let certain = r
+                        .vars
+                        .iter()
+                        .position(|v| v.as_str() == n)
+                        .is_some_and(|c| !r.maybe[c]);
+                    certain || !l.vars.iter().any(|v| v.as_str() == n)
+                });
+                if !own {
+                    return None;
+                }
+                let r = self.filter(e, r)?;
+                left_join(&l, &r, self.cancelled)?
+            }
             GraphPattern::Minus { left, right } => {
                 let l = self.eval(left)?;
                 let r = self.right(&l, right)?;

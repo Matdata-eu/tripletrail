@@ -265,10 +265,13 @@ fn tree_counts_match_the_rows() {
         ("?s ex:val ?a . ?s ex:val ?b FILTER(?a = ?b)", true),
         // A variable that may be unbound, shared with another pattern: the evaluator decides.
         ("?s a ?c OPTIONAL { ?s ex:feat ?f } ?f ex:pub ?r", false),
+        // A filter on the right side's own variables is the right side's (#11).
         (
             "?s a ?c OPTIONAL { ?s ex:feat ?f FILTER(?f != ex:f1) }",
-            false,
+            true,
         ),
+        // One that reads a variable of the left side: the evaluator decides.
+        ("?s a ?c OPTIONAL { ?s ex:feat ?f FILTER(?f != ?c) }", false),
     ];
     let aggregates = [
         "(COUNT(*) AS ?n)",

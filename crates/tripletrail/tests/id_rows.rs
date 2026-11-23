@@ -441,6 +441,32 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?x WHERE { ?s ex:n ?x } ORDER BY DESC(?x / 8) ?s LIMIT 7",
         true,
     ),
+    // `OPTIONAL { … FILTER(e) }`: on ids when the filter reads only what the right side
+    // always binds or the left side never does.
+    (
+        "SELECT ?s ?x WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x FILTER(?x > 50) } }",
+        true,
+    ),
+    (
+        "SELECT ?s ?x WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x FILTER(?s != ex:s3 && ?x < 0) } }",
+        true,
+    ),
+    (
+        "SELECT ?s ?d WHERE { ?s ex:n ?n OPTIONAL { ?s ex:d ?d OPTIONAL { ?s ex:f ?x FILTER(?x > 0) } FILTER(!BOUND(?x)) } }",
+        true,
+    ),
+    (
+        "SELECT ?s ?x WHERE { ?s ex:d ?y OPTIONAL { ?s ex:n ?x FILTER(?x > ?y) } }",
+        false,
+    ),
+    (
+        "SELECT ?s ?o WHERE { ?s ex:n ?x OPTIONAL { ?s ex:p ?o OPTIONAL { ?s ex:d ?x } FILTER(BOUND(?x)) } }",
+        false,
+    ),
+    (
+        "SELECT ?s ?x WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x FILTER(?x * 2 > 100) } } ORDER BY ?s LIMIT 20",
+        true,
+    ),
     // `IF` and `COALESCE`: numbers to inline ids, other terms through the term kernels; only
     // the branch taken is computed, and an error in the condition is unbound.
     (
