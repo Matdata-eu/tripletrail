@@ -97,7 +97,10 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   as Jena: `"03"` before `3`), so a query over amounts or measures stays on ids (about as
   fast as the evaluator for the aggregate itself). Other values (blank
   nodes, language strings, other typed literals, mixed literal kinds) leave the group to the
-  evaluator. Under `ORDER BY` of counts with `LIMIT k`,
+  evaluator. `GROUP_CONCAT` of a variable (with `DISTINCT` and `SEPARATOR`) joins the
+  group's strings on ids in the order of its rows, as a simple literal; a group with another
+  value (unbound, a number, an IRI), which the evaluator makes an error, is left to it
+  (#11; 133k orders, the labels per customer 164 → 48 ms). Under `ORDER BY` of counts with `LIMIT k`,
   only the first k groups are kept, before their other aggregates are computed. A `GROUP BY`
   over `BIND`s with few distinct inputs (`BIND(?q * 2 AS ?k) … GROUP BY ?k`) counts the rows
   per input first and computes the expression once per input, under `--executor ids` too

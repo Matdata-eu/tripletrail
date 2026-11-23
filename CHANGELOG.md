@@ -9,6 +9,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Added
 
+- `GROUP_CONCAT` of a variable, with `DISTINCT` and `SEPARATOR`, is computed per group on term ids (#11). The strings are joined in the order of the group's rows, as the evaluator joins them, into a simple literal. A group with a value that is no string is still left to the evaluator. On 133k synthetic orders, `GROUP_CONCAT` of the labels per customer takes 48 instead of 164 ms, and of the customers' names 47 instead of 134 ms.
 - `SECONDS` of an inline date-time is computed on term ids (#11), in filters, `BIND` and `SUM`, as an `xsd:decimal` with its milliseconds, as the evaluator gives it. It used to send the query to the evaluator. On 133k synthetic orders, `SUM(SECONDS(?t))` takes 9 instead of 94 ms and a count per customer of orders placed after the 30th second 23 instead of 227 ms.
 - Under `--executor ids`, `STRSTARTS`, `STRENDS`, `CONTAINS` and `REGEX` with constant arguments are computed on term ids as `BIND` values too (#11), `true` or `false`, or unbound for a term that is no string. On 133k synthetic orders, a count grouped by `CONTAINS` of the customer's name takes 24 instead of 140 ms.
 - Under `--executor ids`, `<p>?` and `^<p>?` with a constant end, or joined with a pattern that gives an end its values, are answered on term ids (#11): each start and the nodes one edge away. On 133k synthetic orders, a count over orders with a quantity under 50 and `ex:placedBy?` takes 42 instead of 125 ms.

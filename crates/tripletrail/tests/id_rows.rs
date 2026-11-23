@@ -1184,6 +1184,51 @@ const GROUPS: &[(&str, bool)] = &[
         "SELECT ?c (COUNT(DISTINCT ?k) AS ?n) WHERE { ?o ex:by ?c ; ex:q ?q BIND(?q / 2 AS ?k) } GROUP BY ?c",
         false,
     ),
+    // `GROUP_CONCAT` of strings, in the order of the rows; anything else is the evaluator's.
+    (
+        "SELECT ?c (GROUP_CONCAT(?l) AS ?g) WHERE { ?o ex:by ?c ; ex:label ?l } GROUP BY ?c",
+        true,
+    ),
+    (
+        "SELECT ?c (GROUP_CONCAT(DISTINCT ?l ; SEPARATOR = \", \") AS ?g) (COUNT(*) AS ?n) WHERE { ?o ex:by ?c ; ex:label ?l } GROUP BY ?c",
+        true,
+    ),
+    (
+        "SELECT ?c (GROUP_CONCAT(?name ; SEPARATOR = \"\") AS ?g) WHERE { ?o ex:by ?c . ?c ex:name ?name } GROUP BY ?c",
+        true,
+    ),
+    (
+        "SELECT (GROUP_CONCAT(DISTINCT ?l ; SEPARATOR = \"|\") AS ?g) WHERE { ?o ex:label ?l }",
+        true,
+    ),
+    (
+        "SELECT ?l (GROUP_CONCAT(?l) AS ?g) WHERE { ?o ex:label ?l } GROUP BY ?l",
+        true,
+    ),
+    (
+        "SELECT ?c (GROUP_CONCAT(?l) AS ?g) WHERE { ?c ex:name ?name . ?o ex:by ?c ; ex:label ?l ; ex:q ?q FILTER(?q > 3) } GROUP BY ?c",
+        true,
+    ),
+    (
+        "SELECT ?c (GROUP_CONCAT(?l ; SEPARATOR = \"/\") AS ?g) WHERE { { ?o ex:by ?c ; ex:label ?l } UNION { ?c ex:name ?l } } GROUP BY ?c",
+        true,
+    ),
+    (
+        "SELECT ?c (GROUP_CONCAT(?l) AS ?g) WHERE { ?o ex:by ?c OPTIONAL { ?o ex:other ?x } ?o ex:label ?l } GROUP BY ?c",
+        true,
+    ),
+    (
+        "SELECT ?c (GROUP_CONCAT(?q) AS ?g) WHERE { ?o ex:by ?c ; ex:q ?q } GROUP BY ?c",
+        false,
+    ),
+    (
+        "SELECT ?c (GROUP_CONCAT(?o) AS ?g) WHERE { ?o ex:by ?c } GROUP BY ?c",
+        false,
+    ),
+    (
+        "SELECT ?c (GROUP_CONCAT(?x) AS ?g) WHERE { ?o ex:by ?c ; ex:label ?l OPTIONAL { ?o ex:other ?x } } GROUP BY ?c",
+        false,
+    ),
     (
         "SELECT ?c (COUNT(*) AS ?n) WHERE { ?o ex:by ?c } GROUP BY ?c",
         true,
@@ -1263,6 +1308,16 @@ fn groups_read_back_on_ids_are_the_evaluators() {
     for i in 0..9000_u32 {
         let c = i % 2500;
         data.push_str(&format!("ex:o{i} ex:by ex:c{c} ; ex:q {} .\n", i % 17));
+        let label = match i % 4 {
+            0 => format!("\"l{}\"", i % 5),
+            1 => format!("\"l{}\"@en", i % 3),
+            2 => format!("\"m{}\"", i % 7),
+            _ => format!("\"n{}\"@en--ltr", i % 2),
+        };
+        data.push_str(&format!("ex:o{i} ex:label {label} .\n"));
+        if i % 11 == 0 {
+            data.push_str(&format!("ex:o{i} ex:other {} .\n", i % 13));
+        }
         if i < 2500 && i % 3 != 0 {
             data.push_str(&format!("ex:c{i} ex:name \"c{}\" .\n", i % 400));
         }
@@ -1279,6 +1334,12 @@ fn groups_read_back_on_ids_are_the_evaluators() {
             }
         };
         assert_eq!(run("ids"), run("spareval"), "{q}");
+        // And the evaluator alone, without the count passes both executors run.
+        assert_eq!(
+            run("ids"),
+            run("spareval\n#pragma tt.id-rewrites off"),
+            "{q}"
+        );
         let plan = engine
             .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
             .unwrap();

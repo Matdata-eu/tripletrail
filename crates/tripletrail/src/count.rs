@@ -487,6 +487,9 @@ enum Agg<'a> {
     Sum(&'a Expression, bool),
     /// `AVG` of numbers on ids (#62), of the distinct values if `true`.
     Avg(&'a Expression, bool),
+    /// `GROUP_CONCAT` of a variable's strings (#11), of the distinct ones if `true`, with this
+    /// separator.
+    GroupConcat(&'a Variable, bool, &'a str),
 }
 
 /// Each aggregate as an [`Agg`], if all are counts, or `MIN`, `MAX` or `SAMPLE` of a variable.
@@ -507,6 +510,11 @@ fn id_aggregates(aggregates: &[(Variable, AggregateExpression)]) -> Option<Vec<A
                 AggregateFunction::Sample => Some(Agg::Sample(v)),
                 AggregateFunction::Sum => Some(Agg::Sum(e, *distinct)),
                 AggregateFunction::Avg => Some(Agg::Avg(e, *distinct)),
+                AggregateFunction::GroupConcat { separator } => Some(Agg::GroupConcat(
+                    v,
+                    *distinct,
+                    separator.as_deref().unwrap_or(" "),
+                )),
                 _ => None,
             },
             AggregateExpression::FunctionCall {
@@ -1640,6 +1648,35 @@ impl Pass<'_> {
                             _ => sum.literal()?,
                         };
                         Value::literal(self.snapshot, value)
+                    }
+                    // The strings of the group's rows in their order, as the evaluator joins
+                    // them: a simple literal. Any other value (unbound, a number, an IRI) makes
+                    // the evaluator's an error: left to it.
+                    (Agg::GroupConcat(v, distinct, separator), Some(t)) => {
+                        let c = t.col(v)?;
+                        let mut text = String::new();
+                        let mut seen = std::collections::HashSet::new();
+                        let mut first = true;
+                        for &r in rows {
+                            let id = t.row(r as usize)[c];
+                            if *distinct && !seen.insert(id) {
+                                continue;
+                            }
+                            let Term::Literal(l) = self.snapshot.term(id).ok()? else {
+                                return None;
+                            };
+                            if l.datatype() != oxigraph::model::vocab::xsd::STRING
+                                && l.language().is_none()
+                            {
+                                return None;
+                            }
+                            if !first {
+                                text.push_str(separator);
+                            }
+                            first = false;
+                            text.push_str(l.value());
+                        }
+                        Value::literal(self.snapshot, Literal::new_simple_literal(text))
                     }
                     (_, None) => return None,
                 });
