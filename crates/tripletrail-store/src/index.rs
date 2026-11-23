@@ -1135,7 +1135,7 @@ impl QuadIndex {
         let spill = self.spill.as_deref();
         let next = AtomicUsize::new(0);
         // Two at most: the merge also takes memory bandwidth and page cache from queries.
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(2));
+        let threads = crate::par::cores().min(2);
         let mut merged: Vec<(usize, MergedPerm)> = std::thread::scope(|scope| {
             let workers: Vec<_> = (0..threads)
                 .map(|_| {
