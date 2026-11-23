@@ -187,6 +187,7 @@ fn computed(p: &GraphPattern, v: &Variable) -> bool {
         | G::LeftJoin { left, right, .. } => computed(left, v) || computed(right, v),
         G::Filter { inner, .. }
         | G::Project { inner, .. }
+        | G::Graph { inner, .. }
         | G::Distinct { inner }
         | G::Reduced { inner }
         | G::OrderBy { inner, .. }
@@ -291,6 +292,7 @@ fn covered(p: &GraphPattern) -> bool {
                 && covered(inner)
         }
         G::Project { inner, .. }
+        | G::Graph { inner, .. }
         | G::Distinct { inner }
         | G::Reduced { inner }
         | G::OrderBy { inner, .. }
