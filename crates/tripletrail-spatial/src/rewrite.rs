@@ -1061,7 +1061,7 @@ fn parsed<'a>(
     literals: impl Iterator<Item = &'a Literal>,
 ) -> Vec<(Literal, Arc<Geom>)> {
     let literals: Vec<&Literal> = literals.collect();
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = tripletrail_store::par::cores();
     sweep::par_map(&literals, threads, 1024, |l| {
         let g = ctx.geometry(l)?;
         g.geometry.bounding_rect()?;
@@ -1333,7 +1333,7 @@ fn sweep_pairs<'a, K: IndexKey + Sync>(
     accepts: &(dyn Fn(&Geom, &Geom) -> bool + Sync),
 ) -> Option<Vec<(&'a K, &'a K)>> {
     type Side<'a, K> = (Vec<(&'a K, &'a Arc<Geom>)>, Vec<sweep::Bbox>);
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = tripletrail_store::par::cores();
     let space = |crs: &Crs| match crs {
         Crs::Other(iri) => Some(iri.clone()),
         _ => None,
@@ -1549,7 +1549,7 @@ impl<'a> Rewriter<'a> {
         let index = self.index()?;
         let start = Instant::now();
         let candidates: Vec<_> = index.candidates(&geom.crs, envelope).collect();
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let threads = tripletrail_store::par::cores();
         let ctx = self.ctx;
         let found: Vec<Literal> = sweep::par_map(&candidates, threads, 256, |e| {
             (!ctx.cancelled() && plan.accepts_one(index.geom(e))).then(|| index.literal(e).clone())
@@ -1762,7 +1762,7 @@ impl<'a> Rewriter<'a> {
                 .all(|s| s.geometries.is_sorted_by_key(|g| g.id))
         );
         self.stats.sides_evaluated += 2;
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let threads = tripletrail_store::par::cores();
         // The constant tests left to the FILTER hold in every row too.
         // Geometries are keyed by their place in the side's `geometries`.
         // Geometries are parsed only for a test: a constant one here, the join's below.
@@ -2019,7 +2019,7 @@ impl<'a> Rewriter<'a> {
                 .filter(|(_, v)| v == var)
                 .all(|(p, _)| p.accepts_one(g))
         };
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let threads = tripletrail_store::par::cores();
         if left.iter().any(|(_, v)| v == probe_var) {
             let keep = sweep::par_map(&probe, threads, 256, |(_, g)| passes(probe_var, g));
             let mut keep = keep.into_iter();

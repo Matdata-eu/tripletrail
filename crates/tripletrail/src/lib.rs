@@ -4483,7 +4483,7 @@ impl SpatialContext for Engine {
         distinct.dedup();
         // Bounding boxes only, read from the saved records on every core; the join parses the
         // geometries it tests (#754). Empty and invalid geometries meet nothing.
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let threads = tripletrail_store::par::cores();
         let chunk = distinct.len().div_ceil(threads).max(4096);
         let geometries = std::thread::scope(|scope| {
             let workers: Vec<_> = distinct
