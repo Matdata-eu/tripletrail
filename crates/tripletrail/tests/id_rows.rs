@@ -728,7 +728,27 @@ const BINDS: &[(&str, bool)] = &[
     ),
     (
         "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x > 50 AS ?y) FILTER(?y) }",
-        false,
+        true,
+    ),
+    // The effective boolean value of a column.
+    ("SELECT ?s WHERE { ?s ex:val ?x FILTER(?x) }", false),
+    ("SELECT ?s WHERE { ?s ex:val ?x FILTER(!?x) }", false),
+    ("SELECT ?s WHERE { ?s ex:n ?x FILTER(?x) }", true),
+    (
+        "SELECT ?s WHERE { ?s ex:label ?l FILTER(?l || BOUND(?l)) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:p ?o BIND(STRAFTER(STR(?o), \"o1\") AS ?y) FILTER(?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:n ?x ; ex:d ?d BIND(?x * ?d AS ?y) FILTER(?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } FILTER(!?x) }",
+        true,
     ),
     // Filters on the strings the term kernels compute.
     (

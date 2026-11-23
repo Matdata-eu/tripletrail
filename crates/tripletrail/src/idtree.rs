@@ -938,6 +938,57 @@ impl Eval<'_> {
     ) -> Option<Kernel<'k>> {
         use Expression as E;
         Some(match expr {
+            // The effective boolean value of a column (the evaluator's
+            // `effective_boolean_value`): a boolean, a number other than zero (and NaN), a
+            // non-empty simple string; an error for any other term. A literal in the dictionary
+            // whose value the evaluator reads (`"01"^^xsd:integer`) and the terms only this
+            // query knows, other than strings and IRIs, are its to decide.
+            E::Variable(v) => {
+                let c = t.col(v);
+                let truth = self.snapshot.term_id(
+                    oxigraph::model::LiteralRef::new_typed_literal(
+                        "true",
+                        oxigraph::model::vocab::xsd::BOOLEAN,
+                    )
+                    .into(),
+                );
+                let empty = self
+                    .snapshot
+                    .term_id(oxigraph::model::LiteralRef::new_simple_literal("").into());
+                let snapshot = self.snapshot;
+                Box::new(move |row| {
+                    let Some(id) = c.map(|c| row[c]).filter(|id| *id != UNBOUND) else {
+                        return Some(None);
+                    };
+                    Some(match id.kind() {
+                        Kind::Boolean => Some(id == truth?),
+                        Kind::Integer => Some(id.integer_value()? != 0),
+                        Kind::Double | Kind::Decimal => Some(match id.numeric()? {
+                            tripletrail_store::Numeric::Decimal { digits, .. } => digits != 0,
+                            tripletrail_store::Numeric::Double(d) => d != 0.0 && !d.is_nan(),
+                        }),
+                        Kind::String => Some(Some(id) != empty),
+                        // A string or IRI the term kernels made for this query.
+                        Kind::Ephemeral => match snapshot.term(id).ok()? {
+                            oxigraph::model::Term::Literal(l)
+                                if l.datatype() == oxigraph::model::vocab::xsd::STRING =>
+                            {
+                                Some(!l.value().is_empty())
+                            }
+                            oxigraph::model::Term::Literal(l) if l.language().is_none() => {
+                                return None;
+                            }
+                            _ => None,
+                        },
+                        Kind::Iri
+                        | Kind::Blank
+                        | Kind::LangString
+                        | Kind::DateTime
+                        | Kind::Geometry => None,
+                        _ => return None,
+                    })
+                })
+            }
             E::Bound(v) => match t.col(v) {
                 Some(c) => Box::new(move |row| Some(Some(row[c] != UNBOUND))),
                 None => Box::new(|_| Some(Some(false))),
@@ -1249,6 +1300,25 @@ impl Eval<'_> {
                     };
                     Some(Some(lang_matches(&lang, &range)))
                 })
+            }
+            // The effective boolean value of a number the value kernels compute.
+            e if !matches!(e, E::Variable(_) | E::Literal(_))
+                && crate::direct::number_computable(e) =>
+            {
+                use crate::idvalue::Value;
+                let k = crate::idvalue::compile(e, t, self.snapshot)?;
+                Box::new(move |row| {
+                    Some(match k(row)? {
+                        Ok(Value::Integer(i)) => Some(i != 0),
+                        Ok(Value::Decimal(d)) => Some(d != 0),
+                        Ok(Value::Double(d)) => Some(d != 0.0 && !d.is_nan()),
+                        _ => None,
+                    })
+                })
+            }
+            // The effective boolean value of a term the term kernels compute.
+            e if !matches!(e, E::Variable(_)) && crate::idstring::computable(e) => {
+                self.computed_string_test(e, t, effective_boolean_value)?
             }
             _ => return None,
         })
@@ -1714,7 +1784,7 @@ pub(crate) fn filter_covered(e: &Expression) -> bool {
         E::And(a, b) => filter_covered(a) && filter_covered(b),
         // An EXISTS is a filter of its own, not a value inside `||`.
         E::Or(a, b) => !has_exists(a) && !has_exists(b) && filter_covered(a) && filter_covered(b),
-        E::Bound(_) => true,
+        E::Bound(_) | E::Variable(_) => true,
         E::SameTerm(a, b) => operand(a) && operand(b),
         E::Equal(a, b) => {
             let lang = |x: &E, y: &E| {
@@ -1764,8 +1834,35 @@ pub(crate) fn filter_covered(e: &Expression) -> bool {
                     matches!(a, E::Variable(_)) || crate::idstring::computable(a)
                 })
         }
-        _ => false,
+        e => crate::idstring::computable(e) || crate::direct::number_computable(e),
     }
+}
+
+/// The effective boolean value of a term (the evaluator's `effective_boolean_value`): `None`
+/// for a literal whose value only the evaluator reads, `Some(None)` an error.
+fn effective_boolean_value(term: oxigraph::model::Term) -> Option<Option<bool>> {
+    use oxigraph::model::vocab::xsd;
+    let oxigraph::model::Term::Literal(l) = term else {
+        return Some(None);
+    };
+    if l.language().is_some() {
+        return Some(None);
+    }
+    let datatype = l.datatype();
+    Some(Some(if datatype == xsd::STRING {
+        !l.value().is_empty()
+    } else if datatype == xsd::BOOLEAN {
+        match l.value() {
+            "true" | "1" => true,
+            "false" | "0" => false,
+            _ => return None,
+        }
+    } else if datatype == xsd::INTEGER || datatype == xsd::DECIMAL || datatype == xsd::DOUBLE {
+        let v: f64 = l.value().parse().ok()?;
+        v != 0.0 && !v.is_nan()
+    } else {
+        return None;
+    }))
 }
 
 /// A test of the text of a string literal.
