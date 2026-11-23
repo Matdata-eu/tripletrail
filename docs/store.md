@@ -267,7 +267,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   way, an IRI or a blank node an error for the first two (133k orders: `DATATYPE` of a double
   70 instead of 130 ms, `isIRI` 43 instead of 78 ms). A condition on numbers and
   dates (`BIND(?q > 50 AS ?big)`, with `!`, `&&`, `||` and `BOUND`) is an `xsd:boolean` the
-  same way, an error leaving the cell unbound (133k orders: 36 instead of 69 ms). A string these kernels compute is
+  same way, an error leaving the cell unbound (133k orders: 36 instead of 69 ms), and so are
+  `STRSTARTS`, `STRENDS`, `CONTAINS` and `REGEX` of a variable or of a string these kernels
+  compute, with constant arguments (`BIND(CONTAINS(?name, "7") AS ?b)`; an error for anything
+  but a string literal; 133k orders under `--executor ids`, grouped by such a test of the
+  customer's name 24 instead of 140 ms). A string these kernels compute is
   also filtered on ids: `e = "text"` (false for an IRI, a blank node or a language-tagged string;
   a literal of another type is the evaluator's) and `STRSTARTS`, `STRENDS`, `CONTAINS` and
   `REGEX` of it with constant arguments (an error for anything but a string literal), each
