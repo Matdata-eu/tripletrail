@@ -230,7 +230,8 @@ fn computable(e: &Expression, top: bool) -> bool {
             | F::Month
             | F::Day
             | F::Hours
-            | F::Minutes,
+            | F::Minutes
+            | F::Seconds,
             args,
         ) => args.len() == 1 && computable(&args[0], false),
         // `STRLEN` and `xsd:integer` of a text test read a variable's string.

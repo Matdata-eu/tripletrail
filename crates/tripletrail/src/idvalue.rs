@@ -292,6 +292,7 @@ pub(crate) fn compile<'k>(
                 Function::Day => Unary::Day,
                 Function::Hours => Unary::Hours,
                 Function::Minutes => Unary::Minutes,
+                Function::Seconds => Unary::Seconds,
                 _ => return None,
             };
             let a = compile(a, t, snapshot)?;
@@ -542,6 +543,8 @@ enum Unary {
     Day,
     Hours,
     Minutes,
+    /// `xsd:decimal` seconds, with the milliseconds an inline date-time keeps.
+    Seconds,
 }
 
 /// `x op y` with the evaluator's promotion: integer with integer is an integer, anything
@@ -690,7 +693,7 @@ fn unary(f: Unary, x: Value) -> Option<Value> {
             }))
         }
         (
-            Unary::Hours | Unary::Minutes,
+            Unary::Hours | Unary::Minutes | Unary::Seconds,
             Value::DateTime {
                 date: false,
                 instant,
@@ -699,10 +702,11 @@ fn unary(f: Unary, x: Value) -> Option<Value> {
         ) => {
             let local = instant.checked_add(i64::from(tz.unwrap_or(0)) * 60_000)?;
             let ms = local.rem_euclid(MS_PER_DAY);
-            Some(Value::Integer(match f {
-                Unary::Hours => ms / 3_600_000,
-                _ => ms / 60_000 % 60,
-            }))
+            Some(match f {
+                Unary::Hours => Value::Integer(ms / 3_600_000),
+                Unary::Minutes => Value::Integer(ms / 60_000 % 60),
+                _ => Value::Decimal(i128::from(ms % 60_000) * (ONE / 1_000)),
+            })
         }
         _ => None,
     }

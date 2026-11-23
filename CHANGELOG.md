@@ -9,6 +9,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Added
 
+- `SECONDS` of an inline date-time is computed on term ids (#11), in filters, `BIND` and `SUM`, as an `xsd:decimal` with its milliseconds, as the evaluator gives it. It used to send the query to the evaluator. On 133k synthetic orders, `SUM(SECONDS(?t))` takes 9 instead of 94 ms and a count per customer of orders placed after the 30th second 23 instead of 227 ms.
 - Under `--executor ids`, `<p>?` and `^<p>?` with a constant end, or joined with a pattern that gives an end its values, are answered on term ids (#11): each start and the nodes one edge away. On 133k synthetic orders, a count over orders with a quantity under 50 and `ex:placedBy?` takes 42 instead of 125 ms.
 - Under `--executor ids`, negated property sets (`?s !(ex:a|ex:b) ?o`, `^!ex:a`) are answered on term ids (#11), one row per triple whose predicate is not in the set. On 133k synthetic orders, a count per customer over such a path with a filter takes 41 instead of 164 ms.
 - `SUM(DISTINCT …)` and `AVG(DISTINCT …)` of integers, decimals and doubles are computed on term ids (#11), each value once, as the evaluator tells values apart (by datatype and value). They used to be left to the evaluator. On 133k synthetic orders, `SUM(DISTINCT ?qty)` per customer takes 25 instead of 164 ms and `AVG(DISTINCT ?qty)` 32 instead of 179 ms.

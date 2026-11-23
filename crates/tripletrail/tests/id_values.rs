@@ -131,6 +131,8 @@ fn filters_on_numbers_and_dates_match_the_evaluator() {
         "MONTH(?v) >= 6 && DAY(?v) < 10",
         "HOURS(?v) = 13",
         "MINUTES(?v) < 5",
+        "SECONDS(?v) >= 30",
+        "SECONDS(?v) = 7",
         "?v >= \"2005-06-01\"^^xsd:date",
         "?v < \"2005-06-01T00:00:00Z\"^^xsd:dateTime",
         "?v < \"2005-06-01T00:00:00\"^^xsd:dateTime",
@@ -177,6 +179,7 @@ fn sums_match_the_evaluator() {
         "MONTH(?v)",
         "DAY(?v)",
         "HOURS(?v)",
+        "SECONDS(?v)",
     ];
     for p in [
         "ex:int", "ex:dec", "ex:date", "ex:when", "ex:mixed", "ex:maybe", "ex:dbl", "ex:num",

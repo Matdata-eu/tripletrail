@@ -106,7 +106,8 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   Inline integers, decimals, dates and date-times (#125) are read as values from their ids
   (`crates/tripletrail/src/idvalue.rs`, #170): `<`, `<=`, `>`, `>=` and `=` between them and
   numeric or date constants, `+ - *` and unary minus, `ABS`, `CEIL`, `FLOOR`, `ROUND`, `YEAR`,
-  `MONTH`, `DAY`, `HOURS` and `MINUTES` in filters, and `SUM` of such expressions per group
+  `MONTH`, `DAY`, `HOURS`, `MINUTES` and `SECONDS` (an `xsd:decimal` with the milliseconds
+  an inline date-time keeps) in filters and `BIND`, and `SUM` of such expressions per group
   (an integer, or a decimal written as the evaluator writes it). `SUM` and `AVG` also take
   inline `xsd:double` values (#62), mixed with integers and decimals: the sum is then a
   double. The doubles are summed exactly and rounded once at the end, so the sum doesn't

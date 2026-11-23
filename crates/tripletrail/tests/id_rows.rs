@@ -689,6 +689,28 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?a WHERE { ?s ex:p ?o BIND(IF(isIRI(?o), STR(?o), \"-\") AS ?a) }",
         false,
     ),
+    // Parts of date-times (#11): `SECONDS` an `xsd:decimal` with its milliseconds. On a date
+    // or a number the time parts are left to the evaluator.
+    (
+        "SELECT ?s ?y WHERE { ?s ex:t ?x BIND(SECONDS(?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:day ?x BIND(SECONDS(?x) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?h ?m ?y WHERE { ?s ex:t ?x BIND(HOURS(?x) AS ?h) BIND(MINUTES(?x) AS ?m) BIND(YEAR(?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:t ?x BIND(SECONDS(?x) * 1000 AS ?y) FILTER(SECONDS(?x) > 30) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(SECONDS(?x) AS ?y) }",
+        false,
+    ),
     // Conditions on numbers as `xsd:boolean`s.
     (
         "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x > 50 AS ?y) }",
@@ -1059,6 +1081,20 @@ fn binds_on_ids_are_the_evaluators() {
         let n = (i - 200) * 37;
         numbers.push_str(&format!(
             "ex:g{i} ex:wkt \"POINT({n} 1)\"^^<http://www.opengis.net/ont/geosparql#wktLiteral> .\n"
+        ));
+    }
+    // Date-times with and without milliseconds and zones, and dates.
+    for i in 0..120_i64 {
+        let tz = ["", "Z", "+02:00", "-05:30"][i as usize % 4];
+        let ms = ["", ".5", ".125", ".007"][i as usize / 4 % 4];
+        numbers.push_str(&format!(
+            "ex:s{i} ex:t \"2020-{:02}-{:02}T{:02}:{:02}:{:02}{ms}{tz}\"^^xsd:dateTime ; ex:day \"2020-01-{:02}\"^^xsd:date .\n",
+            1 + i % 12,
+            1 + i % 28,
+            i % 24,
+            (i * 7) % 60,
+            (i * 13) % 60,
+            1 + i % 28,
         ));
     }
     numbers.push_str("ex:big ex:huge 9223372036854775000 .\n");
@@ -2064,7 +2100,7 @@ fn negated_property_sets_on_ids_are_the_evaluators() {
         ),
         ("SELECT * WHERE { ex:n0 !ex:name ex:n0 }", false),
         ("SELECT * WHERE { ?s !(ex:a|^ex:b) ?o }", false),
-        // Both ends bound by the rows before: once per row, however many triples join them.
+        // Both ends bound by the rows before: once per triple between them, as Jena gives it.
         ("SELECT * WHERE { ?s ex:a ?o . ?s !ex:name ?o }", true),
         ("SELECT * WHERE { ?s ex:c ?o . ?s !ex:name ?o }", true),
         ("SELECT * WHERE { ?s !ex:name ?o . ?s ex:a ?o }", true),
