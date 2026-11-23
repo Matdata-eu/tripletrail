@@ -116,7 +116,9 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   than 16 digits, or an exponent form such as `1.5E2`) is summed by the evaluator in row
   order, so the same query can round differently on other data. The evaluator, and Fuseki, round after each addition in row order, so the last
   digit can differ: ten times `0.1` sums to `1` here and to `0.9999999999999999` there. An
-  `AVG` of integers and decimals only (a decimal division) stays with the evaluator.
+  `AVG` of integers and decimals only is the evaluator's decimal division of the exact sum by
+  the count (`spareval::decimal_divide`, Jena's: exact, else 24 fraction digits; #11; 133k
+  orders, `AVG` of an integer per customer 200 → 35 ms, over all orders 28 → 12 ms).
   Under `--executor ids`, `/` is computed too: a quotient of integers or decimals as the
   evaluator's (`spareval::decimal_divide`, Jena's), of doubles a double, by zero an error
   (`BIND(?q / 4 AS ?h) FILTER(?h > 20)` on 133k orders 191 → 33 ms).

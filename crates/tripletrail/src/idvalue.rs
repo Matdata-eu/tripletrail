@@ -839,15 +839,24 @@ impl Sum {
         })
     }
 
-    /// The literal the evaluator gives for the average of `count` values with this sum: only
-    /// for doubles (an average of integers and decimals is a decimal division, left to the
-    /// evaluator).
+    /// The literal the evaluator gives for the average of `count` values with this sum: a
+    /// double divided, or the decimal quotient of integers and decimals as the evaluator
+    /// divides them (`spareval::decimal_divide`, as Jena: exact, else 24 fraction digits).
     pub(crate) fn average(&self, count: usize) -> Option<Literal> {
         if count == 0 {
             return Some(Literal::from(0_i64));
         }
-        match self.total()? {
-            Total::Double(d) => Some(Literal::from(oxsdatatypes::Double::from(d / count as f64))),
+        let dec = |d: i128| oxsdatatypes::Decimal::from_be_bytes(d.to_be_bytes());
+        let n = oxsdatatypes::Decimal::from(i64::try_from(count).ok()?);
+        let quotient = match self.total()? {
+            Total::Double(d) => {
+                return Some(Literal::from(oxsdatatypes::Double::from(d / count as f64)));
+            }
+            Total::Integer(i) => spareval::decimal_divide(oxsdatatypes::Decimal::from(i), n)?,
+            Total::Decimal(d) => spareval::decimal_divide(dec(d), n)?,
+        };
+        match oxigraph::model::Term::from(quotient) {
+            oxigraph::model::Term::Literal(l) => Some(l),
             _ => None,
         }
     }
@@ -1124,10 +1133,19 @@ mod tests {
         assert_eq!(s.literal().unwrap().value(), "2.75");
         assert_eq!(s.literal().unwrap().datatype(), xsd::DOUBLE);
         assert_eq!(s.average(2).unwrap().value(), "1.375");
-        // An average of integers is a decimal division: not here.
+        // An average of integers is the evaluator's decimal division.
         let mut s = Sum::default();
         s.add(Value::Integer(3)).unwrap();
-        assert!(s.average(2).is_none());
+        let a = s.average(2).unwrap();
+        assert_eq!((a.value(), a.datatype()), ("1.5", xsd::DECIMAL));
+        let mut s = Sum::default();
+        s.add(Value::Integer(1)).unwrap();
+        assert!(
+            s.average(3)
+                .unwrap()
+                .value()
+                .starts_with("0.333333333333333333")
+        );
     }
 
     #[test]
