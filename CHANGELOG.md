@@ -31,6 +31,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- A `FILTER EXISTS` (or `NOT EXISTS`) no longer reads a variable its own group leaves free from a pattern joined to that group (#199). In `{ ?o ex:qty ?q FILTER EXISTS { ?o ex:next ?n } } ?o ex:link ?n`, the planner ran the group once per `ex:link` row with `?n` already bound, so the `EXISTS` looked for that one `?n` and the query could lose rows. Such a group is now joined instead.
 - The OGC API link of **Cite this map** on the Map page dropped the layer's filters (#33).
 - Under the id executor, a query grouped on a computed string and ordered on it (`BIND(STR(?v) AS ?k) … GROUP BY ?k ORDER BY ?k`, more than about 1,300 groups) failed with `unknown term Ephemeral#0`: it was evaluated on a newer view of the store than the one its rewrites made up ids for. It is now evaluated, and explained, on that view.
 - A product of decimals with more than 18 digits after the point (`0.1234567891 * 0.123456789`) gave no value; it is now exact, as in Jena and Fuseki (`0.0152415787625361999`). Arithmetic on it reads it at 18 digits, as on a long quotient. See [Fuseki compatibility](docs/guide/11-fuseki.md).
