@@ -839,15 +839,24 @@ impl Sum {
         })
     }
 
-    /// The literal the evaluator gives for the average of `count` values with this sum: only
-    /// for doubles (an average of integers and decimals is a decimal division, left to the
-    /// evaluator).
+    /// The literal the evaluator gives for the average of `count` values with this sum: a
+    /// double divided, or the decimal quotient of integers and decimals as the evaluator
+    /// divides them (`spareval::decimal_divide`, as Jena: exact, else 24 fraction digits).
     pub(crate) fn average(&self, count: usize) -> Option<Literal> {
         if count == 0 {
             return Some(Literal::from(0_i64));
         }
-        match self.total()? {
-            Total::Double(d) => Some(Literal::from(oxsdatatypes::Double::from(d / count as f64))),
+        let dec = |d: i128| oxsdatatypes::Decimal::from_be_bytes(d.to_be_bytes());
+        let n = oxsdatatypes::Decimal::from(i64::try_from(count).ok()?);
+        let quotient = match self.total()? {
+            Total::Double(d) => {
+                return Some(Literal::from(oxsdatatypes::Double::from(d / count as f64)));
+            }
+            Total::Integer(i) => spareval::decimal_divide(oxsdatatypes::Decimal::from(i), n)?,
+            Total::Decimal(d) => spareval::decimal_divide(dec(d), n)?,
+        };
+        match oxigraph::model::Term::from(quotient) {
+            oxigraph::model::Term::Literal(l) => Some(l),
             _ => None,
         }
     }
