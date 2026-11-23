@@ -1460,6 +1460,112 @@ fn constructs_on_ids_are_the_evaluators() {
     }
 }
 
+/// `MIN` and `MAX` of decimals and doubles, alone and mixed with integers and other terms,
+/// on ids are the evaluator's, ties of equal values written differently included.
+#[test]
+fn extremes_of_numbers_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let numbers = [
+        "\"3\"^^xsd:integer",
+        "\"0012\"^^xsd:integer",
+        "\"-4\"^^xsd:integer",
+        "\"3.0\"^^xsd:decimal",
+        "\"3\"^^xsd:decimal",
+        "\"3.00\"^^xsd:decimal",
+        "\"-0.5\"^^xsd:decimal",
+        "\"12.25\"^^xsd:decimal",
+        "\"+7.10\"^^xsd:decimal",
+        "\"123456789012345678.123\"^^xsd:decimal",
+        "\"3e0\"^^xsd:double",
+        "\"3.0E0\"^^xsd:double",
+        "\"-0.0e0\"^^xsd:double",
+        "\"0.0e0\"^^xsd:double",
+        "\"1.5e300\"^^xsd:double",
+        "\"INF\"^^xsd:double",
+        "\"-INF\"^^xsd:double",
+        "\"NaN\"^^xsd:double",
+        "\"12.25e0\"^^xsd:double",
+        "\"1.5\"^^xsd:float",
+    ];
+    let others = [
+        "\"abc\"",
+        "<http://example.org/x>",
+        "true",
+        "\"1\"@en",
+        "\"2002-10-10T17:00:00Z\"^^xsd:dateTime",
+    ];
+    let mut data = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    // Groups of two to four numbers (each value with each), and groups with another term.
+    let mut g = 0;
+    for (i, a) in numbers.iter().enumerate() {
+        for b in &numbers[i..] {
+            data.push_str(&format!("ex:g{g} ex:v {a}, {b} .\n"));
+            data.push_str(&format!(
+                "ex:h{g} ex:v {a}, {b}, \"7.5\"^^xsd:decimal, \"2\"^^xsd:integer .\n"
+            ));
+            g += 1;
+        }
+        for o in others {
+            data.push_str(&format!("ex:o{i}_{} ex:v {a}, {o} .\n", o.len()));
+        }
+    }
+    for i in 0..300 {
+        data.push_str(&format!(
+            "ex:d{} ex:amount \"{}.{}\"^^xsd:decimal .\n",
+            i % 40,
+            i * 7 % 1000,
+            i % 100
+        ));
+        data.push_str(&format!(
+            "ex:d{} ex:weight \"{}.5e{}\"^^xsd:double .\n",
+            i % 40,
+            i % 90,
+            i % 5
+        ));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    for (q, on_ids) in [
+        (
+            "SELECT ?s (MIN(?v) AS ?lo) (MAX(?v) AS ?hi) WHERE { ?s ex:v ?v } GROUP BY ?s",
+            false,
+        ),
+        (
+            "SELECT ?d (MIN(?a) AS ?lo) (MAX(?a) AS ?hi) WHERE { ?d ex:amount ?a } GROUP BY ?d",
+            true,
+        ),
+        (
+            "SELECT ?d (MAX(?w) AS ?hi) (COUNT(*) AS ?n) WHERE { ?d ex:weight ?w } GROUP BY ?d",
+            true,
+        ),
+        (
+            "SELECT (MAX(?a) AS ?hi) (MIN(?a) AS ?lo) WHERE { ?d ex:amount ?a }",
+            true,
+        ),
+        ("SELECT (MAX(?w) AS ?hi) WHERE { ?d ex:weight ?w }", true),
+        (
+            "SELECT (MAX(?v) AS ?hi) (MIN(?v) AS ?lo) WHERE { ?s ex:v ?v FILTER(isNumeric(?v)) }",
+            false,
+        ),
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        assert_eq!(run("ids"), run("spareval"), "{q}");
+        if on_ids {
+            let plan = engine
+                .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+                .unwrap();
+            assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+        }
+    }
+}
+
 /// Groups on a computed string, ordered on it: the strings the store does not hold get ids
 /// made up for the view the rewrites read, and the evaluator reads them back on that view
 /// (more than ~1,300 groups used to fail with "unknown term Ephemeral#0").

@@ -3359,6 +3359,8 @@ pub(crate) struct Pick<'a> {
     terms: HashMap<TermId, oxigraph::model::Term>,
     /// The order of IRIs and strings, fetched on first use.
     ranks: Option<std::sync::Arc<tripletrail_store::StringRanks>>,
+    /// The numbers [`Self::extreme`] read as the evaluator does, `None` for other terms.
+    numbers: HashMap<TermId, Option<spareval::ExpressionTerm>>,
 }
 
 impl<'a> Pick<'a> {
@@ -3367,6 +3369,7 @@ impl<'a> Pick<'a> {
             snapshot,
             terms: HashMap::new(),
             ranks: None,
+            numbers: HashMap::new(),
         }
     }
 
@@ -3384,9 +3387,10 @@ impl<'a> Pick<'a> {
     /// `MIN(?var)` (`max: false`) or `MAX(?var)` in SPARQL's order of terms, `UNBOUND` when
     /// a row has it unbound (the aggregate is an error then) or there are no rows. `None` for
     /// values this doesn't order on ids: blank nodes, quoted triples, literals other than
-    /// strings, language strings, integers and booleans, and literals of different kinds; and
+    /// strings, language strings, numbers and booleans, and literals of different kinds; and
     /// for the ties Jena breaks by text (#517): language strings with different tags, equal
-    /// integers written differently.
+    /// integers written differently. Decimals and doubles (with integers) are ordered as the
+    /// evaluator orders them, ties included.
     pub(crate) fn extreme(
         &mut self,
         t: &Table,
@@ -3403,9 +3407,23 @@ impl<'a> Pick<'a> {
             if id == UNBOUND {
                 return Some(UNBOUND);
             }
+            // Decimals, doubles and floats, and integers with them, in the evaluator's own
+            // order (Jena's: by value, then as written).
+            if let Some(b) = best
+                && b != id
+                && (id.kind() != Kind::Integer || b.kind() != Kind::Integer)
+                && let (Some(x), Some(y)) = (self.number(id), self.number(b))
+            {
+                let o = spareval::cmp_values_as_jena(&x, &y);
+                let better = if max { o.is_gt() } else { o.is_lt() };
+                best = Some(if better { id } else { b });
+                continue;
+            }
             best = Some(match best {
                 None => {
-                    self.order_key(id)?;
+                    if self.order_key(id).is_none() {
+                        self.number(id)?;
+                    }
                     id
                 }
                 Some(b) if b == id => b,
@@ -3422,6 +3440,37 @@ impl<'a> Pick<'a> {
             });
         }
         Some(best.unwrap_or(UNBOUND))
+    }
+
+    /// A number (an integer, decimal, double or float literal) as written, as the evaluator's
+    /// `MIN` and `MAX` compare it (ties of equal values by their text, `"03"` before `3`);
+    /// `None` for other terms.
+    fn number(&mut self, id: TermId) -> Option<spareval::ExpressionTerm> {
+        use spareval::ExpressionTerm as T;
+        if !matches!(
+            id.kind(),
+            Kind::Integer | Kind::Decimal | Kind::Double | Kind::Typed
+        ) {
+            return None;
+        }
+        if let Some(n) = self.numbers.get(&id) {
+            return n.clone();
+        }
+        let n = match self.snapshot.term(id).ok()? {
+            oxigraph::model::Term::Literal(l) => Some(T::from_literal_as_written(l)),
+            _ => None,
+        }
+        .filter(|t| {
+            matches!(
+                t.clone().value(),
+                T::IntegerLiteral(_)
+                    | T::DecimalLiteral(_)
+                    | T::DoubleLiteral(_)
+                    | T::FloatLiteral(_)
+            )
+        });
+        self.numbers.insert(id, n.clone());
+        n
     }
 
     /// `a` and `b` in the order of `ORDER BY` (unbound first), `None` for values this
