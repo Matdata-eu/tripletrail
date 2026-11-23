@@ -3411,6 +3411,11 @@ impl Snapshot {
         self.quads.has_named_graphs()
     }
 
+    /// The ids of the graphs that hold quads, in order: one seek per graph.
+    pub fn graph_ids(&self) -> Vec<TermId> {
+        self.quads.graph_ids().into_iter().map(TermId).collect()
+    }
+
     /// Ranks of the stored IRIs, blank nodes and `xsd:string` literals in the order of their
     /// texts (issue #171): comparing ranks of one kind compares the terms. Built on first
     /// use (one sort of those terms, holding the dictionary's read lock), and built again once
