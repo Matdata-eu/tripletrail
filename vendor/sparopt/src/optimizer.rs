@@ -1681,7 +1681,19 @@ fn is_expression_fit_for_for_loop_join(
                 && is_expression_fit_for_for_loop_join(b, input_types, entry_types)
                 && is_expression_fit_for_for_loop_join(c, input_types, entry_types)
         }
-        Expression::Exists(inner) => is_fit_for_for_loop_join(inner, input_types, entry_types),
+        // tripletrail: an `EXISTS` reads the variables of its pattern from the row of the
+        // pattern it filters: a variable that row may leave unbound, but the left side of the
+        // LATERAL join binds, would be read from the left side's row instead. In
+        // `{ ?o ex:qty ?q FILTER EXISTS { ?o ex:next ?n } } ?o ex:link ?n`, `?n` is free in
+        // the filter's group.
+        Expression::Exists(inner) => {
+            let mut free_but_bound = false;
+            inner.lookup_used_variables(&mut |v| {
+                free_but_bound |=
+                    input_types.get(v).undef && entry_types.get(v) != VariableType::UNDEF;
+            });
+            !free_but_bound && is_fit_for_for_loop_join(inner, input_types, entry_types)
+        }
     }
 }
 
