@@ -221,7 +221,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   a literal of another type is the evaluator's) and `STRSTARTS`, `STRENDS`, `CONTAINS` and
   `REGEX` of it with constant arguments (an error for anything but a string literal), each
   decided once per distinct value of the column it reads. A `BIND(STRAFTER(STR(?c), "…/c") AS
-  ?n) FILTER(?n = "1033")` over 133k orders takes 13 instead of 71 ms. `VALUES` is a table of the ids of
+  ?n) FILTER(?n = "1033")` over 133k orders takes 13 instead of 71 ms. A filter on the effective
+  boolean value of a column or of such an expression (`FILTER(?big)`, `FILTER(?q - 50)`,
+  `FILTER(STRAFTER(…))`) is decided on ids as the evaluator decides it: a boolean, a number
+  other than zero and NaN, or a non-empty simple string is true, any other term an error; a
+  literal whose value only the evaluator reads (`"01"^^xsd:integer`) leaves the query to it
+  (133k orders: `BIND(?q > 50 AS ?big) FILTER(?big)` 25 instead of 45 ms). `VALUES` is a table of the ids of
   its terms (`UNDEF` an unbound cell), and a sub-select's projection the columns it keeps, so
   the groups a count pass reads back from a table of ids are answered from that table. A
   sub-select's `DISTINCT`, `REDUCED`, order of variables and slice (under an order; a slice
