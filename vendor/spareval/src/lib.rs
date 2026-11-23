@@ -18,7 +18,8 @@ pub use crate::dataset::{decimal_divide, decimal_lexical, decimal_literal, decim
 pub use crate::dataset::{ExpressionTerm, InternalQuad, QueryableDataset};
 pub use crate::error::QueryEvaluationError;
 pub use crate::eval::{
-    CancellationToken, custom_function_call_cancelled, set_build_memory, set_lookup_joins,
+    CancellationToken, cmp_values_as_jena, custom_function_call_cancelled, set_build_memory,
+    set_lookup_joins,
 };
 use crate::eval::{EvalNodeWithStats, SimpleEvaluator, Timer};
 use crate::expression::{

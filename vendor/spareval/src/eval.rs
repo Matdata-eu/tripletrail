@@ -3088,7 +3088,7 @@ fn jena_kind(t: &ExpressionTerm) -> u16 {
 /// language-tagged strings, numbers, booleans, dates and times, durations and triple terms, and
 /// literals of other datatypes last; then by value; and values that are equal, such as
 /// `3.0` and `3.0e0`, or that do not compare, by the terms as written (`NodeCmp.compareRDFTerms`).
-fn cmp_values_as_jena(a: &ExpressionTerm, b: &ExpressionTerm) -> Ordering {
+pub fn cmp_values_as_jena(a: &ExpressionTerm, b: &ExpressionTerm) -> Ordering {
     let kind = jena_kind;
     let (va, vb) = (a.value_ref(), b.value_ref());
     let order = kind(&va).cmp(&kind(&vb));
