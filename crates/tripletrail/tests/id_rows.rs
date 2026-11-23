@@ -2028,3 +2028,56 @@ fn long_in_lists_are_hash_sets() {
         "IN {filter:?}, VALUES {join:?}"
     );
 }
+
+/// A negated property set (`!(ex:a|ex:b)`, `^!ex:a`) on ids is the evaluator's: a row per
+/// triple whose predicate is not in the set.
+#[test]
+fn negated_property_sets_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..300 {
+        data.push_str(&format!("ex:n{i} ex:a ex:n{} .\n", i * 7 % 300));
+        if i % 3 == 0 {
+            // The same pair by two predicates: two rows.
+            data.push_str(&format!("ex:n{i} ex:b ex:n{} .\n", i * 7 % 300));
+        }
+        if i % 10 == 0 {
+            data.push_str(&format!("ex:n{i} ex:c ex:n{i} ; a ex:C .\n"));
+        }
+        data.push_str(&format!("ex:n{i} ex:name \"N{}\" .\n", i % 40));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for (q, on_ids) in [
+        ("SELECT * WHERE { ?s !ex:a ?o }", true),
+        ("SELECT * WHERE { ?s !(ex:a|ex:name) ?o }", true),
+        ("SELECT * WHERE { ?s !(ex:a|ex:nowhere) ?o }", true),
+        ("SELECT * WHERE { ?s ^!ex:a ?o }", true),
+        ("SELECT * WHERE { ?s !(^ex:a|^ex:name) ?o }", true),
+        ("SELECT * WHERE { ex:n3 !ex:name ?o }", true),
+        ("SELECT * WHERE { ?s !ex:name ex:n21 }", true),
+        ("SELECT * WHERE { ?x !ex:name ?x }", true),
+        ("SELECT * WHERE { ?s a ex:C . ?s !(ex:name|ex:c) ?o }", true),
+        (
+            "SELECT ?o (COUNT(*) AS ?c) WHERE { ?s !(ex:name|a) ?o } GROUP BY ?o",
+            true,
+        ),
+        ("SELECT * WHERE { ex:n0 !ex:name ex:n0 }", false),
+        ("SELECT * WHERE { ?s !(ex:a|^ex:b) ?o }", false),
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert!(!expected.is_empty(), "{q}");
+        assert_eq!(run("ids"), expected, "{q}");
+        assert_eq!(rows(&engine, &format!("{prefix} {q}")), expected, "{q}");
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}");
+    }
+}
