@@ -618,6 +618,47 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, UCASE(\"a\"), \"_\") AS ?y) }",
         true,
     ),
+    // Conditions on numbers as `xsd:boolean`s.
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x > 50 AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x ; ex:d ?d BIND(?x < 0 && ?d < -100 AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(!(?x = 3) || ?x < 10 AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } BIND(?x > 5 AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } BIND(BOUND(?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(?x > 2 AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(STR(?x > 50) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(CONCAT(STR(?x >= 7), \"!\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?y (COUNT(*) AS ?c) WHERE { ?s ex:n ?x BIND(?x > 50 AS ?y) } GROUP BY ?y",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x > 50 AS ?y) FILTER(?y) }",
+        false,
+    ),
     // Filters on the strings the term kernels compute.
     (
         "SELECT ?s WHERE { ?s ex:p ?o FILTER(STRAFTER(STR(?o), STR(ex:)) = \"o17\") }",
