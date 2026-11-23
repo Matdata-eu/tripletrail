@@ -71,6 +71,29 @@ pub(crate) fn negated_path(
     }
 }
 
+/// `<p>?` and `^<p>?` (or `(^<p>)?`): the predicate, whether it is followed backwards.
+pub(crate) fn optional_path(
+    path: &PropertyPathExpression,
+) -> Option<(&spargebra::term::NamedNode, bool)> {
+    use PropertyPathExpression as P;
+    let (inner, outer_reverse) = match path {
+        P::ZeroOrOne(p) => (&**p, false),
+        P::Reverse(p) => match &**p {
+            P::ZeroOrOne(p) => (&**p, true),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    match inner {
+        P::NamedNode(n) => Some((n, outer_reverse)),
+        P::Reverse(p) => match &**p {
+            P::NamedNode(n) => Some((n, !outer_reverse)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The predicates of an alternative of predicates and their inverses (`ex:a|^ex:b|ex:c`), each
 /// with whether it is followed backwards: the evaluator's union of their pairs without
 /// duplicates.
@@ -707,7 +730,7 @@ impl Eval<'_> {
         all
     }
 
-    /// `?s <p>+ ?o`, `?s ^<p>+ ?o`, and with a constant end `<p>*` too (#11): the pairs of
+    /// `?s <p>+ ?o`, `?s ^<p>+ ?o`, and with a constant end `<p>*` and `<p>?` too (#11): the pairs of
     /// the transitive closure of the predicate's edges, each end once per start (as SPARQL's
     /// paths give them). The starts are a constant end, else the values `seed` (the rows the
     /// path is joined with) gives one end, searched from that end, else every node with an
@@ -720,7 +743,14 @@ impl Eval<'_> {
         object: &TermPattern,
         seed: Option<&Table>,
     ) -> Option<Table> {
-        let (predicate, reverse, zero) = closure_path(path)?;
+        // `<p>?`: the starts themselves and their next nodes.
+        let (predicate, reverse, zero, one) = match closure_path(path) {
+            Some((p, reverse, zero)) => (p, reverse, zero, false),
+            None => {
+                let (p, reverse) = optional_path(path)?;
+                (p, reverse, true, true)
+            }
+        };
         let end = |t: &TermPattern| match t {
             TermPattern::Variable(v) => Some(Err(v.clone())),
             TermPattern::NamedNode(n) => Some(Ok(self.snapshot.term_id(n.as_ref().into())?)),
@@ -781,12 +811,68 @@ impl Eval<'_> {
         {
             return None;
         }
-        let ids = match starts {
+        let mut ids = match &starts {
+            Some(starts) if one => self.one_step(predicate, forward, starts, from.is_err())?,
             Some(starts) if (starts.len() as f64) * LEVEL_COST < self.edge_estimate(predicate) => {
-                self.closure_by_levels(predicate, forward, zero, &starts, from.is_err())?
+                self.closure_by_levels(predicate, forward, zero, starts, from.is_err())?
             }
-            starts => self.closure_of_all(predicate, forward, zero, starts, from.is_err())?,
+            _ => self.closure_of_all(predicate, forward, zero, starts.clone(), from.is_err())?,
         };
+        let seeded = starts.filter(|_| zero && from.is_err());
+        // A value another pattern gives an end matches itself only if it is a node of the
+        // graph read (a subject or object there), as in the evaluator; a constant end always
+        // does. A start with another end is one; the others are looked up.
+        if let Some(starts) = seeded {
+            let is_node = |id: TermId| {
+                self.snapshot.estimate_ids(Some(id), None, None, self.graph) > 0
+                    || self.snapshot.estimate_ids(None, None, Some(id), self.graph) > 0
+            };
+            // The starts without another end that are no node: their own row goes.
+            let mut gone: Vec<TermId> = Vec::new();
+            if ids.chunks_exact(2).is_sorted_by_key(|p| p[0]) {
+                // Each start's rows together (`<p>?` gives them so).
+                let mut r = 0;
+                while r < ids.len() {
+                    let start = ids[r];
+                    let mut other = false;
+                    let mut e = r;
+                    while e < ids.len() && ids[e] == start {
+                        other |= ids[e + 1] != start;
+                        e += 2;
+                    }
+                    if !other && !is_node(start) {
+                        gone.push(start);
+                    }
+                    r = e;
+                }
+            } else {
+                let mut other = vec![false; starts.len()];
+                for p in ids.chunks_exact(2) {
+                    if p[0] != p[1]
+                        && let Ok(i) = starts.binary_search(&p[0])
+                    {
+                        other[i] = true;
+                    }
+                }
+                gone.extend(
+                    starts
+                        .iter()
+                        .zip(&other)
+                        .filter(|&(&s, &o)| !o && !is_node(s))
+                        .map(|(&s, _)| s),
+                );
+            }
+            if !gone.is_empty() {
+                gone.sort_unstable();
+                let mut kept = Vec::with_capacity(ids.len());
+                for p in ids.chunks_exact(2) {
+                    if !(p[0] == p[1] && gone.binary_search(&p[0]).is_ok()) {
+                        kept.extend_from_slice(p);
+                    }
+                }
+                ids = kept;
+            }
+        }
         let vars = match from {
             Ok(_) => vec![to],
             Err(v) => vec![v, to],
@@ -822,6 +908,53 @@ impl Eval<'_> {
             object: o.clone().into(),
         };
         (t, a, b)
+    }
+
+    /// `<p>?` from `starts`: each start, and the nodes one edge away.
+    /// Rows are (start, end), or the ends alone without `pairs`.
+    fn one_step(
+        &self,
+        predicate: &spargebra::term::NamedNode,
+        forward: bool,
+        starts: &[TermId],
+        pairs: bool,
+    ) -> Option<Vec<TermId>> {
+        let (pattern, a, b) = Self::edge(predicate, forward);
+        let level = Table {
+            vars: vec![a.clone()],
+            ones: starts.len(),
+            ids: starts.to_vec(),
+            maybe: vec![false],
+        };
+        let edges = self.bgp_from(std::slice::from_ref(&pattern), Some(&level))?;
+        let width = usize::from(pairs) + 1;
+        if (starts.len() + edges.len()).saturating_mul(width + 2) > max_ids() {
+            return None;
+        }
+        let (ca, cb) = (edges.col(&a)?, edges.col(&b)?);
+        // Each pair once: a start matches itself, and an edge may be read twice when the
+        // default graph is the union of the graphs.
+        // The edges read may start elsewhere too (the seed narrows the scan, it doesn't
+        // filter): only those from a start.
+        let mut found: Vec<(TermId, TermId)> = starts.iter().map(|&s| (s, s)).collect();
+        found.extend((0..edges.len()).filter_map(|r| {
+            let row = edges.row(r);
+            starts
+                .binary_search(&row[ca])
+                .is_ok()
+                .then_some((row[ca], row[cb]))
+        }));
+        drop(edges);
+        found.sort_unstable();
+        found.dedup();
+        let mut ids = Vec::with_capacity(found.len() * width);
+        for (start, end) in found {
+            if pairs {
+                ids.push(start);
+            }
+            ids.push(end);
+        }
+        Some(ids)
     }
 
     /// The closure from a few starts: the edges of each level's nodes looked up by their
