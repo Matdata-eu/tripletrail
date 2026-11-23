@@ -204,7 +204,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   without dot segments is that IRI. A direction-tagged string in `CONCAT` or
   `REPLACE`, a string `IRI` would resolve
   against a base, and `STRDT` to an XML Schema type other than `xsd:string` (whose lexical
-  form the store would not keep) leave the query to the evaluator. `VALUES` is a table of the ids of
+  form the store would not keep) leave the query to the evaluator. Such a string is also
+  filtered on ids: `e = "text"` (false for an IRI, a blank node or a language-tagged string;
+  a literal of another type is the evaluator's) and `STRSTARTS`, `STRENDS`, `CONTAINS` and
+  `REGEX` of it with constant arguments (an error for anything but a string literal), each
+  decided once per distinct value of the column it reads. A `BIND(STRAFTER(STR(?c), "…/c") AS
+  ?n) FILTER(?n = "1033")` over 133k orders takes 13 instead of 71 ms. `VALUES` is a table of the ids of
   its terms (`UNDEF` an unbound cell), and a sub-select's projection the columns it keeps, so
   the groups a count pass reads back from a table of ids are answered from that table. A
   sub-select's `DISTINCT`, `REDUCED`, order of variables and slice (under an order; a slice
