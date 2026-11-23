@@ -15,6 +15,7 @@ mod update;
 #[cfg(feature = "sparql-12")]
 pub use crate::dataset::ExpressionTriple;
 pub use crate::dataset::{decimal_divide, decimal_lexical, decimal_literal, decimal_multiply};
+pub use crate::expression::cast;
 pub use crate::dataset::{ExpressionTerm, InternalQuad, QueryableDataset};
 pub use crate::error::QueryEvaluationError;
 pub use crate::eval::{

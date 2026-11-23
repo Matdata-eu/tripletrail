@@ -6,7 +6,7 @@ use oxiri::Iri;
 use oxrdf::vocab::{rdf, xsd};
 #[cfg(feature = "sparql-12")]
 use oxrdf::{BaseDirection, NamedOrBlankNode};
-use oxrdf::{BlankNode, Literal, NamedNode, Term, Variable};
+use oxrdf::{BlankNode, Literal, NamedNode, NamedNodeRef, Term, Variable};
 #[cfg(feature = "sep-0002")]
 use oxsdatatypes::{Date, DayTimeDuration, Duration, Time, TimezoneOffset, YearMonthDuration};
 use oxsdatatypes::{DateTime, Decimal, Double, Float, Integer};
@@ -1448,34 +1448,11 @@ pub fn build_expression_evaluator<'a, C: ExpressionEvaluatorContext<'a>>(
                 }
 
                 match function_name.as_ref() {
-                    xsd::STRING => {
-                        cast_fn!(|t: ExpressionTerm| Some(ExpressionTerm::StringLiteral(
-                            match t {
-                                // The canonical form, as the W3C cast tests expect ("0", not
-                                // the "0.0" a computed decimal is written as).
-                                ExpressionTerm::DecimalLiteral(value) => value.to_string(),
-                                t => match t.into() {
-                                Term::NamedNode(term) => term.into_string(),
-                                Term::BlankNode(_) => return None,
-                                Term::Literal(term) => term.destruct().0,
-                                #[cfg(feature = "sparql-12")]
-                                Term::Triple(_) => return None,
-                                },
-                            }
-                        )))
-                    }
-                    xsd::BOOLEAN => {
-                        cast_fn!(|t: ExpressionTerm| Some(ExpressionTerm::BooleanLiteral(
-                            match t {
-                                ExpressionTerm::BooleanLiteral(value) => value,
-                                ExpressionTerm::FloatLiteral(value) => value.into(),
-                                ExpressionTerm::DoubleLiteral(value) => value.into(),
-                                ExpressionTerm::IntegerLiteral(value) => value.into(),
-                                ExpressionTerm::DecimalLiteral(value) => value.into(),
-                                ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
-                                _ => return None,
-                            }
-                        )))
+                    // tripletrail: the casts the id executor computes too (`cast`).
+                    xsd::STRING | xsd::BOOLEAN | xsd::FLOAT | xsd::INTEGER | xsd::DECIMAL
+                    | xsd::DATE_TIME => {
+                        let name = function_name.clone();
+                        cast_fn!(|t: ExpressionTerm| cast_value(name.as_ref(), t))
                     }
                     xsd::DOUBLE => {
                         // tripletrail: as Jena, which casts by lexical form when it is valid for
@@ -1484,91 +1461,9 @@ pub fn build_expression_evaluator<'a, C: ExpressionEvaluatorContext<'a>>(
                         // "100.0", not "100").
                         if parameters.len() == 1 {
                             let e = build_written_evaluator(&parameters[0], context)?;
-                            return Ok(Rc::new(move |tuple| {
-                                let t = e(tuple)?;
-                                if let Some(text) = double_text(&t) {
-                                    // A text that is already the canonical form is the same
-                                    // term as the double itself, so keep one representation
-                                    // (COUNT(DISTINCT) compares representations).
-                                    if let Ok(d) = text.parse::<Double>() {
-                                        if d.to_string() == text {
-                                            return Some(ExpressionTerm::DoubleLiteral(d));
-                                        }
-                                    }
-                                    return Some(ExpressionTerm::OtherTypedLiteral {
-                                        value: text,
-                                        datatype: xsd::DOUBLE.into(),
-                                    });
-                                }
-                                Some(ExpressionTerm::DoubleLiteral(match t.value() {
-                                    ExpressionTerm::FloatLiteral(value) => value.into(),
-                                    ExpressionTerm::DoubleLiteral(value) => value,
-                                    ExpressionTerm::IntegerLiteral(value) => value.into(),
-                                    ExpressionTerm::DecimalLiteral(value) => value.into(),
-                                    ExpressionTerm::BooleanLiteral(value) => value.into(),
-                                    ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
-                                    _ => return None,
-                                }))
-                            }));
+                            return Ok(Rc::new(move |tuple| cast_double(e(tuple)?)));
                         }
-                        cast_fn!(
-                            |t: ExpressionTerm| Some(ExpressionTerm::DoubleLiteral(match t {
-                                ExpressionTerm::FloatLiteral(value) => value.into(),
-                                ExpressionTerm::DoubleLiteral(value) => value,
-                                ExpressionTerm::IntegerLiteral(value) => value.into(),
-                                ExpressionTerm::DecimalLiteral(value) => value.into(),
-                                ExpressionTerm::BooleanLiteral(value) => value.into(),
-                                ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
-                                _ => return None,
-                            }))
-                        )
-                    }
-                    xsd::FLOAT => {
-                        cast_fn!(
-                            |t: ExpressionTerm| Some(ExpressionTerm::FloatLiteral(match t {
-                                ExpressionTerm::FloatLiteral(value) => value,
-                                ExpressionTerm::DoubleLiteral(value) => value.into(),
-                                ExpressionTerm::IntegerLiteral(value) => value.into(),
-                                ExpressionTerm::DecimalLiteral(value) => value.into(),
-                                ExpressionTerm::BooleanLiteral(value) => value.into(),
-                                ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
-                                _ => return None,
-                            }))
-                        )
-                    }
-                    xsd::INTEGER => {
-                        cast_fn!(|t: ExpressionTerm| Some(ExpressionTerm::IntegerLiteral(
-                            match t {
-                                ExpressionTerm::FloatLiteral(value) => {
-                                    double_to_integer(f64::from(f32::from(value)))?
-                                }
-                                ExpressionTerm::DoubleLiteral(value) => {
-                                    double_to_integer(f64::from(value))?
-                                }
-                                ExpressionTerm::IntegerLiteral(value) => value,
-                                ExpressionTerm::DecimalLiteral(value) => value.try_into().ok()?,
-                                ExpressionTerm::BooleanLiteral(value) => value.into(),
-                                ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
-                                _ => return None,
-                            }
-                        )))
-                    }
-                    xsd::DECIMAL => {
-                        cast_fn!(|t: ExpressionTerm| Some(ExpressionTerm::DecimalLiteral(
-                            match t {
-                                ExpressionTerm::FloatLiteral(value) => {
-                                    float_to_decimal(f32::from(value))?
-                                }
-                                ExpressionTerm::DoubleLiteral(value) => {
-                                    double_to_decimal(f64::from(value))?
-                                }
-                                ExpressionTerm::IntegerLiteral(value) => value.into(),
-                                ExpressionTerm::DecimalLiteral(value) => value,
-                                ExpressionTerm::BooleanLiteral(value) => value.into(),
-                                ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
-                                _ => return None,
-                            }
-                        )))
+                        cast_fn!(|t: ExpressionTerm| cast_double(t))
                     }
                     #[cfg(feature = "sep-0002")]
                     xsd::DATE => {
@@ -1591,17 +1486,6 @@ pub fn build_expression_evaluator<'a, C: ExpressionEvaluatorContext<'a>>(
                                 _ => return None,
                             }))
                         )
-                    }
-                    xsd::DATE_TIME => {
-                        cast_fn!(|t: ExpressionTerm| Some(ExpressionTerm::DateTimeLiteral(
-                            match t {
-                                ExpressionTerm::DateTimeLiteral(value) => value,
-                                #[cfg(feature = "sep-0002")]
-                                ExpressionTerm::DateLiteral(value) => value.try_into().ok()?,
-                                ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
-                                _ => return None,
-                            }
-                        )))
                     }
                     #[cfg(feature = "sep-0002")]
                     xsd::DURATION => {
@@ -2749,6 +2633,106 @@ fn double_text(t: &ExpressionTerm) -> Option<String> {
         ExpressionTerm::StringLiteral(v) if v.parse::<Double>().is_ok() => Some(v.clone()),
         _ => None,
     }
+}
+
+/// tripletrail: a cast of an argument as written (as a variable gives it, see
+/// `ExpressionTerm::from_literal_as_written`) to `xsd:string`, `xsd:boolean`, `xsd:double`,
+/// `xsd:float`, `xsd:integer`, `xsd:decimal` or `xsd:dateTime`, as the evaluator computes it.
+/// `None` for an error, and for another name.
+pub fn cast(name: NamedNodeRef<'_>, t: ExpressionTerm) -> Option<ExpressionTerm> {
+    if name == xsd::DOUBLE {
+        cast_double(t)
+    } else {
+        cast_value(name, t.value())
+    }
+}
+
+/// [`cast`] to `xsd:double`.
+fn cast_double(t: ExpressionTerm) -> Option<ExpressionTerm> {
+    if let Some(text) = double_text(&t) {
+        // A text that is already the canonical form is the same term as the double itself,
+        // so keep one representation (COUNT(DISTINCT) compares representations).
+        if let Ok(d) = text.parse::<Double>() {
+            if d.to_string() == text {
+                return Some(ExpressionTerm::DoubleLiteral(d));
+            }
+        }
+        return Some(ExpressionTerm::OtherTypedLiteral {
+            value: text,
+            datatype: xsd::DOUBLE.into(),
+        });
+    }
+    Some(ExpressionTerm::DoubleLiteral(match t.value() {
+        ExpressionTerm::FloatLiteral(value) => value.into(),
+        ExpressionTerm::DoubleLiteral(value) => value,
+        ExpressionTerm::IntegerLiteral(value) => value.into(),
+        ExpressionTerm::DecimalLiteral(value) => value.into(),
+        ExpressionTerm::BooleanLiteral(value) => value.into(),
+        ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
+        _ => return None,
+    }))
+}
+
+/// [`cast`] of a value (a literal kept as written read by its value) to the other types.
+fn cast_value(name: NamedNodeRef<'_>, t: ExpressionTerm) -> Option<ExpressionTerm> {
+    Some(match name {
+        xsd::STRING => ExpressionTerm::StringLiteral(match t {
+            // The canonical form, as the W3C cast tests expect ("0", not the "0.0" a computed
+            // decimal is written as).
+            ExpressionTerm::DecimalLiteral(value) => value.to_string(),
+            t => match t.into() {
+                Term::NamedNode(term) => term.into_string(),
+                Term::BlankNode(_) => return None,
+                Term::Literal(term) => term.destruct().0,
+                #[cfg(feature = "sparql-12")]
+                Term::Triple(_) => return None,
+            },
+        }),
+        xsd::BOOLEAN => ExpressionTerm::BooleanLiteral(match t {
+            ExpressionTerm::BooleanLiteral(value) => value,
+            ExpressionTerm::FloatLiteral(value) => value.into(),
+            ExpressionTerm::DoubleLiteral(value) => value.into(),
+            ExpressionTerm::IntegerLiteral(value) => value.into(),
+            ExpressionTerm::DecimalLiteral(value) => value.into(),
+            ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
+            _ => return None,
+        }),
+        xsd::FLOAT => ExpressionTerm::FloatLiteral(match t {
+            ExpressionTerm::FloatLiteral(value) => value,
+            ExpressionTerm::DoubleLiteral(value) => value.into(),
+            ExpressionTerm::IntegerLiteral(value) => value.into(),
+            ExpressionTerm::DecimalLiteral(value) => value.into(),
+            ExpressionTerm::BooleanLiteral(value) => value.into(),
+            ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
+            _ => return None,
+        }),
+        xsd::INTEGER => ExpressionTerm::IntegerLiteral(match t {
+            ExpressionTerm::FloatLiteral(value) => double_to_integer(f64::from(f32::from(value)))?,
+            ExpressionTerm::DoubleLiteral(value) => double_to_integer(f64::from(value))?,
+            ExpressionTerm::IntegerLiteral(value) => value,
+            ExpressionTerm::DecimalLiteral(value) => value.try_into().ok()?,
+            ExpressionTerm::BooleanLiteral(value) => value.into(),
+            ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
+            _ => return None,
+        }),
+        xsd::DECIMAL => ExpressionTerm::DecimalLiteral(match t {
+            ExpressionTerm::FloatLiteral(value) => float_to_decimal(f32::from(value))?,
+            ExpressionTerm::DoubleLiteral(value) => double_to_decimal(f64::from(value))?,
+            ExpressionTerm::IntegerLiteral(value) => value.into(),
+            ExpressionTerm::DecimalLiteral(value) => value,
+            ExpressionTerm::BooleanLiteral(value) => value.into(),
+            ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
+            _ => return None,
+        }),
+        xsd::DATE_TIME => ExpressionTerm::DateTimeLiteral(match t {
+            ExpressionTerm::DateTimeLiteral(value) => value,
+            #[cfg(feature = "sep-0002")]
+            ExpressionTerm::DateLiteral(value) => value.try_into().ok()?,
+            ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
+            _ => return None,
+        }),
+        _ => return None,
+    })
 }
 
 /// tripletrail: whether a term is a duration (see `Expression::Add`).

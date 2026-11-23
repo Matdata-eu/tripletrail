@@ -13,7 +13,7 @@
 //! the evaluator answers the query.
 
 use oxigraph::model::vocab::xsd;
-use oxigraph::model::{BaseDirection, Literal, NamedNode, Term};
+use oxigraph::model::{BaseDirection, Literal, NamedNode, NamedNodeRef, Term};
 use regex::{Regex, RegexBuilder};
 use spargebra::algebra::{Expression, Function};
 use std::cell::RefCell;
@@ -57,6 +57,11 @@ pub(crate) fn computable(e: &Expression) -> bool {
             | F::IsLiteral,
             args,
         ) => args.len() == 1 && arg(&args[0]),
+        // The casts the evaluator defines itself (`xsd:decimal` is Jena's, in `xfn`), of a
+        // variable or of a term computed here, as written.
+        Expression::FunctionCall(F::Custom(f), args) if cast(f.as_ref()) => {
+            matches!(args.as_slice(), [a] if matches!(a, Expression::Variable(_)) || computable(a))
+        }
         // A start and length that are integer constants.
         Expression::FunctionCall(F::SubStr, args) => {
             matches!(args.len(), 2 | 3)
@@ -86,6 +91,19 @@ pub(crate) fn computable(e: &Expression) -> bool {
         // A condition on numbers and dates, as an `xsd:boolean`.
         e => crate::idvalue::is_condition(e, &crate::direct::number_computable),
     }
+}
+
+/// Whether `f` is a cast the evaluator computes itself ([`spareval::cast`]).
+fn cast(f: NamedNodeRef<'_>) -> bool {
+    [
+        xsd::STRING,
+        xsd::BOOLEAN,
+        xsd::DOUBLE,
+        xsd::FLOAT,
+        xsd::INTEGER,
+        xsd::DATE_TIME,
+    ]
+    .contains(&f)
 }
 
 /// `e` compiled to a kernel over the rows of `t`, if [`computable`] and every part of it is
@@ -352,6 +370,57 @@ pub(crate) fn compile<'k>(
                         Ok(Literal::new_simple_literal(hex).into())
                     }
                     None => Err(()),
+                })
+            })
+        }
+        // A cast, as the evaluator computes it (`spareval::cast`).
+        Expression::FunctionCall(F::Custom(f), args) if cast(f.as_ref()) && args.len() == 1 => {
+            let name = f.clone();
+            let as_written = |x: Term| match x {
+                Term::Literal(l) => spareval::ExpressionTerm::from_literal_as_written(l),
+                x => x.into(),
+            };
+            // Of a variable: a number or a boolean is cast on the spot, another term once per
+            // distinct id.
+            if let Expression::Variable(v) = &args[0] {
+                let c = t.col(v);
+                let done: RefCell<HashMap<TermId, Result<Term, ()>>> = RefCell::default();
+                return Some(Box::new(move |row| {
+                    let Some(id) = c.map(|c| row[c]).filter(|id| *id != TermId(0)) else {
+                        return Some(Err(()));
+                    };
+                    if matches!(id.kind(), Kind::Row | Kind::Column | Kind::DefaultGraph) {
+                        return None;
+                    }
+                    let keep = !matches!(
+                        id.kind(),
+                        Kind::Integer | Kind::Boolean | Kind::Double | Kind::Decimal
+                    );
+                    if keep && let Some(r) = done.borrow().get(&id) {
+                        return Some(r.clone());
+                    }
+                    // By its value, as the evaluator reads it (an inline number without its
+                    // text), except for the cast to `xsd:double`, which reads it as written.
+                    let x = if name.as_ref() == xsd::DOUBLE {
+                        as_written(snapshot.term(id).ok()?)
+                    } else {
+                        spareval::QueryableDataset::externalize_expression_term(snapshot, id)
+                            .ok()?
+                    };
+                    let r = spareval::cast(name.as_ref(), x).map(Term::from).ok_or(());
+                    if keep {
+                        done.borrow_mut().insert(id, r.clone());
+                    }
+                    Some(r)
+                }));
+            }
+            let a = compile(&args[0], t, snapshot)?;
+            Box::new(move |row| {
+                Some(match a(row)? {
+                    Ok(x) => spareval::cast(name.as_ref(), as_written(x))
+                        .map(Term::from)
+                        .ok_or(()),
+                    Err(()) => Err(()),
                 })
             })
         }
