@@ -464,6 +464,7 @@ pub(crate) fn covered(p: &GraphPattern) -> bool {
         G::Filter { expr, inner } => covered_filter(expr) && covered(inner),
         G::Path { path, .. } => {
             crate::idtree::closure_path(path).is_some()
+                || crate::idtree::optional_path(path).is_some()
                 || crate::idtree::alternative_path(path).is_some()
         }
         _ => false,
