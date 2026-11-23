@@ -1692,9 +1692,13 @@ fn alternative_paths_on_ids_are_the_evaluators() {
         }
         data.push_str(&format!("ex:n{i} ex:name \"N{}\" .\n", i % 40));
     }
+    // A pair by a predicate and the same pair by an inverse, the ends in id ranges that
+    // don't overlap.
+    data.push_str("ex:x ex:d ex:y . ex:y ex:e ex:x .\n");
     engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
     let prefix = "PREFIX ex: <http://example.org/>";
     for (q, on_ids) in [
+        ("SELECT * WHERE { ?s ex:d|^ex:e ?o }", true),
         ("SELECT * WHERE { ?s ex:a|ex:b ?o }", true),
         ("SELECT * WHERE { ?s ex:a|^ex:b ?o }", true),
         ("SELECT * WHERE { ?s ex:a|ex:b|ex:c ?o }", true),

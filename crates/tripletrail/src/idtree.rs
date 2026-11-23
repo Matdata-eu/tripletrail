@@ -492,8 +492,14 @@ impl Eval<'_> {
                 predicate: NamedNodePattern::NamedNode(predicate.clone()),
                 object: o.clone(),
             }])?;
-            let r: Vec<(TermId, TermId)> = (0..t.width())
-                .map(|c| {
+            // Each variable's range, in the order of the variables' names: the tables of a
+            // predicate and of an inverse hold the ends in different columns.
+            let mut names: Vec<(&Variable, usize)> =
+                t.vars.iter().enumerate().map(|(c, v)| (v, c)).collect();
+            names.sort();
+            let r: Vec<(TermId, TermId)> = names
+                .iter()
+                .map(|&(_, c)| {
                     (0..t.len())
                         .map(|r| t.row(r)[c])
                         .fold((TermId(u64::MAX), TermId(0)), |(lo, hi), id| {
