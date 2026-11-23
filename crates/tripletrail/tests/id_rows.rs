@@ -1617,6 +1617,62 @@ fn joins_on_maybe_unbound_variables_on_ids_are_the_evaluators() {
     }
 }
 
+/// `AVG` of integers and decimals on ids is the evaluator's decimal quotient (exact, else 24
+/// fraction digits, as Jena), of doubles a double.
+#[test]
+fn averages_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    for i in 0..400_i64 {
+        let g = i % 37;
+        data.push_str(&format!(
+            "ex:i{i} ex:g ex:g{g} ; ex:n {} .\n",
+            i * 7 % 101 - 30
+        ));
+        data.push_str(&format!(
+            "ex:i{i} ex:d \"{}.{:02}\"^^xsd:decimal .\n",
+            i % 53 - 10,
+            i * 13 % 100
+        ));
+        if i % 3 == 0 {
+            data.push_str(&format!("ex:i{i} ex:m {} .\n", i % 11));
+        } else {
+            data.push_str(&format!("ex:i{i} ex:m \"{}.5\"^^xsd:decimal .\n", i % 9));
+        }
+        data.push_str(&format!("ex:i{i} ex:w \"{}.25\"^^xsd:double .\n", i % 17));
+    }
+    // Large values: the quotient's whole part is long.
+    data.push_str("ex:big1 ex:g ex:big ; ex:n 100000000000000 .\n");
+    data.push_str("ex:big2 ex:g ex:big ; ex:n 7 .\n");
+    data.push_str("ex:big3 ex:g ex:big ; ex:n 2 .\n");
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for q in [
+        "SELECT ?g (AVG(?n) AS ?a) WHERE { ?i ex:g ?g ; ex:n ?n } GROUP BY ?g",
+        "SELECT ?g (AVG(?d) AS ?a) (COUNT(*) AS ?c) WHERE { ?i ex:g ?g ; ex:d ?d } GROUP BY ?g",
+        "SELECT ?g (AVG(?m) AS ?a) WHERE { ?i ex:g ?g ; ex:m ?m } GROUP BY ?g",
+        "SELECT ?g (AVG(?w) AS ?a) WHERE { ?i ex:g ?g ; ex:w ?w } GROUP BY ?g",
+        "SELECT (AVG(?n) AS ?a) WHERE { ?i ex:n ?n }",
+        "SELECT (AVG(?d) AS ?a) (SUM(?d) AS ?s) WHERE { ?i ex:d ?d }",
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert!(!expected.is_empty(), "{q}");
+        assert_eq!(run("ids"), expected, "{q}");
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+    }
+}
+
 /// An alternative of predicates and their inverses (`ex:a|^ex:b`) on ids is the evaluator's
 /// union of their pairs without duplicates.
 #[test]
