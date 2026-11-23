@@ -1,5 +1,6 @@
 //! `BIND`s of strings and IRIs on term ids (#11): `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT`,
-//! `UCASE`, `LCASE`, `STRLEN`, `SUBSTR` (integer constants), `STRBEFORE`, `STRAFTER`
+//! `UCASE`, `LCASE`, `STRLEN`, `SUBSTR` (integer constants), `STRBEFORE`, `STRAFTER`, `MD5`,
+//! `SHA1`, `SHA256`, `SHA384`, `SHA512`, `ENCODE_FOR_URI`
 //! and `REPLACE` (a constant pattern and flags) of columns,
 //! constants and numbers the value kernels compute, with the evaluator's rules
 //! (`spareval::expression`): `STR` of an IRI or a literal is a simple literal of its text,
@@ -40,6 +41,10 @@ pub(crate) fn computable(e: &Expression) -> bool {
         Expression::FunctionCall(F::StrLang | F::StrDt | F::StrBefore | F::StrAfter, args) => {
             args.len() == 2 && args.iter().all(arg)
         }
+        Expression::FunctionCall(
+            F::Md5 | F::Sha1 | F::Sha256 | F::Sha384 | F::Sha512 | F::EncodeForUri,
+            args,
+        ) => args.len() == 1 && arg(&args[0]),
         Expression::FunctionCall(F::UCase | F::LCase | F::StrLen, args) => {
             args.len() == 1 && arg(&args[0])
         }
@@ -314,6 +319,55 @@ pub(crate) fn compile<'k>(
                 }))
             })
         }
+        // The hex digest of a simple literal (a language-tagged string is an error).
+        Expression::FunctionCall(F::Md5 | F::Sha1 | F::Sha256 | F::Sha384 | F::Sha512, args)
+            if args.len() == 1 =>
+        {
+            use sha2::Digest;
+            let digest: fn(&[u8]) -> Vec<u8> = match e {
+                Expression::FunctionCall(F::Md5, _) => |b| md5::Md5::digest(b).to_vec(),
+                Expression::FunctionCall(F::Sha1, _) => |b| sha1::Sha1::digest(b).to_vec(),
+                Expression::FunctionCall(F::Sha256, _) => |b| sha2::Sha256::digest(b).to_vec(),
+                Expression::FunctionCall(F::Sha384, _) => |b| sha2::Sha384::digest(b).to_vec(),
+                _ => |b| sha2::Sha512::digest(b).to_vec(),
+            };
+            let a = compile(&args[0], t, snapshot)?;
+            Box::new(move |row| {
+                Some(match simple(a(row)?) {
+                    Some(text) => {
+                        let mut hex = String::with_capacity(128);
+                        for b in digest(text.as_bytes()) {
+                            hex.push(char::from(HEX[usize::from(b >> 4)]));
+                            hex.push(char::from(HEX[usize::from(b & 15)]));
+                        }
+                        Ok(Literal::new_simple_literal(hex).into())
+                    }
+                    None => Err(()),
+                })
+            })
+        }
+        // Percent-encoding of every byte but the unreserved characters, as a simple literal.
+        Expression::FunctionCall(F::EncodeForUri, args) if args.len() == 1 => {
+            let a = compile(&args[0], t, snapshot)?;
+            Box::new(move |row| {
+                Some(string_and_language(a(row)?).map(|(text, _)| {
+                    let mut out = String::with_capacity(text.len());
+                    for c in text.bytes() {
+                        match c {
+                            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                                out.push(char::from(c))
+                            }
+                            _ => {
+                                out.push('%');
+                                out.push(char::from(HEX_UPPER[usize::from(c >> 4)]));
+                                out.push(char::from(HEX_UPPER[usize::from(c & 15)]));
+                            }
+                        }
+                    }
+                    Literal::new_simple_literal(out).into()
+                }))
+            })
+        }
         // Only the branch taken is computed, as in the evaluator.
         Expression::If(c, a, b) => {
             let (c, a, b) = (
@@ -451,6 +505,9 @@ fn substring(source: &str, start: i64, length: Option<i64>) -> Option<&str> {
     }
     Some(start_position.map_or("", |start_position| &source[start_position..]))
 }
+
+const HEX: &[u8; 16] = b"0123456789abcdef";
+const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 

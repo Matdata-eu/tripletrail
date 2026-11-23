@@ -685,6 +685,39 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x > 50 AS ?y) FILTER(?y) }",
         false,
     ),
+    // Hashes and `ENCODE_FOR_URI`.
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(MD5(STR(?o)) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(SHA1(?l) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(SHA256(?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(SHA384(STR(?o)) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(IRI(CONCAT(STR(ex:), \"h/\", SHA512(STR(?o)))) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(ENCODE_FOR_URI(STR(?o)) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(ENCODE_FOR_URI(CONCAT(STR(?o), \" é/?\")) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(ENCODE_FOR_URI(?x) AS ?y) }",
+        true,
+    ),
     // Filters on the strings the term kernels compute.
     (
         "SELECT ?s WHERE { ?s ex:p ?o FILTER(STRAFTER(STR(?o), STR(ex:)) = \"o17\") }",

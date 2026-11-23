@@ -204,7 +204,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   without dot segments is that IRI. A direction-tagged string in `CONCAT` or
   `REPLACE`, a string `IRI` would resolve
   against a base, and `STRDT` to an XML Schema type other than `xsd:string` (whose lexical
-  form the store would not keep) leave the query to the evaluator. A condition on numbers and
+  form the store would not keep) leave the query to the evaluator. `MD5`, `SHA1`, `SHA256`,
+  `SHA384` and `SHA512` (the hex digest of a simple literal; a language-tagged string is an
+  error) and `ENCODE_FOR_URI` are computed the same way (133k orders: `MD5(STR(?c))` 55
+  instead of 160 ms; a digest of every row, minting an IRI from each order, 322 instead of
+  347 ms, as the hashing itself dominates). A condition on numbers and
   dates (`BIND(?q > 50 AS ?big)`, with `!`, `&&`, `||` and `BOUND`) is an `xsd:boolean` the
   same way, an error leaving the cell unbound (133k orders: 36 instead of 69 ms). Such a string is also
   filtered on ids: `e = "text"` (false for an IRI, a blank node or a language-tagged string;

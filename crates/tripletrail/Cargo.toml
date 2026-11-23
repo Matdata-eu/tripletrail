@@ -22,8 +22,10 @@ spareval.workspace = true
 regex.workspace = true
 oxiri.workspace = true
 oxsdatatypes = "0.2.4"
-# RDFC-1.0 hashes (`canon`).
+# RDFC-1.0 hashes (`canon`), and `MD5`/`SHA*` on ids (the evaluator's crates).
 sha2 = "0.11.1"
+md-5 = "0.11.0"
+sha1 = "0.11.0"
 # GeoParquet import and export (feature `geoparquet`).
 arrow-array = { version = "60.1.0", optional = true }
 arrow-schema = { version = "60.1.0", optional = true }
