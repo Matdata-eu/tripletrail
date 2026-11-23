@@ -618,6 +618,71 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, UCASE(\"a\"), \"_\") AS ?y) }",
         true,
     ),
+    // Filters on the strings the term kernels compute.
+    (
+        "SELECT ?s WHERE { ?s ex:p ?o FILTER(STRAFTER(STR(?o), STR(ex:)) = \"o17\") }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(STRAFTER(STR(?o), \"http://example.org/\") AS ?y) FILTER(?y = \"o3\") }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:label ?l FILTER(LCASE(?l) = \"l10\") }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:label ?l FILTER(UCASE(STR(?l)) = \"L10\") }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:label ?l FILTER(\"plain3\" = SUBSTR(?l, 1)) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:label ?l FILTER(LCASE(?l) != \"plain3\") }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:val ?x FILTER(!(UCASE(?x) = \"X\")) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:val ?x FILTER(STRDT(STR(?x), ex:dt) = \"x\") }",
+        false,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:p ?o FILTER(IRI(STR(?o)) = \"x\") }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:p ?o FILTER(CONTAINS(STR(?o), \"o1\")) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:p ?o FILTER(STRENDS(STR(?o), \"9\")) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:label ?l FILTER(STRSTARTS(UCASE(?l), \"PLAIN1\")) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:label ?l FILTER(REGEX(LCASE(?l), \"^l[0-9]0$\")) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:val ?x FILTER(!CONTAINS(STR(?x), \"3\")) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:p ?o FILTER(!CONTAINS(IRI(STR(?o)), \"3\")) }",
+        true,
+    ),
+    (
+        "SELECT ?s WHERE { ?s ex:val ?x FILTER(CONTAINS(COALESCE(?x, \"a\"), \"3\") || STRLEN(STR(?x)) > 2) }",
+        false,
+    ),
     // `UCASE`, `LCASE`, `STRLEN`, `SUBSTR` (integer constants), `STRBEFORE`, `STRAFTER`.
     (
         "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(UCASE(?l) AS ?y) }",
