@@ -32,7 +32,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
-- Under `--executor ids`, a negated property set whose ends the patterns before it already bind (`?s ex:a ?o . ?s !ex:name ?o`) gave a row per matching triple; the evaluator checks such a pair once. It also read a query variable named `?__negated_p` as its own. Both now match the evaluator (#11).
+- A negated property set between two bound ends (`?s ex:a ?o . ?s !ex:name ?o`, or two constants) gave one row in the evaluator however many triples join the pair, but one row per triple when an end is open, so the count depended on the join order. It now gives one row per matching triple in every case, as Jena does, and the id executor agrees. The id executor also no longer reads a query variable named `?__negated_p` as its own (#11).
 - Under `--executor ids`, `<p>*` with an end bound by another pattern (`VALUES`, a `GRAPH` block) matched a term with itself even when the term is no node of the graph read (it occurs only in another graph, or only as a predicate). The evaluator gives no row there, and now neither does the id executor (#11).
 - A `FILTER EXISTS` (or `NOT EXISTS`) no longer reads a variable its own group leaves free from a pattern joined to that group (#199). In `{ ?o ex:qty ?q FILTER EXISTS { ?o ex:next ?n } } ?o ex:link ?n`, the planner ran the group once per `ex:link` row with `?n` already bound, so the `EXISTS` looked for that one `?n` and the query could lose rows. Such a group is now joined instead.
 - The OGC API link of **Cite this map** on the Map page dropped the layer's filters (#33).

@@ -581,23 +581,6 @@ impl Eval<'_> {
         vars.remove(c);
         let mut maybe = t.maybe;
         maybe.remove(c);
-        // Ends the rows before bind in every row are checked once per row, as the evaluator
-        // does (a pair joined by two such triples is one row then).
-        let closed = seed.is_some_and(|seed| {
-            [subject, object].iter().all(|t| match t {
-                TermPattern::Variable(v) => seed.col(v).is_some_and(|c| !seed.maybe[c]),
-                _ => true,
-            })
-        });
-        if closed && width > 1 {
-            let w = width - 1;
-            let mut rows: Vec<&[TermId]> = ids.chunks_exact(w).collect();
-            rows.sort_unstable();
-            rows.dedup();
-            let deduped: Vec<TermId> = rows.concat();
-            ones = deduped.len() / w;
-            ids = deduped;
-        }
         Some(Table {
             vars,
             ids,
