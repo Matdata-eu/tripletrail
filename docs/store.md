@@ -208,10 +208,16 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `SHA384` and `SHA512` (the hex digest of a simple literal; a language-tagged string is an
   error) and `ENCODE_FOR_URI` are computed the same way (133k orders: `MD5(STR(?c))` 55
   instead of 160 ms; a digest of every row, minting an IRI from each order, 322 instead of
-  347 ms, as the hashing itself dominates). A condition on numbers and
+  347 ms, as the hashing itself dominates).
+  `LANG` (`""` for a literal
+  without a language), `DATATYPE` (decided from the kind of id for strings, integers,
+  booleans, doubles and decimals; a type of XML Schema such as `xsd:byte`, which the evaluator
+  may name otherwise, is left to it), `isIRI`, `isBlank` and `isLiteral` are computed the same
+  way, an IRI or a blank node an error for the first two (133k orders: `DATATYPE` of a double
+  70 instead of 130 ms, `isIRI` 43 instead of 78 ms). A condition on numbers and
   dates (`BIND(?q > 50 AS ?big)`, with `!`, `&&`, `||` and `BOUND`) is an `xsd:boolean` the
-  same way, an error leaving the cell unbound (133k orders: 36 instead of 69 ms). Such a string is also
-  filtered on ids: `e = "text"` (false for an IRI, a blank node or a language-tagged string;
+  same way, an error leaving the cell unbound (133k orders: 36 instead of 69 ms). A string these kernels compute is
+  also filtered on ids: `e = "text"` (false for an IRI, a blank node or a language-tagged string;
   a literal of another type is the evaluator's) and `STRSTARTS`, `STRENDS`, `CONTAINS` and
   `REGEX` of it with constant arguments (an error for anything but a string literal), each
   decided once per distinct value of the column it reads. A `BIND(STRAFTER(STR(?c), "…/c") AS
