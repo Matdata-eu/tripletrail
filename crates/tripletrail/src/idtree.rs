@@ -521,7 +521,9 @@ impl Eval<'_> {
         } else {
             (subject, object)
         };
-        let p = Variable::new_unchecked("__negated_p");
+        // A name no query can hold (`-` is no character of a SPARQL variable name): the
+        // seed's columns are the query's variables.
+        let p = Variable::new_unchecked("negated-p");
         let t = self.bgp_from(
             &[spargebra::term::TriplePattern {
                 subject: s.clone(),
@@ -551,11 +553,28 @@ impl Eval<'_> {
                 ones += 1;
             }
         }
+        debug_assert_eq!(ids.len(), ones * (width - 1));
         let mut vars = t.vars;
         vars.remove(c);
         let mut maybe = t.maybe;
         maybe.remove(c);
-        debug_assert_eq!(ids.len(), ones * (width - 1));
+        // Ends the rows before bind in every row are checked once per row, as the evaluator
+        // does (a pair joined by two such triples is one row then).
+        let closed = seed.is_some_and(|seed| {
+            [subject, object].iter().all(|t| match t {
+                TermPattern::Variable(v) => seed.col(v).is_some_and(|c| !seed.maybe[c]),
+                _ => true,
+            })
+        });
+        if closed && width > 1 {
+            let w = width - 1;
+            let mut rows: Vec<&[TermId]> = ids.chunks_exact(w).collect();
+            rows.sort_unstable();
+            rows.dedup();
+            let deduped: Vec<TermId> = rows.concat();
+            ones = deduped.len() / w;
+            ids = deduped;
+        }
         Some(Table {
             vars,
             ids,
@@ -806,14 +825,14 @@ impl Eval<'_> {
         }
     }
 
-    /// The pattern of an edge followed from `__path_a` to `__path_b`.
+    /// The pattern of an edge followed from `path-a` to `path-b` (names no query can hold).
     fn edge(
         predicate: &spargebra::term::NamedNode,
         forward: bool,
     ) -> (spargebra::term::TriplePattern, Variable, Variable) {
         let (a, b) = (
-            Variable::new_unchecked("__path_a"),
-            Variable::new_unchecked("__path_b"),
+            Variable::new_unchecked("path-a"),
+            Variable::new_unchecked("path-b"),
         );
         let (s, o) = if forward { (&a, &b) } else { (&b, &a) };
         let t = spargebra::term::TriplePattern {

@@ -2064,6 +2064,20 @@ fn negated_property_sets_on_ids_are_the_evaluators() {
         ),
         ("SELECT * WHERE { ex:n0 !ex:name ex:n0 }", false),
         ("SELECT * WHERE { ?s !(ex:a|^ex:b) ?o }", false),
+        // Both ends bound by the rows before: once per row, however many triples join them.
+        ("SELECT * WHERE { ?s ex:a ?o . ?s !ex:name ?o }", true),
+        ("SELECT * WHERE { ?s ex:c ?o . ?s !ex:name ?o }", true),
+        ("SELECT * WHERE { ?s !ex:name ?o . ?s ex:a ?o }", true),
+        (
+            "SELECT * WHERE { ?s ex:a ?o OPTIONAL { ?s !ex:name ?o } }",
+            true,
+        ),
+        // The query's own variables with the names of the made-up ones.
+        ("SELECT * WHERE { ?s ?__negated_p ?o . ?s !ex:a ?o }", true),
+        (
+            "SELECT * WHERE { ?s a ex:C ; ?negated_p ?x . ?s !ex:name ?o }",
+            true,
+        ),
     ] {
         let run = |executor: &str| {
             rows(
