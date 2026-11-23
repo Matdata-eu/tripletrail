@@ -182,7 +182,13 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   solution iterator as its attachment (`QuerySolutionIter::with_attachment`, a TripleTrail
   change to the vendored spareval), so the server writes JSON, CSV and TSV from it
   (`crates/tripletrail-server/src/id_results.rs`) and the result cache keeps it whole; any
-  other reader iterates the solutions as usual. `BIND` and `SELECT (expr AS ?v)` are a
+  other reader iterates the solutions as usual. A `CONSTRUCT` whose pattern the tables cover
+  (without a slice, which the evaluator stops early on) is built from the table the same way
+  the evaluator builds it (`spareval`'s `ConstructIterator`): unbound parts, literal subjects
+  and predicates that are not IRIs leave a triple out, blank nodes of the template are new for
+  each solution, and a triple without blank nodes is given once (on 133k orders, copying two
+  properties 500 → 210 ms, a join into a new property 280 → 120 ms; a blank node per row is
+  on par). `BIND` and `SELECT (expr AS ?v)` are a
   column of the table too (`idtree::Eval::extend`): a copy of a column, a constant, or a
   number the expression kernels above compute, as the literal the evaluator writes (decimals
   in Jena's form, doubles as `oxsdatatypes` writes them): a number the store inlines is made

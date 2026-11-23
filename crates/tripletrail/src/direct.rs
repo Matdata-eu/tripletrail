@@ -461,3 +461,182 @@ impl std::hash::Hasher for IdHasher {
         self.0 = h ^ (h >> 32);
     }
 }
+
+/// A `CONSTRUCT` answered from the table of its pattern (#11), as the evaluator builds it
+/// (`spareval`'s `ConstructIterator`): each solution fills the template; a triple with an
+/// unbound part, a literal subject or a predicate that is not an IRI is left out; blank nodes
+/// of the template are new for each solution; a triple without a blank node is given once
+/// (the evaluator forgets what it gave after a million of them, and so does this).
+/// `None` when the ids don't answer the pattern.
+pub(crate) fn construct(query: &Query, eval: &Eval) -> Option<spareval::QueryResults<'static>> {
+    use spargebra::term::{NamedNodePattern, TermPattern};
+    let Query::Construct {
+        template,
+        dataset: None,
+        pattern,
+        ..
+    } = query
+    else {
+        return None;
+    };
+    // Under a slice the evaluator stops after the first solutions (and picks them when there
+    // is no order): left to it.
+    if matches!(pattern, GraphPattern::Slice { .. }) || !covered(pattern) {
+        return None;
+    }
+    let mut labels: Vec<spargebra::term::BlankNode> = Vec::new();
+    let mut slot = |t: &TermPattern| -> Option<Slot> {
+        Some(match t {
+            TermPattern::Variable(v) => Slot::Variable(v.clone()),
+            TermPattern::NamedNode(n) => Slot::Constant(eval.snapshot.id_of(n.clone().into())),
+            TermPattern::Literal(l) => Slot::Constant(eval.snapshot.id_of(l.clone().into())),
+            TermPattern::BlankNode(b) => Slot::Blank(match labels.iter().position(|x| x == b) {
+                Some(i) => i,
+                None => {
+                    labels.push(b.clone());
+                    labels.len() - 1
+                }
+            }),
+            // Triple terms in the template: left to the evaluator.
+            #[allow(unreachable_patterns)]
+            _ => return None,
+        })
+    };
+    let mut slots: Vec<[Slot; 3]> = Vec::with_capacity(template.len());
+    for t in template {
+        let predicate = match &t.predicate {
+            NamedNodePattern::Variable(v) => Slot::Variable(v.clone()),
+            NamedNodePattern::NamedNode(n) => Slot::Constant(eval.snapshot.id_of(n.clone().into())),
+        };
+        slots.push([slot(&t.subject)?, predicate, slot(&t.object)?]);
+    }
+    let table = eval.eval(pattern)?;
+    if (eval.cancelled)() {
+        return None;
+    }
+    let columns: Vec<[Cell; 3]> = slots
+        .iter()
+        .map(|s| {
+            s.clone().map(|x| match x {
+                Slot::Variable(v) => match table.col(&v) {
+                    Some(c) => Cell::Column(c),
+                    None => Cell::Unbound,
+                },
+                Slot::Constant(id) => Cell::Id(id),
+                Slot::Blank(i) => Cell::Blank(i),
+            })
+        })
+        .collect();
+    Some(spareval::QueryResults::Graph(
+        spareval::QueryTripleIter::new(Construct {
+            snapshot: eval.snapshot.clone(),
+            table,
+            columns,
+            blanks: labels.len(),
+            row: 0,
+            buffered: Vec::new(),
+            emitted: std::collections::HashSet::default(),
+            fresh: Vec::new(),
+        }),
+    ))
+}
+
+#[derive(Clone)]
+enum Slot {
+    Variable(Variable),
+    Constant(TermId),
+    Blank(usize),
+}
+
+#[derive(Clone, Copy)]
+enum Cell {
+    Column(usize),
+    Id(TermId),
+    Blank(usize),
+    Unbound,
+}
+
+/// The triples of a `CONSTRUCT`, a solution at a time.
+struct Construct {
+    snapshot: tripletrail_store::Snapshot,
+    table: Table,
+    columns: Vec<[Cell; 3]>,
+    blanks: usize,
+    row: usize,
+    /// The triples of the current solution, given last first, as the evaluator does.
+    buffered: Vec<oxigraph::model::Triple>,
+    emitted: std::collections::HashSet<[TermId; 3]>,
+    /// The blank nodes of the current solution.
+    fresh: Vec<oxigraph::model::BlankNode>,
+}
+
+impl Construct {
+    /// Decoded at each use, as the evaluator does: faster than keeping the terms.
+    fn term(&self, id: TermId) -> Option<Term> {
+        self.snapshot.term(id).ok()
+    }
+}
+
+impl Iterator for Construct {
+    type Item = Result<oxigraph::model::Triple, spareval::QueryEvaluationError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use oxigraph::model::{BlankNode, NamedNode, NamedOrBlankNode, Triple};
+        loop {
+            if let Some(t) = self.buffered.pop() {
+                return Some(Ok(t));
+            }
+            if self.row >= self.table.len() {
+                return None;
+            }
+            let r = self.row;
+            self.row += 1;
+            self.fresh.clear();
+            self.fresh
+                .extend((0..self.blanks).map(|_| BlankNode::default()));
+            for i in 0..self.columns.len() {
+                let cells = self.columns[i];
+                let mut ids = [TermId(0); 3];
+                let mut parts: [Option<Term>; 3] = [None, None, None];
+                let mut blank = false;
+                for (k, cell) in cells.iter().enumerate() {
+                    match *cell {
+                        Cell::Column(c) => ids[k] = self.table.row(r)[c],
+                        Cell::Id(id) => ids[k] = id,
+                        Cell::Blank(b) => {
+                            parts[k] = Some(self.fresh[b].clone().into());
+                            blank = true;
+                        }
+                        Cell::Unbound => {}
+                    }
+                    if parts[k].is_none() {
+                        if ids[k] == TermId(0) {
+                            break;
+                        }
+                        // A term that doesn't decode is left out, as the evaluator leaves it.
+                        parts[k] = self.term(ids[k]);
+                    }
+                }
+                let [Some(s), Some(p), Some(o)] = parts else {
+                    continue;
+                };
+                let Ok(subject) = NamedOrBlankNode::try_from(s) else {
+                    continue;
+                };
+                let Ok(predicate) = NamedNode::try_from(p) else {
+                    continue;
+                };
+                blank |= subject.is_blank_node() || o.is_blank_node() || o.is_triple();
+                if !blank {
+                    if !self.emitted.insert(ids) {
+                        continue;
+                    }
+                    if self.emitted.len() > 1024 * 1024 {
+                        self.emitted.clear();
+                    }
+                }
+                self.buffered.push(Triple::new(subject, predicate, o));
+            }
+        }
+    }
+}
