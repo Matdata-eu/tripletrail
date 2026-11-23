@@ -2113,4 +2113,38 @@ fn optional_paths_on_ids_are_the_evaluators() {
         };
         assert_eq!(run("ids"), run("spareval"), "{q}");
     }
+    // A value another pattern gives an end matches itself only if it is a node of the
+    // graph read: `ex:only` is in a named graph alone, `ex:a` a predicate, `ex:g1` a graph.
+    let graphs = Engine::new_tripletrail();
+    graphs
+        .load(
+            RdfFormat::TriG,
+            "@prefix ex: <http://example.org/> .
+            ex:n1 ex:a ex:n2 . ex:n2 ex:a ex:n3 . ex:n3 ex:a ex:n1 .
+            ex:g1 { ex:only ex:a ex:n3 . ex:n1 ex:a ex:n3 . }
+            ex:g2 { ex:other ex:a ex:only . }"
+                .as_bytes(),
+        )
+        .unwrap();
+    for q in [
+        "SELECT * WHERE { GRAPH ex:g1 { ?s ex:a ex:n3 } ?s ex:a? ?o }",
+        "SELECT * WHERE { GRAPH ex:g1 { ?s ex:a ex:n3 } ?s ex:a* ?o }",
+        "SELECT * WHERE { GRAPH ex:g1 { ?s ex:a ex:n3 } ?o ex:a? ?s }",
+        "SELECT * WHERE { ex:only ex:a? ?o . ?o (^ex:a)? ?x }",
+        "SELECT * WHERE { VALUES ?s { ex:only } ?s ex:a? ?o }",
+        "SELECT * WHERE { VALUES ?s { ex:only ex:n1 ex:a ex:g1 } ?s ex:a? ?o }",
+        "SELECT * WHERE { VALUES ?s { ex:only ex:n1 ex:a ex:g1 } ?s ex:a* ?o }",
+        "SELECT * WHERE { VALUES ?s { ex:a } ?s ex:a* ?o }",
+        "SELECT * WHERE { ex:only ex:a? ?o }",
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &graphs,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert_eq!(run("ids"), expected, "{q}");
+        assert_eq!(rows(&graphs, &format!("{prefix} {q}")), expected, "{q}");
+    }
 }

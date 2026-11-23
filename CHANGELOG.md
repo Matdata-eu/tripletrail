@@ -31,6 +31,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- Under `--executor ids`, `<p>*` with an end bound by another pattern (`VALUES`, a `GRAPH` block) matched a term with itself even when the term is no node of the graph read (it occurs only in another graph, or only as a predicate). The evaluator gives no row there, and now neither does the id executor (#11).
 - A `FILTER EXISTS` (or `NOT EXISTS`) no longer reads a variable its own group leaves free from a pattern joined to that group (#199). In `{ ?o ex:qty ?q FILTER EXISTS { ?o ex:next ?n } } ?o ex:link ?n`, the planner ran the group once per `ex:link` row with `?n` already bound, so the `EXISTS` looked for that one `?n` and the query could lose rows. Such a group is now joined instead.
 - The OGC API link of **Cite this map** on the Map page dropped the layer's filters (#33).
 - Under the id executor, a query grouped on a computed string and ordered on it (`BIND(STR(?v) AS ?k) … GROUP BY ?k ORDER BY ?k`, more than about 1,300 groups) failed with `unknown term Ephemeral#0`: it was evaluated on a newer view of the store than the one its rewrites made up ids for. It is now evaluated, and explained, on that view.

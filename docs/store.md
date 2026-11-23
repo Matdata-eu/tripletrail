@@ -187,7 +187,9 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   are each start and the nodes one edge away, once each (#11; 133k orders, under
   `--executor ids`, a count over orders with a quantity under 50 and `ex:placedBy?` 125 →
   42 ms, joined with the customers' names 134 → 68 ms). Between two free variables they
-  are left to the evaluator, as `*` is.
+  are left to the evaluator, as `*` is. For `?` and `*`, a value another pattern gives an
+  end matches itself only when it is a node of the graph read (a subject or an object
+  there), as in the evaluator; a constant end always does.
   `ORDER BY ?a DESC(?b) ... LIMIT n` (with `OFFSET`, `DISTINCT` or `REDUCED`) over a pattern
   the tables cover is ordered on ids too: IRIs and simple strings by their string ranks
   (#171), integers and booleans by value, inline doubles, decimals, dates and date-times by

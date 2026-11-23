@@ -719,13 +719,68 @@ impl Eval<'_> {
         {
             return None;
         }
-        let ids = match starts {
-            Some(starts) if one => self.one_step(predicate, forward, &starts, from.is_err())?,
+        let mut ids = match &starts {
+            Some(starts) if one => self.one_step(predicate, forward, starts, from.is_err())?,
             Some(starts) if (starts.len() as f64) * LEVEL_COST < self.edge_estimate(predicate) => {
-                self.closure_by_levels(predicate, forward, zero, &starts, from.is_err())?
+                self.closure_by_levels(predicate, forward, zero, starts, from.is_err())?
             }
-            starts => self.closure_of_all(predicate, forward, zero, starts, from.is_err())?,
+            _ => self.closure_of_all(predicate, forward, zero, starts.clone(), from.is_err())?,
         };
+        let seeded = starts.filter(|_| zero && from.is_err());
+        // A value another pattern gives an end matches itself only if it is a node of the
+        // graph read (a subject or object there), as in the evaluator; a constant end always
+        // does. A start with another end is one; the others are looked up.
+        if let Some(starts) = seeded {
+            let is_node = |id: TermId| {
+                self.snapshot.estimate_ids(Some(id), None, None, self.graph) > 0
+                    || self.snapshot.estimate_ids(None, None, Some(id), self.graph) > 0
+            };
+            // The starts without another end that are no node: their own row goes.
+            let mut gone: Vec<TermId> = Vec::new();
+            if ids.chunks_exact(2).is_sorted_by_key(|p| p[0]) {
+                // Each start's rows together (`<p>?` gives them so).
+                let mut r = 0;
+                while r < ids.len() {
+                    let start = ids[r];
+                    let mut other = false;
+                    let mut e = r;
+                    while e < ids.len() && ids[e] == start {
+                        other |= ids[e + 1] != start;
+                        e += 2;
+                    }
+                    if !other && !is_node(start) {
+                        gone.push(start);
+                    }
+                    r = e;
+                }
+            } else {
+                let mut other = vec![false; starts.len()];
+                for p in ids.chunks_exact(2) {
+                    if p[0] != p[1]
+                        && let Ok(i) = starts.binary_search(&p[0])
+                    {
+                        other[i] = true;
+                    }
+                }
+                gone.extend(
+                    starts
+                        .iter()
+                        .zip(&other)
+                        .filter(|&(&s, &o)| !o && !is_node(s))
+                        .map(|(&s, _)| s),
+                );
+            }
+            if !gone.is_empty() {
+                gone.sort_unstable();
+                let mut kept = Vec::with_capacity(ids.len());
+                for p in ids.chunks_exact(2) {
+                    if !(p[0] == p[1] && gone.binary_search(&p[0]).is_ok()) {
+                        kept.extend_from_slice(p);
+                    }
+                }
+                ids = kept;
+            }
+        }
         let vars = match from {
             Ok(_) => vec![to],
             Err(v) => vec![v, to],
