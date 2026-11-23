@@ -2749,6 +2749,10 @@ impl Engine {
                         self.check_cancelled()?;
                         return Ok(direct::results(Arc::new(answer)));
                     }
+                    if let Some(triples) = direct::construct(&query, &eval) {
+                        self.check_cancelled()?;
+                        return Ok(triples);
+                    }
                 }
                 query = rows::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
                 if graph == GraphSelector::Default {
@@ -2945,11 +2949,15 @@ impl Engine {
                         cancelled: &|| self.is_cancelled(),
                         graph,
                     };
-                    executor = Some(if direct::answer(&query, &eval).is_some() {
-                        "ids"
-                    } else {
-                        "spareval"
-                    });
+                    executor = Some(
+                        if direct::answer(&query, &eval).is_some()
+                            || direct::construct(&query, &eval).is_some()
+                        {
+                            "ids"
+                        } else {
+                            "spareval"
+                        },
+                    );
                 }
                 query = rows::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
             }
