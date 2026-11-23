@@ -170,12 +170,11 @@
 
   /** An area ({area, rel, dist}) as a CQL2 spatial predicate on the geometry, for the OGC
    *  API's items, or "" when it has none: only WKT in CRS84 (no CRS named first), with any
-   *  relation but dwithin. `disjoint` means no geometry meets the area, as area= takes it, so
-   *  it is NOT S_INTERSECTS. */
+   *  relation but dwithin and disjoint. area=…&rel=disjoint keeps a feature when none of its
+   *  geometries meets the area, which CQL2 (true for any one geometry outside) cannot say. */
   function cqlArea(area) {
     if (!area || !area.area || !/^\s*[A-Za-z]+\s*\(/.test(area.area)) return "";
     const rel = area.rel || "intersects";
-    if (rel === "disjoint") return "NOT S_INTERSECTS(geometry, " + area.area.trim() + ")";
     if (!["intersects", "within", "contains", "touches", "crosses", "overlaps"].includes(rel)) return "";
     return "S_" + rel.toUpperCase() + "(geometry, " + area.area.trim() + ")";
   }

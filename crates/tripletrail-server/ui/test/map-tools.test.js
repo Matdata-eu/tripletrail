@@ -75,8 +75,9 @@ test("a drawn area as CQL2 for the OGC API's items", () => {
   const poly = "POLYGON((4.3 50.95, 4.6 50.95, 4.6 51.3, 4.3 51.3, 4.3 50.95))";
   assert.strictEqual(g.cqlArea({ area: poly }), "S_INTERSECTS(geometry, " + poly + ")");
   assert.strictEqual(g.cqlArea({ area: poly, rel: "within" }), "S_WITHIN(geometry, " + poly + ")");
-  assert.strictEqual(g.cqlArea({ area: poly, rel: "disjoint" }), "NOT S_INTERSECTS(geometry, " + poly + ")");
-  // No CQL2 form: a distance, a feature, another layer, a CRS named first.
+  // No CQL2 form: outside (no geometry meets the area), a distance, a feature, another
+  // layer, a CRS named first.
+  assert.strictEqual(g.cqlArea({ area: poly, rel: "disjoint" }), "");
   assert.strictEqual(g.cqlArea({ area: "POINT(4.3571 50.8455)", rel: "dwithin", dist: 2000 }), "");
   assert.strictEqual(g.cqlArea({ area: "https://example.org/rail#BXC", rel: "within" }), "");
   assert.strictEqual(g.cqlArea({ area: "layer:Station" }), "");
