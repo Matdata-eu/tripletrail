@@ -466,6 +466,7 @@ pub(crate) fn covered(p: &GraphPattern) -> bool {
             crate::idtree::closure_path(path).is_some()
                 || crate::idtree::optional_path(path).is_some()
                 || crate::idtree::alternative_path(path).is_some()
+                || crate::idtree::negated_path(path).is_some()
         }
         _ => false,
     }

@@ -190,6 +190,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   are left to the evaluator, as `*` is. For `?` and `*`, a value another pattern gives an
   end matches itself only when it is a node of the graph read (a subject or an object
   there), as in the evaluator; a constant end always does.
+  A negated property set, `?s !(ex:a|ex:b) ?o` or `^!(…)`, is the triples whose predicate is
+  not in the set, one row per triple as the evaluator gives it; joined with other patterns it
+  looks the triples up from the values they give (#11; 133k orders, a count over all orders
+  28 → 15 ms, joined with the customer and a filter, per customer 164 → 41 ms). A set with
+  both kinds, `!(ex:a|^ex:b)`, and two constant ends are left to the evaluator.
   `ORDER BY ?a DESC(?b) ... LIMIT n` (with `OFFSET`, `DISTINCT` or `REDUCED`) over a pattern
   the tables cover is ordered on ids too: IRIs and simple strings by their string ranks
   (#171), integers and booleans by value, inline doubles, decimals, dates and date-times by
