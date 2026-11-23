@@ -689,6 +689,44 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?a WHERE { ?s ex:p ?o BIND(IF(isIRI(?o), STR(?o), \"-\") AS ?a) }",
         false,
     ),
+    // Tests of strings as `xsd:boolean`s: of a label, of a computed string, of terms that are
+    // no strings (an error, so unbound), with constant patterns.
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(STRSTARTS(?l, \"pl\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(CONTAINS(LCASE(?l), \"1\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(STRENDS(STR(?l), \"3\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(REGEX(?l, \"^P.*[0-4]$\", \"i\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(STRSTARTS(?o, \"http\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(STRSTARTS(STR(?o), \"http://example.org/o1\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(CONTAINS(?x, \"2\") AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:label ?l } BIND(IF(CONTAINS(?l, \"x\"), 1, 0) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(STRSTARTS(?l, \"l\"@en) AS ?y) }",
+        false,
+    ),
     // Conditions on numbers as `xsd:boolean`s.
     (
         "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x > 50 AS ?y) }",

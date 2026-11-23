@@ -9,6 +9,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Added
 
+- Under `--executor ids`, `STRSTARTS`, `STRENDS`, `CONTAINS` and `REGEX` with constant arguments are computed on term ids as `BIND` values too (#11), `true` or `false`, or unbound for a term that is no string. On 133k synthetic orders, a count grouped by `CONTAINS` of the customer's name takes 24 instead of 140 ms.
 - Under `--executor ids`, `<p>?` and `^<p>?` with a constant end, or joined with a pattern that gives an end its values, are answered on term ids (#11): each start and the nodes one edge away. On 133k synthetic orders, a count over orders with a quantity under 50 and `ex:placedBy?` takes 42 instead of 125 ms.
 - Under `--executor ids`, negated property sets (`?s !(ex:a|ex:b) ?o`, `^!ex:a`) are answered on term ids (#11), one row per triple whose predicate is not in the set. On 133k synthetic orders, a count per customer over such a path with a filter takes 41 instead of 164 ms.
 - `SUM(DISTINCT …)` and `AVG(DISTINCT …)` of integers, decimals and doubles are computed on term ids (#11), each value once, as the evaluator tells values apart (by datatype and value). They used to be left to the evaluator. On 133k synthetic orders, `SUM(DISTINCT ?qty)` per customer takes 25 instead of 164 ms and `AVG(DISTINCT ?qty)` 32 instead of 179 ms.
