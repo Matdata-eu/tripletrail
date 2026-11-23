@@ -750,6 +750,39 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } FILTER(!?x) }",
         true,
     ),
+    // Hashes and `ENCODE_FOR_URI`.
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(MD5(STR(?o)) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(SHA1(?l) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(SHA256(?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(SHA384(STR(?o)) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(IRI(CONCAT(STR(ex:), \"h/\", SHA512(STR(?o)))) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(ENCODE_FOR_URI(STR(?o)) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(ENCODE_FOR_URI(CONCAT(STR(?o), \" é/?\")) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(ENCODE_FOR_URI(?x) AS ?y) }",
+        true,
+    ),
     // Filters on the strings the term kernels compute.
     (
         "SELECT ?s WHERE { ?s ex:p ?o FILTER(STRAFTER(STR(?o), STR(ex:)) = \"o17\") }",
@@ -1178,6 +1211,37 @@ fn groups_read_back_on_ids_are_the_evaluators() {
         if on_ids {
             assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
         }
+    }
+}
+
+/// Groups on a computed string, ordered on it: the strings the store does not hold get ids
+/// made up for the view the rewrites read, and the evaluator reads them back on that view
+/// (more than ~1,300 groups used to fail with "unknown term Ephemeral#0").
+#[test]
+fn groups_on_computed_strings_ordered_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..1650_u32 {
+        data.push_str(&format!("ex:s{i} ex:link ex:o{} .\n", i % 1400));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for e in ["STR(?v)", "UCASE(STR(?v))", "SHA1(STR(?v))"] {
+        let q = format!(
+            "SELECT ?k (COUNT(*) AS ?n) WHERE {{ ?s ex:link ?v BIND({e} AS ?k) }} GROUP BY ?k ORDER BY ?k"
+        );
+        let run = |executor: &str| {
+            ordered(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert_eq!(expected.len(), 1400, "{q}");
+        assert_eq!(run("ids"), expected, "{q}");
+        engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
     }
 }
 
