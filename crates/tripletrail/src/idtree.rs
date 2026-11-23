@@ -462,12 +462,6 @@ impl Eval<'_> {
         })
     }
 
-    /// `?s <p>+ ?o`, `?s ^<p>+ ?o`, and with a constant end `<p>*` too (#11): the pairs of
-    /// the transitive closure of the predicate's edges, each end once per start (as SPARQL's
-    /// paths give them). The starts are a constant end, else the values `seed` (the rows the
-    /// path is joined with) gives one end, searched from that end, else every node with an
-    /// edge. A few starts are searched by looking their edges up level by level; many, by
-    /// reading all the predicate's edges once.
     /// `subject (p|^q|…) object`: the pairs each predicate's triples give (backwards for an
     /// inverse), without duplicates, as the evaluator gives them.
     fn alternative(
@@ -542,6 +536,12 @@ impl Eval<'_> {
         })
     }
 
+    /// `?s <p>+ ?o`, `?s ^<p>+ ?o`, and with a constant end `<p>*` too (#11): the pairs of
+    /// the transitive closure of the predicate's edges, each end once per start (as SPARQL's
+    /// paths give them). The starts are a constant end, else the values `seed` (the rows the
+    /// path is joined with) gives one end, searched from that end, else every node with an
+    /// edge. A few starts are searched by looking their edges up level by level; many, by
+    /// reading all the predicate's edges once.
     fn path(
         &self,
         subject: &TermPattern,
