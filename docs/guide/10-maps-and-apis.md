@@ -695,6 +695,26 @@ curl -s 'http://localhost:7878/ds/tiles/facets/Section?area=LINESTRING(4.35%2050
 "features":3
 ```
 
+In a layer's **OGC API** and **Copy GIS link**, a drawn rectangle or polygon goes into the
+CQL2 `filter` instead (`S_INTERSECTS`, `S_WITHIN`, … on `geometry`, and `NOT S_INTERSECTS`
+for outside it), so QGIS or any other OGC API client reads it as a standard filter. A circle,
+a corridor, a feature or another layer has no CQL2 form and stays `area=`. The stations within
+the area around Mechelen and Antwerp, and those outside it, either way:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/ogc/collections/Station/items?filter=S_WITHIN(geometry,%20POLYGON((4.3%2050.95,%204.6%2050.95,%204.6%2051.3,%204.3%2051.3,%204.3%2050.95)))' | grep -o '"numberReturned":[0-9]*'
+curl -s 'http://localhost:7878/ds/ogc/collections/Station/items?area=POLYGON((4.3%2050.95,%204.6%2050.95,%204.6%2051.3,%204.3%2051.3,%204.3%2050.95))&rel=within' | grep -o '"numberReturned":[0-9]*'
+curl -s 'http://localhost:7878/ds/ogc/collections/Station/items?filter=NOT%20S_INTERSECTS(geometry,%20POLYGON((4.3%2050.95,%204.6%2050.95,%204.6%2051.3,%204.3%2051.3,%204.3%2050.95)))' | grep -o '"numberReturned":[0-9]*'
+```
+
+<!-- test: output -->
+```text
+"numberReturned":2
+"numberReturned":2
+"numberReturned":8
+```
+
 **Or the features of** a layer selects by location: the features of that layer, as its own
 filters keep them, are the area (`area=layer:{id}`, with the layer's filters as
 `{id}.{key}=…`), and each feature is taken against every one of them but itself. The

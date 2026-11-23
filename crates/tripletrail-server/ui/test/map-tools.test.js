@@ -70,3 +70,16 @@ test("EPSG codes and projected points", () => {
   assert.strictEqual(g.fmtProjected("POINT(4.1234567 50.5)"), "4.123457 50.5");
   assert.strictEqual(g.fmtProjected("LINESTRING(0 0, 1 1)"), null);
 });
+
+test("a drawn area as CQL2 for the OGC API's items", () => {
+  const poly = "POLYGON((4.3 50.95, 4.6 50.95, 4.6 51.3, 4.3 51.3, 4.3 50.95))";
+  assert.strictEqual(g.cqlArea({ area: poly }), "S_INTERSECTS(geometry, " + poly + ")");
+  assert.strictEqual(g.cqlArea({ area: poly, rel: "within" }), "S_WITHIN(geometry, " + poly + ")");
+  assert.strictEqual(g.cqlArea({ area: poly, rel: "disjoint" }), "NOT S_INTERSECTS(geometry, " + poly + ")");
+  // No CQL2 form: a distance, a feature, another layer, a CRS named first.
+  assert.strictEqual(g.cqlArea({ area: "POINT(4.3571 50.8455)", rel: "dwithin", dist: 2000 }), "");
+  assert.strictEqual(g.cqlArea({ area: "https://example.org/rail#BXC", rel: "within" }), "");
+  assert.strictEqual(g.cqlArea({ area: "layer:Station" }), "");
+  assert.strictEqual(g.cqlArea({ area: "<http://www.opengis.net/def/crs/EPSG/0/31370> POINT(150000 170000)" }), "");
+  assert.strictEqual(g.cqlArea(null), "");
+});

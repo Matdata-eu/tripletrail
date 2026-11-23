@@ -168,7 +168,19 @@
     return r(m[1]) + " " + r(m[2]);
   }
 
-  const geometry = { epsgIri, fmtProjected, distance, bearing, destination, length, ringArea, perimeter, circle, toWkt, fromWkt, fmtLength, fmtArea, fmtBearing, fmtPoint, bandWidth };
+  /** An area ({area, rel, dist}) as a CQL2 spatial predicate on the geometry, for the OGC
+   *  API's items, or "" when it has none: only WKT in CRS84 (no CRS named first), with any
+   *  relation but dwithin. `disjoint` means no geometry meets the area, as area= takes it, so
+   *  it is NOT S_INTERSECTS. */
+  function cqlArea(area) {
+    if (!area || !area.area || !/^\s*[A-Za-z]+\s*\(/.test(area.area)) return "";
+    const rel = area.rel || "intersects";
+    if (rel === "disjoint") return "NOT S_INTERSECTS(geometry, " + area.area.trim() + ")";
+    if (!["intersects", "within", "contains", "touches", "crosses", "overlaps"].includes(rel)) return "";
+    return "S_" + rel.toUpperCase() + "(geometry, " + area.area.trim() + ")";
+  }
+
+  const geometry = { cqlArea, epsgIri, fmtProjected, distance, bearing, destination, length, ringArea, perimeter, circle, toWkt, fromWkt, fmtLength, fmtArea, fmtBearing, fmtPoint, bandWidth };
 
   /** The relations a feature's geometry can have to the area, as `rel` takes them. */
   const RELATIONS = [

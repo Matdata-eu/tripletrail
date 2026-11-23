@@ -549,9 +549,12 @@ window.TripleTrailMap = (function () {
    *  `f=json` for a GIS. */
   function ogcItems(ds, c, chosen, f, area) {
     const q = new URLSearchParams({ f });
-    const filter = cql(chosen[c.id]);
+    // An area drawn as WKT goes into the CQL2 filter (S_WITHIN, …), which any OGC API client
+    // reads; a distance, a feature IRI or another layer has no CQL2 form and stays area=.
+    const spatial = window.TripleTrailMapTools ? window.TripleTrailMapTools.geometry.cqlArea(area) : "";
+    const filter = [cql(chosen[c.id]), spatial].filter(Boolean).join(" AND ");
     if (filter) q.set("filter", filter);
-    appendArea(q, area, chosen);
+    if (!spatial) appendArea(q, area, chosen);
     if (when) q.set("datetime", when);
     return new URL(service(ds, "ogc/collections/" + encodeURIComponent(c.id) + "/items?" + q), location.href).href;
   }
@@ -577,7 +580,7 @@ window.TripleTrailMap = (function () {
     if (when) params.set("datetime", when);
     const out = await getJson(service(ds, tilesPath("facets/" + encodeURIComponent(c.id) + (params.toString() ? "?" + params : ""))));
     // Its counts take a sample of the features; the citation names them all.
-    return { sparql: (out.query || "").replace(/\s*LIMIT \d+\s*$/, ""), items: ogcItems(ds, c, state.chosen[c.id], "json", state.area) };
+    return { sparql: (out.query || "").replace(/\s*LIMIT \d+\s*$/, ""), items: ogcItems(ds, c, state.chosen, "json", state.area) };
   }
 
   /** The layer list: a checkbox, colour and count per collection, greyed below its zoom, and

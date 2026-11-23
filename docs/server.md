@@ -2436,7 +2436,9 @@ then takes it out of the address bar.
   `feature=IRI` and the filters as the tiles take them (`{collection}.{key}=value`, `.min`,
   `.max`) in its query. A collection's filter panel
   opens its features in the OGC API (*OGC API*) and copies their GeoJSON link for a GIS
-  (*Copy GIS link*), with the filters as CQL2 (`IN`, `>=`, `<=`). *Colour by* draws a collection in a colour
+  (*Copy GIS link*), with the filters as CQL2 (`IN`, `>=`, `<=`), and a drawn area as
+  `S_INTERSECTS`, `S_WITHIN`, … on `geometry` (`NOT S_INTERSECTS` for outside it); a circle,
+  corridor, feature or other layer as the area stays `area=`. *Colour by* draws a collection in a colour
   per value of one of its values facets (its 10 most frequent values under the filters, the
   others grey), or per class of a range of numbers (the shape's `tts:colorClasses`, else five
   of equal width on round numbers, blue to red), with a key that counts the features of each
