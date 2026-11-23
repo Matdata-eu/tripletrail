@@ -417,7 +417,10 @@ pub(crate) fn compile<'k>(
             let a = compile(&args[0], t, snapshot)?;
             Box::new(move |row| {
                 Some(match a(row)? {
-                    Ok(x) => spareval::cast(name.as_ref(), as_written(x))
+                    // Not a variable: read by value, as `build_written_evaluator` reads
+                    // any expression but a variable (`COALESCE(?o, ?v)` of a stored `57.90`
+                    // is the decimal 57.9).
+                    Ok(x) => spareval::cast(name.as_ref(), spareval::ExpressionTerm::from(x))
                         .map(Term::from)
                         .ok_or(()),
                     Err(()) => Err(()),

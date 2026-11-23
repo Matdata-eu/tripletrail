@@ -1254,6 +1254,10 @@ fn casts_on_ids_are_the_evaluators() {
         "\"1.5e300\"^^xsd:double",
         "\"100.0\"^^xsd:double",
         "\"1.5\"^^xsd:float",
+        "\"57.90\"^^xsd:decimal",
+        "\"1\"^^xsd:double",
+        "\"1e0\"^^xsd:double",
+        "\"1.0\"^^xsd:double",
         "\"1\"^^xsd:boolean",
         "\"false\"^^xsd:boolean",
         "true",
@@ -1296,6 +1300,30 @@ fn casts_on_ids_are_the_evaluators() {
                     "SELECT ?s ?y WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(UCASE(STR(?v))) AS ?y) }}"
                 ),
                 true,
+            ),
+            (
+                format!(
+                    "SELECT ?s ?y WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(COALESCE(?o, ?v)) AS ?y) }}"
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "SELECT ?s ?y WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(IF(isLiteral(?v), ?v, \"x\")) AS ?y) }}"
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "SELECT (COUNT(DISTINCT ?y) AS ?n) WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(COALESCE(?o, ?v)) AS ?y) }}"
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "SELECT ?y (COUNT(*) AS ?n) WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(COALESCE(?o, ?v)) AS ?y) }} GROUP BY ?y"
+                ),
+                false,
             ),
             (
                 format!("SELECT ?s WHERE {{ ?s ex:v ?v FILTER(STR(xsd:{cast}(?v)) = \"1\") }}"),
