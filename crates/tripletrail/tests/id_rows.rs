@@ -1214,6 +1214,151 @@ fn groups_read_back_on_ids_are_the_evaluators() {
     }
 }
 
+/// The casts to `xsd:string`, `xsd:boolean`, `xsd:double`, `xsd:float`, `xsd:integer` and
+/// `xsd:dateTime` on ids give the evaluator's terms, for every kind of argument.
+#[test]
+fn casts_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let forms = [
+        "\"-10.2E3\"",
+        "\"+33.3300\"",
+        "\"0.0\"",
+        "\"0\"",
+        "\"0E1\"",
+        "\"1.5\"",
+        "\"1\"",
+        "\"1E0\"",
+        "\"13\"",
+        "\" 13 \"",
+        "\"2002-10-10T17:00:00Z\"",
+        "\"false\"",
+        "\"true\"",
+        "\"TRUE\"",
+        "\"INF\"",
+        "\"NaN\"",
+        "\"abc\"",
+        "\"\"",
+        "\"3\"^^xsd:integer",
+        "\"-0\"^^xsd:integer",
+        "\"0012\"^^xsd:integer",
+        "\"1e3\"^^xsd:integer",
+        "\"99999999999999999999999\"^^xsd:integer",
+        "\"+33.3300\"^^xsd:decimal",
+        "\"3.0\"^^xsd:decimal",
+        "\"-0.5\"^^xsd:decimal",
+        "\"1e3\"^^xsd:decimal",
+        "\"1E0\"^^xsd:double",
+        "\"-0.0E0\"^^xsd:double",
+        "\"INF\"^^xsd:double",
+        "\"NaN\"^^xsd:double",
+        "\"1.5e300\"^^xsd:double",
+        "\"100.0\"^^xsd:double",
+        "\"1.5\"^^xsd:float",
+        "\"57.90\"^^xsd:decimal",
+        "\"1\"^^xsd:double",
+        "\"1e0\"^^xsd:double",
+        "\"1.0\"^^xsd:double",
+        "\"1\"^^xsd:boolean",
+        "\"false\"^^xsd:boolean",
+        "true",
+        "\"2002-10-10T17:00:00\"^^xsd:dateTime",
+        "\"2002-10-10T17:00:00+02:00\"^^xsd:dateTime",
+        "\"2002-10-10\"^^xsd:date",
+        "\"300\"^^xsd:byte",
+        "\"-7\"^^xsd:byte",
+        "\"12\"^^xsd:unsignedShort",
+        "\"x\"^^<http://example.org/dt>",
+        "\"chat\"@fr",
+        "\"1\"@en",
+        "<http://example.org/iri>",
+        "_:b",
+    ];
+    let mut data = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    for (i, f) in forms.iter().enumerate() {
+        for j in 0..3 {
+            data.push_str(&format!("ex:s{i}_{j} ex:v {f} .\n"));
+        }
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    for cast in [
+        "string", "boolean", "double", "float", "integer", "dateTime",
+    ] {
+        for (q, on_ids) in [
+            (
+                format!("SELECT ?s ?y WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(?v) AS ?y) }}"),
+                true,
+            ),
+            (
+                format!("SELECT ?s ?y WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(STR(?v)) AS ?y) }}"),
+                true,
+            ),
+            (
+                format!(
+                    "SELECT ?s ?y WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(UCASE(STR(?v))) AS ?y) }}"
+                ),
+                true,
+            ),
+            (
+                format!(
+                    "SELECT ?s ?y WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(COALESCE(?o, ?v)) AS ?y) }}"
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "SELECT ?s ?y WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(IF(isLiteral(?v), ?v, \"x\")) AS ?y) }}"
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "SELECT (COUNT(DISTINCT ?y) AS ?n) WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(COALESCE(?o, ?v)) AS ?y) }}"
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "SELECT ?y (COUNT(*) AS ?n) WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(COALESCE(?o, ?v)) AS ?y) }} GROUP BY ?y"
+                ),
+                false,
+            ),
+            (
+                format!("SELECT ?s WHERE {{ ?s ex:v ?v FILTER(STR(xsd:{cast}(?v)) = \"1\") }}"),
+                false,
+            ),
+            (
+                format!(
+                    "SELECT (COUNT(DISTINCT ?y) AS ?n) WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(?v) AS ?y) }}"
+                ),
+                false,
+            ),
+            (
+                format!(
+                    "SELECT ?y (COUNT(*) AS ?n) WHERE {{ ?s ex:v ?v BIND(xsd:{cast}(?v) AS ?y) }} GROUP BY ?y"
+                ),
+                false,
+            ),
+        ] {
+            let run = |executor: &str| {
+                rows(
+                    &engine,
+                    &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+                )
+            };
+            assert_eq!(run("ids"), run("spareval"), "{q}");
+            if on_ids {
+                let plan = engine
+                    .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+                    .unwrap();
+                assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+            }
+        }
+    }
+}
+
 /// Groups on a computed string, ordered on it: the strings the store does not hold get ids
 /// made up for the view the rewrites read, and the evaluator reads them back on that view
 /// (more than ~1,300 groups used to fail with "unknown term Ephemeral#0").
