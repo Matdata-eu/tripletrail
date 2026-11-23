@@ -88,6 +88,11 @@ pub(crate) fn computable(e: &Expression) -> bool {
         Expression::Coalesce(list) => {
             !list.is_empty() && list.iter().all(arg) && !crate::direct::number_computable(e)
         }
+        // `STRSTARTS`, `STRENDS`, `CONTAINS` and `REGEX` of a term computed here and constant
+        // strings (a pattern compiled once), as an `xsd:boolean`.
+        Expression::FunctionCall(F::StrStarts | F::StrEnds | F::Contains | F::Regex, _) => {
+            crate::idtree::text_test_on(e).is_some_and(|(a, _)| arg(a))
+        }
         // A condition on numbers and dates, as an `xsd:boolean`.
         e => crate::idvalue::is_condition(e, &crate::direct::number_computable),
     }
@@ -532,6 +537,21 @@ pub(crate) fn compile<'k>(
                     }
                 }
                 Some(Err(()))
+            })
+        }
+        // A test of a string: `true` or `false`; an error for a term that is no string.
+        Expression::FunctionCall(F::StrStarts | F::StrEnds | F::Contains | F::Regex, _) => {
+            let (a, test) = crate::idtree::text_test_on(e)?;
+            let a = compile(a, t, snapshot)?;
+            Box::new(move |row| {
+                Some(match a(row)? {
+                    Ok(Term::Literal(l))
+                        if l.datatype() == xsd::STRING || l.language().is_some() =>
+                    {
+                        Ok(Literal::from(test.matches(l.value())).into())
+                    }
+                    _ => Err(()),
+                })
             })
         }
         // A condition on numbers and dates: `true` or `false`, or an error.
