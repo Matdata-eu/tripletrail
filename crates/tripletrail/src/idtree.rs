@@ -1857,8 +1857,14 @@ fn effective_boolean_value(term: oxigraph::model::Term) -> Option<Option<bool>> 
             "false" | "0" => false,
             _ => return None,
         }
-    } else if datatype == xsd::INTEGER || datatype == xsd::DECIMAL || datatype == xsd::DOUBLE {
-        let v: f64 = l.value().parse().ok()?;
+    } else if datatype == xsd::INTEGER {
+        // Each read with its own lexical rules, as the evaluator reads it: a form the type
+        // doesn't allow (`"1e3"^^xsd:integer`) is the evaluator's to decide.
+        l.value().parse::<oxsdatatypes::Integer>().ok()? != oxsdatatypes::Integer::from(0)
+    } else if datatype == xsd::DECIMAL {
+        l.value().parse::<oxsdatatypes::Decimal>().ok()? != oxsdatatypes::Decimal::from(0)
+    } else if datatype == xsd::DOUBLE {
+        let v = f64::from(l.value().parse::<oxsdatatypes::Double>().ok()?);
         v != 0.0 && !v.is_nan()
     } else {
         return None;
@@ -3583,4 +3589,45 @@ fn substituted(e: &Expression, variable: &Variable, by: &Expression) -> Option<E
     let (mut found, mut ok) = (false, true);
     walk(&mut e, variable, by, &mut found, &mut ok);
     (found && ok).then_some(e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_boolean_value;
+    use oxigraph::model::vocab::xsd;
+    use oxigraph::model::{Literal, NamedNode, Term};
+
+    fn ebv(value: &str, datatype: oxigraph::model::NamedNodeRef<'_>) -> Option<Option<bool>> {
+        effective_boolean_value(Literal::new_typed_literal(value, datatype).into())
+    }
+
+    #[test]
+    fn effective_boolean_values_are_the_evaluators() {
+        assert_eq!(ebv("", xsd::STRING), Some(Some(false)));
+        assert_eq!(ebv("a", xsd::STRING), Some(Some(true)));
+        assert_eq!(ebv("1", xsd::BOOLEAN), Some(Some(true)));
+        assert_eq!(ebv("0", xsd::BOOLEAN), Some(Some(false)));
+        assert_eq!(ebv("yes", xsd::BOOLEAN), None);
+        assert_eq!(ebv("0", xsd::INTEGER), Some(Some(false)));
+        assert_eq!(ebv("-02", xsd::INTEGER), Some(Some(true)));
+        assert_eq!(ebv("0.000", xsd::DECIMAL), Some(Some(false)));
+        assert_eq!(ebv("0.5", xsd::DECIMAL), Some(Some(true)));
+        assert_eq!(ebv("NaN", xsd::DOUBLE), Some(Some(false)));
+        assert_eq!(ebv("-0e0", xsd::DOUBLE), Some(Some(false)));
+        assert_eq!(ebv("INF", xsd::DOUBLE), Some(Some(true)));
+        // Forms the type doesn't allow are the evaluator's.
+        assert_eq!(ebv("1e3", xsd::INTEGER), None);
+        assert_eq!(ebv("1e3", xsd::DECIMAL), None);
+        assert_eq!(ebv("1", xsd::INT), None);
+        assert_eq!(
+            effective_boolean_value(
+                Literal::new_language_tagged_literal_unchecked("a", "en").into()
+            ),
+            Some(None)
+        );
+        assert_eq!(
+            effective_boolean_value(Term::from(NamedNode::new_unchecked("http://e/x"))),
+            Some(None)
+        );
+    }
 }
