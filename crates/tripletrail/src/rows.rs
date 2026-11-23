@@ -462,7 +462,10 @@ pub(crate) fn covered(p: &GraphPattern) -> bool {
             expression: None,
         } => covered(left) && covered(right),
         G::Filter { expr, inner } => covered_filter(expr) && covered(inner),
-        G::Path { path, .. } => crate::idtree::closure_path(path).is_some(),
+        G::Path { path, .. } => {
+            crate::idtree::closure_path(path).is_some()
+                || crate::idtree::alternative_path(path).is_some()
+        }
         _ => false,
     }
 }
@@ -477,7 +480,10 @@ fn worth(p: &GraphPattern) -> bool {
     use GraphPattern as G;
     match p {
         // A closure the evaluator would find one start at a time.
-        G::Minus { .. } | G::Filter { .. } | G::Path { .. } => true,
+        G::Minus { .. } | G::Filter { .. } => true,
+        // An alternative of predicates is the evaluator's union of scans: not worth reading
+        // back.
+        G::Path { path, .. } => crate::idtree::closure_path(path).is_some(),
         G::Join { left, right } | G::LeftJoin { left, right, .. } | G::Union { left, right } => {
             worth(left) || worth(right)
         }

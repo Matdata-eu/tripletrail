@@ -55,6 +55,44 @@ pub(crate) fn closure_path(
     }
 }
 
+/// The predicates of an alternative of predicates and their inverses (`ex:a|^ex:b|ex:c`), each
+/// with whether it is followed backwards: the evaluator's union of their pairs without
+/// duplicates.
+pub(crate) fn alternative_path(
+    path: &PropertyPathExpression,
+) -> Option<Vec<(&spargebra::term::NamedNode, bool)>> {
+    fn walk<'p>(
+        p: &'p PropertyPathExpression,
+        out: &mut Vec<(&'p spargebra::term::NamedNode, bool)>,
+    ) -> Option<()> {
+        use PropertyPathExpression as P;
+        match p {
+            P::Alternative(a, b) => {
+                walk(a, out)?;
+                walk(b, out)
+            }
+            P::NamedNode(n) => {
+                out.push((n, false));
+                Some(())
+            }
+            P::Reverse(r) => match &**r {
+                P::NamedNode(n) => {
+                    out.push((n, true));
+                    Some(())
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    if !matches!(path, PropertyPathExpression::Alternative(..)) {
+        return None;
+    }
+    let mut out = Vec::new();
+    walk(path, &mut out)?;
+    Some(out)
+}
+
 /// The operands of a tree of joins, in order.
 fn joined_parts<'p>(p: &'p GraphPattern, out: &mut Vec<&'p GraphPattern>) {
     match p {
@@ -229,7 +267,10 @@ impl Eval<'_> {
                 subject,
                 path,
                 object,
-            } => self.path(subject, path, object, None)?,
+            } => match alternative_path(path) {
+                Some(alternatives) => self.alternative(subject, &alternatives, object)?,
+                None => self.path(subject, path, object, None)?,
+            },
             // `VALUES`, while the id executor answers whole queries (#11): each term by its
             // stored id, or one made up for the query; `UNDEF` unbound.
             GraphPattern::Values {
@@ -428,6 +469,86 @@ impl Eval<'_> {
             ids,
             maybe: flags,
             ones: rows,
+        })
+    }
+
+    /// `subject (p|^q|…) object`: the pairs each predicate's triples give (backwards for an
+    /// inverse), without duplicates, as the evaluator gives them.
+    fn alternative(
+        &self,
+        subject: &TermPattern,
+        alternatives: &[(&spargebra::term::NamedNode, bool)],
+        object: &TermPattern,
+    ) -> Option<Table> {
+        if [subject, object]
+            .iter()
+            .any(|t| matches!(t, TermPattern::BlankNode(_) | TermPattern::Triple(_)))
+        {
+            return None;
+        }
+        let mut all: Option<Table> = None;
+        // Each alternative's rows are distinct; rows of two alternatives can only be equal
+        // when every column's range of ids overlaps (terms of different kinds never do).
+        let mut ranges: Vec<Vec<(TermId, TermId)>> = Vec::new();
+        let mut overlap = false;
+        for &(predicate, reverse) in alternatives {
+            let (s, o) = if reverse {
+                (object, subject)
+            } else {
+                (subject, object)
+            };
+            let t = self.bgp(&[spargebra::term::TriplePattern {
+                subject: s.clone(),
+                predicate: NamedNodePattern::NamedNode(predicate.clone()),
+                object: o.clone(),
+            }])?;
+            // Each variable's range, in the order of the variables' names: the tables of a
+            // predicate and of an inverse hold the ends in different columns.
+            let mut names: Vec<(&Variable, usize)> =
+                t.vars.iter().enumerate().map(|(c, v)| (v, c)).collect();
+            names.sort();
+            let r: Vec<(TermId, TermId)> = names
+                .iter()
+                .map(|&(_, c)| {
+                    (0..t.len())
+                        .map(|r| t.row(r)[c])
+                        .fold((TermId(u64::MAX), TermId(0)), |(lo, hi), id| {
+                            (lo.min(id), hi.max(id))
+                        })
+                })
+                .collect();
+            overlap |= t.len() > 0
+                && ranges
+                    .iter()
+                    .any(|q| q.iter().zip(&r).all(|(&(a, b), &(c, d))| a <= d && c <= b));
+            if t.len() > 0 {
+                ranges.push(r);
+            }
+            all = Some(match all {
+                None => t,
+                Some(a) => union(a, t)?,
+            });
+        }
+        let t = all?;
+        if !overlap {
+            return Some(t);
+        }
+        let width = t.width();
+        let mut seen = std::collections::HashSet::with_capacity(t.len());
+        let mut ids = Vec::with_capacity(t.ids.len());
+        let mut ones = 0;
+        for r in 0..t.len() {
+            if seen.insert(t.row(r)) {
+                ids.extend_from_slice(t.row(r));
+                ones += 1;
+            }
+        }
+        debug_assert_eq!(ids.len(), ones * width);
+        Some(Table {
+            vars: t.vars.clone(),
+            ids,
+            maybe: t.maybe.clone(),
+            ones,
         })
     }
 
@@ -771,7 +892,7 @@ impl Eval<'_> {
                 subject,
                 path,
                 object,
-            } => {
+            } if alternative_path(path).is_none() => {
                 let r = self.path(subject, path, object, Some(t))?;
                 (r.ids.len() <= max_ids()).then_some(r)
             }
