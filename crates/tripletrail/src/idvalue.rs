@@ -1133,10 +1133,19 @@ mod tests {
         assert_eq!(s.literal().unwrap().value(), "2.75");
         assert_eq!(s.literal().unwrap().datatype(), xsd::DOUBLE);
         assert_eq!(s.average(2).unwrap().value(), "1.375");
-        // An average of integers is a decimal division: not here.
+        // An average of integers is the evaluator's decimal division.
         let mut s = Sum::default();
         s.add(Value::Integer(3)).unwrap();
-        assert!(s.average(2).is_none());
+        let a = s.average(2).unwrap();
+        assert_eq!((a.value(), a.datatype()), ("1.5", xsd::DECIMAL));
+        let mut s = Sum::default();
+        s.add(Value::Integer(1)).unwrap();
+        assert!(
+            s.average(3)
+                .unwrap()
+                .value()
+                .starts_with("0.333333333333333333")
+        );
     }
 
     #[test]
