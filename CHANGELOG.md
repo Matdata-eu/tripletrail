@@ -22,6 +22,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- Under the id executor, a query grouped on a computed string and ordered on it (`BIND(STR(?v) AS ?k) … GROUP BY ?k ORDER BY ?k`, more than about 1,300 groups) failed with `unknown term Ephemeral#0`: it was evaluated on a newer view of the store than the one its rewrites made up ids for. It is now evaluated, and explained, on that view.
 - A product of decimals with more than 18 digits after the point (`0.1234567891 * 0.123456789`) gave no value; it is now exact, as in Jena and Fuseki (`0.0152415787625361999`). Arithmetic on it reads it at 18 digits, as on a long quotient. See [Fuseki compatibility](docs/guide/11-fuseki.md).
 - A `geo:gmlLiteral` whose `srsName` holds a character no IRI may hold (a space, a control character, `<`, `>`, a quote, …) is now an invalid literal. It was read with that name as its CRS, which the WKT the store writes for it could not hold, so the geometry could not be read back (found by the `geo_literals` fuzz target).
 - Building the image for linux/amd64 and linux/arm64 together (the Release and Docker image workflows) no longer fails now and then with `failed to unpack package … File exists`: each architecture's build has its own crate cache.

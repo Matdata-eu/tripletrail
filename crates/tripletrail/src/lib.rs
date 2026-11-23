@@ -2719,8 +2719,12 @@ impl Engine {
         if shortcuts && let Dataset::TripleTrail(store) = &self.store {
             query = equality::rewrite_query(query, &resources(&store.snapshot()));
         }
+        // The view the rewrites read is the one the query is evaluated on: the terms they make
+        // up are known only to it (#11).
+        let mut base = None;
         if shortcuts && let Dataset::TripleTrail(store) = &self.store {
             let snapshot = store.snapshot();
+            base = Some(snapshot.clone());
             // The union of all graphs as the default graph: every graph, without the copies
             // of a triple held by several (#808), so each triple is read once.
             let on = match dataset {
@@ -2753,8 +2757,8 @@ impl Engine {
             }
         }
         if let Dataset::TripleTrail(store) = &self.store {
-            let snapshot = store.snapshot();
-            query = zero_length::rewrite(query, &snapshot, dataset);
+            let snapshot = base.get_or_insert_with(|| store.snapshot());
+            query = zero_length::rewrite(query, snapshot, dataset);
         }
         let mut prepared = self.evaluator().for_query(plan::plan_query(query));
         if let Some(dataset) = dataset {
@@ -2763,7 +2767,7 @@ impl Engine {
         for (variable, value) in substitutions {
             prepared = prepared.substitute_variable(variable, value);
         }
-        Ok(self.store.execute(prepared)?)
+        Ok(self.store.execute_on(prepared, base)?)
     }
 
     /// Evaluates a query to the end and returns how it was evaluated: Oxigraph's plan with
@@ -2918,10 +2922,13 @@ impl Engine {
         if let Dataset::TripleTrail(store) = &self.store {
             query = equality::rewrite_query(query, &resources(&store.snapshot()));
         }
+        // As run_query_scoped: evaluated on the view the rewrites read.
+        let mut base = None;
         if narrowed.is_none()
             && let Dataset::TripleTrail(store) = &self.store
         {
             let snapshot = store.snapshot();
+            base = Some(snapshot.clone());
             // As run_query_scoped: the union reads every graph without the copies (#808).
             let on = if union && reads_union {
                 union_ids(&query, snapshot, &|| self.is_cancelled())
@@ -2952,15 +2959,15 @@ impl Engine {
             None => (union && reads_union).then(union_dataset),
         };
         if let Dataset::TripleTrail(store) = &self.store {
-            let snapshot = store.snapshot();
-            query = zero_length::rewrite(query, &snapshot, dataset.as_ref());
+            let snapshot = base.get_or_insert_with(|| store.snapshot());
+            query = zero_length::rewrite(query, snapshot, dataset.as_ref());
         }
         let mut prepared = self.evaluator().for_query(plan::plan_query(query));
         if let Some(d) = dataset {
             *prepared.dataset_mut() = d;
         }
         let (result, evaluated) = tripletrail_fx::record_database_calls(|| -> Result<_, Error> {
-            let (results, explanation) = self.store.explain(prepared);
+            let (results, explanation) = self.store.explain(prepared, base);
             let rows = match results? {
                 QueryResults::Solutions(s) => s
                     .map(|r| r.map(|_| ()))

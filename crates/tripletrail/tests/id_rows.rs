@@ -1214,6 +1214,37 @@ fn groups_read_back_on_ids_are_the_evaluators() {
     }
 }
 
+/// Groups on a computed string, ordered on it: the strings the store does not hold get ids
+/// made up for the view the rewrites read, and the evaluator reads them back on that view
+/// (more than ~1,300 groups used to fail with "unknown term Ephemeral#0").
+#[test]
+fn groups_on_computed_strings_ordered_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..1650_u32 {
+        data.push_str(&format!("ex:s{i} ex:link ex:o{} .\n", i % 1400));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for e in ["STR(?v)", "UCASE(STR(?v))", "SHA1(STR(?v))"] {
+        let q = format!(
+            "SELECT ?k (COUNT(*) AS ?n) WHERE {{ ?s ex:link ?v BIND({e} AS ?k) }} GROUP BY ?k ORDER BY ?k"
+        );
+        let run = |executor: &str| {
+            ordered(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert_eq!(expected.len(), 1400, "{q}");
+        assert_eq!(run("ids"), expected, "{q}");
+        engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+    }
+}
+
 #[test]
 fn the_id_executor_answers_as_the_evaluator() {
     let engine = Engine::new_tripletrail();

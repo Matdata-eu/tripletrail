@@ -99,6 +99,25 @@ impl Dataset {
         }
     }
 
+    /// [`Dataset::execute`] on `base`, the view the rewrites read: the terms they made up for
+    /// it (ephemeral ids in the tables they registered, #11) are known only to it and its
+    /// clones, not to a later view of the store.
+    pub fn execute_on(
+        &self,
+        mut query: PreparedSparqlQuery,
+        base: Option<crate::Snapshot>,
+    ) -> Result<QueryResults<'static>, QueryEvaluationError> {
+        match (self, base) {
+            (Self::TripleTrail(_), Some(base)) => {
+                let snapshot = merged_view(base.with_pending_tables(), query.dataset_mut());
+                with_estimates(&snapshot, || {
+                    query.on_queryable_dataset(snapshot.clone()).execute()
+                })
+            }
+            _ => self.execute(query),
+        }
+    }
+
     /// [`Dataset::execute`] on `base` without the quads `rows` hides (#202). Only the tripletrail
     /// store has row filters: on Oxigraph's store a filter is an error, never ignored.
     pub fn execute_with_rows(
@@ -124,9 +143,11 @@ impl Dataset {
     }
 
     /// Evaluates with statistics and returns the explanation too.
+    /// On `base` when given, as [`Dataset::execute_on`].
     pub fn explain(
         &self,
         mut query: PreparedSparqlQuery,
+        base: Option<crate::Snapshot>,
     ) -> (
         Result<QueryResults<'static>, QueryEvaluationError>,
         QueryExplanation,
@@ -134,7 +155,10 @@ impl Dataset {
         match self {
             Self::Oxigraph(s) => query.on_store(s).compute_statistics().explain(),
             Self::TripleTrail(s) => {
-                let snapshot = snapshot(s, &mut query);
+                let snapshot = match base {
+                    Some(base) => merged_view(base.with_pending_tables(), query.dataset_mut()),
+                    None => snapshot(s, &mut query),
+                };
                 with_estimates(&snapshot, || {
                     query
                         .on_queryable_dataset(snapshot.clone())
