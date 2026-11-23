@@ -87,8 +87,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   ids too and becomes a `VALUES` block of the keys and counts (at most 2^20 groups, IRI or
   literal keys). `MIN`, `MAX` and `SAMPLE` of a variable are taken per group on ids too, also
   without `GROUP BY`: IRIs and simple strings compared by their dictionary keys, integers and
-  booleans by value; other values (blank nodes, language strings, other typed literals, mixed
-  literal kinds) leave the group to the evaluator. Under `ORDER BY` of counts with `LIMIT k`,
+  booleans by value. Decimals, doubles and floats, also mixed with integers, are compared
+  with the evaluator's own order (`spareval::cmp_values_as_jena`: by value, then as written,
+  as Jena: `"03"` before `3`), so a query over amounts or measures stays on ids (about as
+  fast as the evaluator for the aggregate itself). Other values (blank
+  nodes, language strings, other typed literals, mixed literal kinds) leave the group to the
+  evaluator. Under `ORDER BY` of counts with `LIMIT k`,
   only the first k groups are kept, before their other aggregates are computed. A `GROUP BY`
   over `BIND`s with few distinct inputs (`BIND(?q * 2 AS ?k) … GROUP BY ?k`) counts the rows
   per input first and computes the expression once per input, under `--executor ids` too
