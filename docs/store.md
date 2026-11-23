@@ -204,7 +204,9 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   without dot segments is that IRI. A direction-tagged string in `CONCAT` or
   `REPLACE`, a string `IRI` would resolve
   against a base, and `STRDT` to an XML Schema type other than `xsd:string` (whose lexical
-  form the store would not keep) leave the query to the evaluator. Such a string is also
+  form the store would not keep) leave the query to the evaluator. A condition on numbers and
+  dates (`BIND(?q > 50 AS ?big)`, with `!`, `&&`, `||` and `BOUND`) is an `xsd:boolean` the
+  same way, an error leaving the cell unbound (133k orders: 36 instead of 69 ms). Such a string is also
   filtered on ids: `e = "text"` (false for an IRI, a blank node or a language-tagged string;
   a literal of another type is the evaluator's) and `STRSTARTS`, `STRENDS`, `CONTAINS` and
   `REGEX` of it with constant arguments (an error for anything but a string literal), each
