@@ -212,7 +212,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `SHA384` and `SHA512` (the hex digest of a simple literal; a language-tagged string is an
   error) and `ENCODE_FOR_URI` are computed the same way (133k orders: `MD5(STR(?c))` 55
   instead of 160 ms; a digest of every row, minting an IRI from each order, 322 instead of
-  347 ms, as the hashing itself dominates).
+  347 ms, as the hashing itself dominates). The casts to `xsd:string`, `xsd:boolean`,
+  `xsd:double`, `xsd:float`, `xsd:integer` and `xsd:dateTime` of a variable or of such a
+  string call the evaluator's own cast code (`spareval::cast`), so they give its terms,
+  `xsd:double`'s lexical form kept as Jena does included (133k orders:
+  `xsd:integer(STR(?q))` 45 instead of 120 ms, `xsd:double(?amount)` 150 instead of 230 ms).
+  `xsd:decimal` stays Jena's (the value kernels compute it of a number).
   `LANG` (`""` for a literal
   without a language), `DATATYPE` (decided from the kind of id for strings, integers,
   booleans, doubles and decimals; a type of XML Schema such as `xsd:byte`, which the evaluator

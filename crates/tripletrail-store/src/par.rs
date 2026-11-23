@@ -39,10 +39,18 @@ pub fn set_query_threads(threads: usize) {
     QUERY_THREADS.store(threads, Ordering::Relaxed);
 }
 
+/// The cores this process may use, at least 1, found once (#184). The standard library's
+/// `available_parallelism` reads `/proc/self/cgroup` and the cgroup's CPU quota files on
+/// every call, about 4 system calls, which added up on queries of 1 to 3 ms.
+pub fn cores() -> usize {
+    static CORES: OnceLock<usize> = OnceLock::new();
+    *CORES.get_or_init(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+}
+
 /// The threads one query may use, at least 1.
 pub fn query_threads() -> usize {
     match QUERY_THREADS.load(Ordering::Relaxed) {
-        0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
+        0 => cores(),
         n => n,
     }
 }
@@ -123,6 +131,17 @@ pub fn sort_unstable<T: Ord + Send>(v: &mut [T]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cores_is_found_once_and_at_least_one() {
+        let n = cores();
+        assert!(n >= 1);
+        assert_eq!(cores(), n);
+        assert_eq!(
+            n,
+            std::thread::available_parallelism().map_or(1, |n| n.get())
+        );
+    }
 
     #[test]
     fn chunks_cover_the_range_in_order() {

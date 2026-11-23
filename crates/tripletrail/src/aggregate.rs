@@ -172,7 +172,7 @@ pub(crate) fn parallel(
         Cancelled,
         NotDouble,
     }
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = tripletrail_store::par::cores();
     let chunk = rows.len().div_ceil(threads).max(256);
     let computed: Result<Vec<Vec<Option<f64>>>, Stop> = std::thread::scope(|scope| {
         let workers: Vec<_> = rows
@@ -319,7 +319,7 @@ fn by_ids(
         .collect();
     // Decoded on every core, each term once per part.
     let width = rows.width;
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = tripletrail_store::par::cores();
     let per = rows.len().div_ceil(threads).max(4096) * width;
     let parts: Vec<Result<Vec<Vec<Option<Term>>>, crate::Error>> = std::thread::scope(|scope| {
         let workers: Vec<_> = rows

@@ -277,7 +277,7 @@ fn validate(
         }
         Ok(out)
     };
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(16));
+    let threads = tripletrail_store::par::cores().min(16);
     if foci.len() < PARALLEL_FROM || threads < 2 {
         return run(foci);
     }

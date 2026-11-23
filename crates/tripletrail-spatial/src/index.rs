@@ -392,7 +392,7 @@ impl SpatialIndex {
             }
         };
         // Reading boxes (the tripletrail store) or parsing (Oxigraph's) is spread over the cores.
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let threads = tripletrail_store::par::cores();
         if let (Dataset::TripleTrail(s), Some(ids)) =
             (store, store.geometry_ids(&|p| predicates.covers(p))?)
         {
@@ -544,7 +544,7 @@ impl SpatialIndex {
         // Whether each literal is wanted, its geometry and whether it is in the index already:
         // read-only, so spread over the cores (a big update touches many literals, and each
         // search of the tree for a point visits every long line whose box holds it).
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let threads = tripletrail_store::par::cores();
         let chunk = touched.len().div_ceil(threads).max(4096);
         let this = &*self;
         let seen = &seen;
