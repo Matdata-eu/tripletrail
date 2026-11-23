@@ -27,6 +27,8 @@ unsafe impl Pod for [u64; 4] {}
 
 pub(crate) enum Buf<T: Pod> {
     Owned(Vec<T>),
+    /// Values on the heap that another array shares (see [`Buf::share`]).
+    Shared(Arc<Vec<T>>),
     /// `len` values starting at byte `offset` of `map`, which is suitably aligned.
     Mapped {
         map: Arc<Mmap>,
@@ -51,6 +53,7 @@ impl<T: Pod> Clone for Buf<T> {
     fn clone(&self) -> Self {
         match self {
             Self::Owned(v) => Self::Owned(v.clone()),
+            Self::Shared(v) => Self::Shared(Arc::clone(v)),
             Self::Mapped { map, offset, len } => Self::Mapped {
                 map: Arc::clone(map),
                 offset: *offset,
@@ -66,6 +69,7 @@ impl<T: Pod> Deref for Buf<T> {
     fn deref(&self) -> &[T] {
         match self {
             Self::Owned(v) => v,
+            Self::Shared(v) => v,
             Self::Mapped { map, offset, len } => {
                 // SAFETY: `mapped` checked that the range is inside the map and aligned for
                 // `T`, and `T: Pod` accepts any bytes. The map is read-only and lives as long
@@ -116,19 +120,34 @@ impl<T: Pod> Buf<T> {
 
     /// The values as a vector to change, copying them out of the map first.
     pub(crate) fn to_mut(&mut self) -> &mut Vec<T> {
-        if let Self::Mapped { .. } = self {
-            *self = Self::Owned(self.to_vec());
+        match self {
+            Self::Mapped { .. } => *self = Self::Owned(self.to_vec()),
+            Self::Shared(v) => *self = Self::Owned(Arc::unwrap_or_clone(std::mem::take(v))),
+            Self::Owned(_) => {}
         }
         match self {
             Self::Owned(v) => v,
-            Self::Mapped { .. } => unreachable!(),
+            _ => unreachable!(),
         }
+    }
+
+    /// A second array of the same values, without copying them: values on the heap are
+    /// shared from now on (`self` too becomes [`Buf::Shared`]).
+    pub(crate) fn share(&mut self) -> Self {
+        if let Self::Owned(v) = self {
+            *self = Self::Shared(Arc::new(std::mem::take(v)));
+        }
+        self.clone()
     }
 
     /// Bytes held on the heap (mapped values are not).
     pub(crate) fn heap_size(&self) -> usize {
         match self {
             Self::Owned(v) => v.capacity() * std::mem::size_of::<T>(),
+            // Divided among the arrays that share them.
+            Self::Shared(v) => {
+                v.capacity() * std::mem::size_of::<T>() / Arc::strong_count(v).max(1)
+            }
             Self::Mapped { .. } => 0,
         }
     }
@@ -136,7 +155,7 @@ impl<T: Pod> Buf<T> {
     /// Bytes of the file this array is mapped from (0 when owned).
     pub(crate) fn mapped_size(&self) -> usize {
         match self {
-            Self::Owned(_) => 0,
+            Self::Owned(_) | Self::Shared(_) => 0,
             Self::Mapped { len, .. } => len * std::mem::size_of::<T>(),
         }
     }

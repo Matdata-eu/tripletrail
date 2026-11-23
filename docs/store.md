@@ -37,7 +37,14 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   same blocks with the sizes first. Stores saved before #169 (varint-delta blocks of 16 or 32
   quads, formats 1 and 2) still open: their segments are converted to column blocks as they are
   read. Folding a delta into a segment copies the blocks it does not touch byte for byte and
-  re-encodes only the others (#213). Writes go to a sorted delta of added and removed quads, kept in a
+  re-encodes only the others (#213). When every quad is in the default graph (graph 0), GSPO,
+  GPOS, GOSP and GPSO hold the quads of SPOG, POSG, OSPG and PSOG in the same order with a
+  constant graph column, so they read those segments' blocks with the columns in their own
+  order and keep only their block index (#152): a load builds four permutations fewer, and a
+  checkpoint saves each as a format 5 file (`OXGSSEG5`) of its block index, a 32nd of the
+  segment's size. The first quad in a named graph makes them segments of their own again (the
+  blocks they fold are re-encoded, not copied), and a checkpoint without named graphs, runs or
+  delta goes back to the shared blocks. Writes go to a sorted delta of added and removed quads, kept in a
   persistent ordered set (`imbl::OrdSet`): a snapshot (an open iterator) keeps its version for
   a reference count, and a write next to it copies only the path it changes. Once the delta
   holds 65,536 quads it is folded into new segments.
@@ -185,14 +192,24 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   doesn't fit an inline id gets one made up for the query, which doesn't order, so an
   `ORDER BY` of a computed value is left to the evaluator. `STR`, `CONCAT`, `IRI`,
   `STRLANG`, `STRDT` and `REPLACE` (with a pattern and flags without variables, such as
-  `STR(ex:)`, compiled once) of
+  `STR(ex:)`, compiled once), `UCASE`, `LCASE`, `STRLEN`, `SUBSTR` (with an integer start
+  and length), `STRBEFORE` and `STRAFTER` of
   columns, constants and such numbers are computed the same way (`idstring`), once per
   distinct value of the one or two columns they read, with the evaluator's rules: `STR` of an
   IRI or a literal is a simple literal of its text, `CONCAT` keeps a language every part
-  shares, `REPLACE` keeps the language of its text, and `IRI` of an absolute IRI string
-  without dot segments is that IRI. A direction-tagged string, a string `IRI` would resolve
+  shares, `REPLACE`, `UCASE`, `LCASE` and `SUBSTR` keep the language (and direction) of their
+  text, `STRBEFORE` and `STRAFTER` too when they find the second string (a language the first
+  doesn't have is an error, no match a simple empty string), `STRLEN` counts characters, and
+  `IRI` of an absolute IRI string
+  without dot segments is that IRI. A direction-tagged string in `CONCAT` or
+  `REPLACE`, a string `IRI` would resolve
   against a base, and `STRDT` to an XML Schema type other than `xsd:string` (whose lexical
-  form the store would not keep) leave the query to the evaluator. `VALUES` is a table of the ids of
+  form the store would not keep) leave the query to the evaluator. Such a string is also
+  filtered on ids: `e = "text"` (false for an IRI, a blank node or a language-tagged string;
+  a literal of another type is the evaluator's) and `STRSTARTS`, `STRENDS`, `CONTAINS` and
+  `REGEX` of it with constant arguments (an error for anything but a string literal), each
+  decided once per distinct value of the column it reads. A `BIND(STRAFTER(STR(?c), "…/c") AS
+  ?n) FILTER(?n = "1033")` over 133k orders takes 13 instead of 71 ms. `VALUES` is a table of the ids of
   its terms (`UNDEF` an unbound cell), and a sub-select's projection the columns it keeps, so
   the groups a count pass reads back from a table of ids are answered from that table. A
   sub-select's `DISTINCT`, `REDUCED`, order of variables and slice (under an order; a slice
@@ -284,7 +301,9 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   so `…/way/1/geom/track` shares `…/way/` with `…/way/1`. Its key is a 0, the namespace's
   number (a varint) and the rest of the IRI. The key is hashed as the full IRI, so lookups,
   saved indexes and string ranks work as before; the first IRI of a namespace stays written
-  in full. A piece that may hold such keys is format 6
+  in full. Which namespace an IRI gets depends on the order the IRIs come in, since a shorter
+  namespace already kept wins over a longer one not kept yet; the answers do not. The
+  namespaces are held on the heap, with a hash table of them. A piece that may hold such keys is format 6
   (`OXGSDIC6`), or 7 (`OXGSDIC7`) when it may also hold WKT in binary form, so a binary from
   before refuses it; earlier formats open and grow. `Store::dictionary_usage()` reads every
   key and counts keys and bytes by kind of term (`tripletrail disk-usage`, #152).

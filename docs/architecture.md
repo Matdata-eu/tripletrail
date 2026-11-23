@@ -114,7 +114,8 @@ flowchart TB
   sorted by subject, #168), each an immutable segment of sorted
   quads in blocks of at most 64, each column bit-packed against the block's smallest value
   (#169), plus a sorted write delta folded into new
-  segments at 65,536 quads.
+  segments at 65,536 quads. Without named graphs the four graph-first ones read the blocks
+  of the other four (#152).
 - ✅ Exact counts for a pattern from the block index (two end blocks read), used by the cost
   model.
 - ✅ #53: today a lookup or remove scans more of the delta after every remove, so N removes cost

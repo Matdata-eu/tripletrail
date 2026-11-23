@@ -1479,6 +1479,11 @@ fn checkpoints_with_segments_in_format_3_open_and_are_rewritten() {
             continue;
         }
         let path = checkpoint.join(name);
+        // Graph-first segments read the others' blocks (#152): they stay as they are.
+        if std::fs::read(&path).unwrap().starts_with(b"OXGSSEG5") {
+            rewritten += &format!("{line}\n");
+            continue;
+        }
         let v3 = segment_as_format_3(&std::fs::read(&path).unwrap());
         std::fs::remove_file(&path).unwrap();
         std::fs::write(&path, &v3).unwrap();
@@ -1510,8 +1515,15 @@ fn checkpoints_with_segments_in_format_3_open_and_are_rewritten() {
     drop(store);
     let [checkpoint] = checkpoints().try_into().unwrap();
     for e in std::fs::read_dir(&checkpoint).unwrap().flatten() {
-        if e.file_name().to_string_lossy().ends_with(".seg") {
-            assert_eq!(format(&e.path()), b"OXGSSEG4", "{:?}", e.file_name());
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".seg") {
+            // Without named graphs, those with the graph first read the others' blocks.
+            let want: &[u8] = if name.starts_with('g') && name.len() == "gspo.seg".len() {
+                b"OXGSSEG5"
+            } else {
+                b"OXGSSEG4"
+            };
+            assert_eq!(format(&e.path()), want, "{name}");
         }
     }
     assert_eq!(sorted(&Store::open(&dir).unwrap()), expected);
@@ -3509,6 +3521,94 @@ fn a_format_4_store_with_compact_keys_opens_and_grows() {
     }
 }
 
+/// Without named graphs, the permutations with the graph first read the blocks of the others
+/// (#152): a checkpoint saves them as small files, and named graphs added (one quad at a
+/// time or in bulk) and removed again give the same answers as Oxigraph throughout, before
+/// and after a checkpoint and a reopen.
+#[test]
+fn graph_first_permutations_read_the_others_until_named_graphs_come() {
+    let current = |d: &Path| {
+        let n = std::fs::read_to_string(d.join("CURRENT")).unwrap();
+        d.join(format!("checkpoint-{}", n.trim()))
+    };
+    let formats = |d: &Path| -> Vec<(String, Vec<u8>)> {
+        let mut f: Vec<(String, Vec<u8>)> = ["gspo", "gpos", "gosp", "gpso"]
+            .iter()
+            .map(|n| {
+                let bytes = std::fs::read(current(d).join(format!("{n}.seg"))).unwrap();
+                (n.to_string(), bytes[..8].to_vec())
+            })
+            .collect();
+        f.sort();
+        f
+    };
+    let all = |magic: &[u8]| -> Vec<(String, Vec<u8>)> {
+        ["gosp", "gpos", "gpso", "gspo"]
+            .iter()
+            .map(|n| (n.to_string(), magic.to_vec()))
+            .collect()
+    };
+    let reference = oxigraph::store::Store::new().unwrap();
+    reference.load_from_slice(RdfFormat::Turtle, DATA).unwrap();
+    let named: Vec<Quad> = oxigraph::io::RdfParser::from_format(RdfFormat::NQuads)
+        .for_slice(NAMED.as_bytes())
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for bulk in [false, true] {
+        let dir = temp_dir(if bulk {
+            "graph-first-bulk"
+        } else {
+            "graph-first"
+        });
+        let store = Store::open(&dir).unwrap();
+        store.bulk_load(RdfFormat::Turtle, DATA.as_bytes()).unwrap();
+        store.checkpoint().unwrap();
+        assert_eq!(formats(&dir), all(b"OXGSSEG5"));
+        let spog = std::fs::metadata(current(&dir).join("spog.seg"))
+            .unwrap()
+            .len();
+        let gspo = std::fs::metadata(current(&dir).join("gspo.seg"))
+            .unwrap()
+            .len();
+        assert!(gspo * 4 < spog, "{gspo} bytes against {spog}");
+        assert_same_answers(&reference, &store);
+        drop(store);
+        assert_same_answers(&reference, &Store::open_read_only(&dir).unwrap());
+        let store = Store::open(&dir).unwrap();
+        assert_same_answers(&reference, &store);
+        // Named graphs come.
+        let both = oxigraph::store::Store::new().unwrap();
+        both.load_from_slice(RdfFormat::Turtle, DATA).unwrap();
+        both.load_from_slice(RdfFormat::NQuads, NAMED).unwrap();
+        if bulk {
+            store
+                .bulk_load(RdfFormat::NQuads, NAMED.as_bytes())
+                .unwrap();
+        } else {
+            for q in &named {
+                store.insert(q.as_ref()).unwrap();
+            }
+        }
+        assert_same_answers(&both, &store);
+        store.checkpoint().unwrap();
+        assert_same_answers(&both, &store);
+        assert_eq!(formats(&dir), all(b"OXGSSEG4"));
+        drop(store);
+        let store = Store::open(&dir).unwrap();
+        assert_same_answers(&both, &store);
+        // And go again.
+        for q in &named {
+            assert!(store.remove(q.as_ref()).unwrap(), "{q}");
+        }
+        assert_same_answers(&reference, &store);
+        store.checkpoint().unwrap();
+        assert_same_answers(&reference, &store);
+        drop(store);
+        assert_same_answers(&reference, &Store::open_read_only(&dir).unwrap());
+        assert_same_answers(&reference, &Store::open(&dir).unwrap());
+    }
+}
+
 /// IRIs keep their namespace once (#152): a checkpoint saves the namespaces, and a store
 /// read back (read-write or read-only) answers as before, ORDER BY and STRSTARTS on IRIs
 /// included; a damaged namespaces file is an error, not wrong IRIs.
@@ -3591,4 +3691,161 @@ fn iris_written_once_per_namespace_read_back_the_same() {
     assert!(error.to_string().contains("namespaces.bin"), "{error}");
     std::fs::write(&path, &good).unwrap();
     same(&Store::open(&dir).unwrap());
+}
+
+/// A store from before namespaces (#152), its IRIs in full, opens with a binary that keeps
+/// them: its IRIs are found by their text, loading them again adds nothing, and new IRIs of the
+/// same namespaces refer to a namespace in a piece of their own, beside the old one.
+#[test]
+fn a_store_with_iris_in_full_opens_and_grows() {
+    let ex = |s: String| oxigraph::model::NamedNode::new_unchecked(s);
+    let quad = |s: String, o: String| {
+        Quad::new(
+            ex(s),
+            ex("http://example.com/vocab/next".to_owned()),
+            ex(o),
+            oxigraph::model::GraphName::DefaultGraph,
+        )
+    };
+    let old: Vec<Quad> = (0..50)
+        .map(|i| {
+            quad(
+                format!("http://example.com/way/{i}"),
+                format!("http://example.com/way/{i}/geom/track"),
+            )
+        })
+        .collect();
+    let dir = temp_dir("iris-in-full");
+    {
+        let store = Store::open(&dir).unwrap();
+        for q in &old {
+            store.insert(q.as_ref()).unwrap();
+        }
+        store.checkpoint().unwrap();
+    }
+    // Written again as a format 3 piece without namespaces: every compact key in full.
+    let current = dir.join(format!(
+        "checkpoint-{}",
+        std::fs::read_to_string(dir.join("CURRENT")).unwrap().trim()
+    ));
+    let u64s = |b: &[u8]| -> Vec<u64> {
+        b.chunks(8)
+            .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    };
+    let ns_file = std::fs::read(current.join("namespaces.bin")).unwrap();
+    let count = u64s(&ns_file[8..16])[0] as usize;
+    let ns_ends = u64s(&ns_file[24..24 + 8 * (count + 1)]);
+    let ns_bytes = &ns_file[24 + 8 * (count + 1)..];
+    let dict = std::fs::read(current.join("dict.bin")).unwrap();
+    assert_eq!(&dict[..8], b"OXGSDIC6");
+    let h = u64s(&dict[8..24]);
+    let (len, n) = (h[0] as usize, h[1] as usize);
+    let bytes = &dict[24..24 + len];
+    let at = (24 + len).next_multiple_of(8);
+    let ends = u64s(&dict[at..at + 8 * n]);
+    let (mut full, mut full_ends) = (Vec::new(), vec![0u64]);
+    let mut compact = 0;
+    for w in ends.windows(2) {
+        let key = &bytes[w[0] as usize..w[1] as usize];
+        if key.len() > 2 && key[0] == 1 && key[1] == 0 {
+            let (mut i, mut shift, mut at) = (0usize, 0, 2);
+            loop {
+                let b = key[at];
+                at += 1;
+                i |= usize::from(b & 0x7f) << shift;
+                shift += 7;
+                if b < 0x80 {
+                    break;
+                }
+            }
+            full.push(1);
+            full.extend_from_slice(&ns_bytes[ns_ends[i] as usize..ns_ends[i + 1] as usize]);
+            full.extend_from_slice(&key[at..]);
+            compact += 1;
+        } else {
+            full.extend_from_slice(key);
+        }
+        full_ends.push(full.len() as u64);
+    }
+    assert!(compact >= 90, "{compact} compact keys");
+    let mut file = b"OXGSDIC3".to_vec();
+    file.extend_from_slice(&(full.len() as u64).to_le_bytes());
+    file.extend_from_slice(&(full_ends.len() as u64).to_le_bytes());
+    file.extend_from_slice(&full);
+    file.resize(file.len().next_multiple_of(8), 0);
+    for e in &full_ends {
+        file.extend_from_slice(&e.to_le_bytes());
+    }
+    std::fs::write(current.join("dict.bin"), &file).unwrap();
+    std::fs::remove_file(current.join("namespaces.bin")).unwrap();
+    // The saved index holds hashes of full keys and ordinals: still right.
+    let sums: String = std::fs::read_to_string(current.join("checksums"))
+        .unwrap()
+        .lines()
+        .filter(|l| !l.starts_with("namespaces.bin "))
+        .map(|l| {
+            if l.starts_with("dict.bin ") {
+                format!("dict.bin {} {:08x}\n", file.len(), crc32fast::hash(&file))
+            } else {
+                format!("{l}\n")
+            }
+        })
+        .collect();
+    std::fs::write(current.join("checksums"), sums).unwrap();
+    let new: Vec<Quad> = (50..100)
+        .map(|i| {
+            quad(
+                format!("http://example.com/way/{i}"),
+                format!("http://example.com/way/{i}/geom/track"),
+            )
+        })
+        .collect();
+    let check = |store: &Store, quads: &[Quad]| {
+        for q in quads {
+            assert!(store.contains(q.as_ref()), "{q}");
+            for t in [q.subject.clone().into(), q.object.clone()] {
+                let id = store.term_id(t.as_ref()).expect("found by its text");
+                assert_eq!(store.snapshot().term(id).unwrap(), t);
+            }
+        }
+    };
+    {
+        let store = Store::open_read_only(&dir).unwrap();
+        check(&store, &old);
+    }
+    {
+        let store = Store::open(&dir).unwrap();
+        check(&store, &old);
+        let before = store.dictionary_usage();
+        for q in &old {
+            assert!(!store.insert(q.as_ref()).unwrap(), "{q} is there");
+        }
+        assert_eq!(store.dictionary_usage(), before, "no key is added again");
+        for q in &new {
+            store.insert(q.as_ref()).unwrap();
+        }
+        check(&store, &old);
+        check(&store, &new);
+        store.checkpoint().unwrap();
+    }
+    let current = dir.join(format!(
+        "checkpoint-{}",
+        std::fs::read_to_string(dir.join("CURRENT")).unwrap().trim()
+    ));
+    let magic = |f: &str| std::fs::read(current.join(f)).unwrap()[..8].to_vec();
+    assert_eq!(magic("dict.bin"), b"OXGSDIC3");
+    assert_eq!(magic("dict-1.bin"), b"OXGSDIC6");
+    assert!(current.join("namespaces.bin").exists());
+    let store = Store::open_read_only(&dir).unwrap();
+    assert_eq!(store.len(), old.len() + new.len());
+    check(&store, &old);
+    check(&store, &new);
+    let iri = store
+        .dictionary_usage()
+        .into_iter()
+        .find(|u| u.kind == "iri")
+        .unwrap();
+    // The old IRIs stay in full beside the new ones that refer to a namespace.
+    assert!(iri.namespace_bytes > 0, "{iri:?}");
 }

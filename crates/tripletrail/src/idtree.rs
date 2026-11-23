@@ -998,6 +998,9 @@ impl Eval<'_> {
                 if let Some(k) = self.str_equal(a, b, t).or_else(|| self.str_equal(b, a, t)) {
                     return Some(k);
                 }
+                if let Some((e, text)) = string_equal(a, b).or_else(|| string_equal(b, a)) {
+                    return self.computed_string_equal(e, text, t);
+                }
                 let (a, b) = (self.operand(a, t)?, self.operand(b, t)?);
                 Box::new(move |row| match (a.get(row), b.get(row)) {
                     (Some(x), Some(y)) => equal_ids(x, y),
@@ -1131,7 +1134,7 @@ impl Eval<'_> {
             E::FunctionCall(
                 Function::Regex | Function::StrStarts | Function::Contains | Function::StrEnds,
                 _,
-            ) if string_prefix(expr).is_none() => {
+            ) if string_prefix(expr).is_none() && text_test(expr).is_some() => {
                 // The value of each stored string read from its dictionary key, not decoded,
                 // under one lock of the dictionary per chunk that is released before any row is
                 // tested, as for `LANGMATCHES` (#654). Each row's string is tested (#165): the
@@ -1170,6 +1173,24 @@ impl Eval<'_> {
                         _ => Some(None),
                     }
                 })
+            }
+            // Of a string the term kernels compute (`STR(?x)`, `LCASE(?l)`): its text tested,
+            // once per distinct value of the column it reads.
+            E::FunctionCall(
+                Function::Regex | Function::StrStarts | Function::Contains | Function::StrEnds,
+                _,
+            ) if text_test_on(expr).is_some_and(|(a, _)| !matches!(a, E::Variable(_))) => {
+                let (a, test) = text_test_on(expr)?;
+                self.computed_string_test(a, t, move |term| match term {
+                    oxigraph::model::Term::Literal(l)
+                        if l.datatype() == oxigraph::model::vocab::xsd::STRING
+                            || l.language().is_some() =>
+                    {
+                        Some(Some(test.matches(l.value())))
+                    }
+                    // Not a string literal: an error.
+                    _ => Some(None),
+                })?
             }
             E::FunctionCall(Function::Regex | Function::StrStarts, _) => {
                 let (v, prefix) = string_prefix(expr)?;
@@ -1308,6 +1329,67 @@ impl<'a> Eval<'a> {
 
     /// `STR(?v) = "text"` (#657): an `xsd:string` or an IRI matches when it is that term,
     /// other literals by their lexical form, decoded once per id.
+    /// `e = "text"` for a string the term kernels compute: the evaluator's `=` of a simple
+    /// literal (true for the same text, false for an IRI, a blank node or a language-tagged
+    /// string); a literal of another type is the evaluator's.
+    fn computed_string_equal<'k>(
+        &'k self,
+        e: &Expression,
+        text: &str,
+        t: &Table,
+    ) -> Option<Kernel<'k>> {
+        let text = text.to_owned();
+        self.computed_string_test(e, t, move |term| match term {
+            oxigraph::model::Term::Literal(l)
+                if l.datatype() == oxigraph::model::vocab::xsd::STRING =>
+            {
+                Some(Some(l.value() == text))
+            }
+            oxigraph::model::Term::Literal(l) if l.language().is_some() => Some(Some(false)),
+            oxigraph::model::Term::Literal(_) => None,
+            _ => Some(Some(false)),
+        })
+    }
+
+    /// A test of the term [`crate::idstring::compile`] computes for `e` (an error is an
+    /// error), once per distinct id of the one column `e` reads.
+    fn computed_string_test<'k>(
+        &'k self,
+        e: &Expression,
+        t: &Table,
+        test: impl Fn(oxigraph::model::Term) -> Option<Option<bool>> + 'k,
+    ) -> Option<Kernel<'k>> {
+        if !crate::idstring::computable(e) {
+            return None;
+        }
+        let kernel = crate::idstring::compile(e, t, self.snapshot)?;
+        let mut names = std::collections::HashSet::new();
+        crate::plan::expression_variables(e, &mut names)?;
+        let cols: Vec<usize> = names
+            .iter()
+            .filter_map(|n| t.vars.iter().position(|v| v.as_str() == n))
+            .collect();
+        let column = match cols[..] {
+            [c] => Some(c),
+            _ => None,
+        };
+        let seen: std::cell::RefCell<HashMap<TermId, Option<bool>>> = Default::default();
+        Some(Box::new(move |row| {
+            let id = column.map(|c| row[c]);
+            if let Some(is) = id.and_then(|id| seen.borrow().get(&id).copied()) {
+                return Some(is);
+            }
+            let is = match kernel(row)? {
+                Ok(term) => test(term)?,
+                Err(()) => None,
+            };
+            if let Some(id) = id {
+                seen.borrow_mut().insert(id, is);
+            }
+            Some(is)
+        }))
+    }
+
     fn str_equal<'k>(&'k self, a: &Expression, b: &Expression, t: &Table) -> Option<Kernel<'k>> {
         let (Expression::FunctionCall(Function::Str, args), Expression::Literal(text)) = (a, b)
         else {
@@ -1655,6 +1737,8 @@ pub(crate) fn filter_covered(e: &Expression) -> bool {
                 || datatype(b, a)
                 || str(a, b)
                 || str(b, a)
+                || string_equal(a, b).is_some()
+                || string_equal(b, a).is_some()
         }
         // `a IN (b, c)` is `a = b || a = c`.
         E::In(a, list) => list
@@ -1674,7 +1758,12 @@ pub(crate) fn filter_covered(e: &Expression) -> bool {
         E::FunctionCall(
             Function::Regex | Function::StrStarts | Function::Contains | Function::StrEnds,
             _,
-        ) => string_prefix(e).is_some() || text_test(e).is_some(),
+        ) => {
+            string_prefix(e).is_some()
+                || text_test_on(e).is_some_and(|(a, _)| {
+                    matches!(a, E::Variable(_)) || crate::idstring::computable(a)
+                })
+        }
         _ => false,
     }
 }
@@ -1698,6 +1787,23 @@ impl TextTest {
     }
 }
 
+/// `e = "text"` with `e` a string the term kernels compute (not a variable, nor `STR` of
+/// one, which [`Eval::str_equal`] reads from the ids) and a simple literal: `e` and the text.
+fn string_equal<'a>(e: &'a Expression, text: &'a Expression) -> Option<(&'a Expression, &'a str)> {
+    match (e, text) {
+        (Expression::Variable(_) | Expression::Literal(_) | Expression::NamedNode(_), _) => None,
+        (Expression::FunctionCall(Function::Str, args), _)
+            if matches!(args.as_slice(), [Expression::Variable(_)]) =>
+        {
+            None
+        }
+        (e, Expression::Literal(l)) if is_simple(l) && crate::idstring::computable(e) => {
+            Some((e, l.value()))
+        }
+        _ => None,
+    }
+}
+
 /// `STRSTARTS`, `STRENDS` or `CONTAINS` of a variable and a simple literal, or `REGEX` of a
 /// variable with a pattern and flags that are simple literals: the variable and the test of
 /// its text. Each is an error for a value that is not a string literal (simple, `xsd:string`
@@ -1705,6 +1811,14 @@ impl TextTest {
 /// so it is compatible with every string. The regular expression is built as the evaluator
 /// builds it (XPath flags `s`, `m`, `i`, `x` and `q`); `None` for one it doesn't build.
 pub(crate) fn text_test(e: &Expression) -> Option<(&Variable, TextTest)> {
+    match text_test_on(e)? {
+        (Expression::Variable(v), test) => Some((v, test)),
+        _ => None,
+    }
+}
+
+/// [`text_test`] of any first argument: the expression whose text is tested, and the test.
+pub(crate) fn text_test_on(e: &Expression) -> Option<(&Expression, TextTest)> {
     use Expression as E;
     fn simple(e: &Expression) -> Option<&str> {
         match e {
@@ -1716,16 +1830,10 @@ pub(crate) fn text_test(e: &Expression) -> Option<(&Variable, TextTest)> {
         return None;
     };
     match (f, args.as_slice()) {
-        (Function::StrStarts, [E::Variable(v), x]) => {
-            Some((v, TextTest::Starts(simple(x)?.to_owned())))
-        }
-        (Function::StrEnds, [E::Variable(v), x]) => {
-            Some((v, TextTest::Ends(simple(x)?.to_owned())))
-        }
-        (Function::Contains, [E::Variable(v), x]) => {
-            Some((v, TextTest::Contains(simple(x)?.to_owned())))
-        }
-        (Function::Regex, [E::Variable(v), p, rest @ ..]) if rest.len() <= 1 => {
+        (Function::StrStarts, [v, x]) => Some((v, TextTest::Starts(simple(x)?.to_owned()))),
+        (Function::StrEnds, [v, x]) => Some((v, TextTest::Ends(simple(x)?.to_owned()))),
+        (Function::Contains, [v, x]) => Some((v, TextTest::Contains(simple(x)?.to_owned()))),
+        (Function::Regex, [v, p, rest @ ..]) if rest.len() <= 1 => {
             let flags = match rest {
                 [f] => simple(f)?,
                 _ => "",
