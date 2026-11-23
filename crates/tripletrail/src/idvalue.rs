@@ -39,6 +39,17 @@ pub(crate) enum Value {
     },
 }
 
+/// A number as `SUM(DISTINCT …)` and `AVG(DISTINCT …)` tell values apart: by datatype and
+/// value, as the evaluator's terms are equal (a double by its bits). `None` for other values.
+pub(crate) fn distinct_key(v: Value) -> Option<(u8, i128)> {
+    Some(match v {
+        Value::Integer(i) => (0, i128::from(i)),
+        Value::Decimal(d) => (1, d),
+        Value::Double(d) => (2, i128::from(d.to_bits())),
+        Value::DateTime { .. } => return None,
+    })
+}
+
 /// Evaluates on a row: `Some(Ok(v))` a value, `Some(Err(()))` an error (unbound), `None`
 /// give up.
 pub(crate) type ValueKernel<'k> = Box<dyn Fn(&[TermId]) -> Option<Result<Value, ()>> + Sync + 'k>;

@@ -483,10 +483,10 @@ enum Agg<'a> {
     Min(&'a Variable),
     Max(&'a Variable),
     Sample(&'a Variable),
-    /// `SUM` of numbers on ids ([`crate::idvalue`]).
-    Sum(&'a Expression),
-    /// `AVG` of numbers on ids, when the sum is a double (#62).
-    Avg(&'a Expression),
+    /// `SUM` of numbers on ids ([`crate::idvalue`]), of the distinct values if `true`.
+    Sum(&'a Expression, bool),
+    /// `AVG` of numbers on ids (#62), of the distinct values if `true`.
+    Avg(&'a Expression, bool),
 }
 
 /// Each aggregate as an [`Agg`], if all are counts, or `MIN`, `MAX` or `SAMPLE` of a variable.
@@ -505,20 +505,20 @@ fn id_aggregates(aggregates: &[(Variable, AggregateExpression)]) -> Option<Vec<A
                 AggregateFunction::Min => Some(Agg::Min(v)),
                 AggregateFunction::Max => Some(Agg::Max(v)),
                 AggregateFunction::Sample => Some(Agg::Sample(v)),
-                AggregateFunction::Sum if !distinct => Some(Agg::Sum(e)),
-                AggregateFunction::Avg if !distinct => Some(Agg::Avg(e)),
+                AggregateFunction::Sum => Some(Agg::Sum(e, *distinct)),
+                AggregateFunction::Avg => Some(Agg::Avg(e, *distinct)),
                 _ => None,
             },
             AggregateExpression::FunctionCall {
                 name: AggregateFunction::Sum,
                 expr,
-                distinct: false,
-            } if crate::idtree::value_expression(expr) => Some(Agg::Sum(expr)),
+                distinct,
+            } if crate::idtree::value_expression(expr) => Some(Agg::Sum(expr, *distinct)),
             AggregateExpression::FunctionCall {
                 name: AggregateFunction::Avg,
                 expr,
-                distinct: false,
-            } if crate::idtree::value_expression(expr) => Some(Agg::Avg(expr)),
+                distinct,
+            } if crate::idtree::value_expression(expr) => Some(Agg::Avg(expr, *distinct)),
             _ => None,
         })
         .collect()
@@ -1599,7 +1599,7 @@ impl Pass<'_> {
         let mut kernels = Vec::with_capacity(n);
         for a in &aggs {
             kernels.push(match (a, &table) {
-                (Agg::Sum(e) | Agg::Avg(e), Some(t)) => {
+                (Agg::Sum(e, _) | Agg::Avg(e, _), Some(t)) => {
                     Some(crate::idvalue::compile(e, t, self.snapshot)?)
                 }
                 _ => None,
@@ -1618,16 +1618,25 @@ impl Pass<'_> {
                     (Agg::Min(v), Some(t)) => Value::Id(pick.extreme(t, rows, v, false)?),
                     (Agg::Max(v), Some(t)) => Value::Id(pick.extreme(t, rows, v, true)?),
                     (Agg::Sample(v), Some(t)) => Value::Id(crate::idtree::Pick::sample(t, rows, v)),
-                    (Agg::Sum(_) | Agg::Avg(_), Some(t)) => {
+                    (Agg::Sum(_, distinct) | Agg::Avg(_, distinct), Some(t)) => {
                         let kernel = kernels[i].as_ref()?;
                         let mut sum = crate::idvalue::Sum::default();
+                        // With DISTINCT, each value once, as the evaluator's terms: equal
+                        // numbers of two datatypes are two values.
+                        let mut seen = std::collections::HashSet::new();
+                        let mut added = 0;
                         for &r in rows {
                             // An error (unbound) makes the evaluator's sum an error: leave
                             // it to the evaluator.
-                            sum.add(kernel(t.row(r as usize))?.ok()?)?;
+                            let v = kernel(t.row(r as usize))?.ok()?;
+                            if *distinct && !seen.insert(crate::idvalue::distinct_key(v)?) {
+                                continue;
+                            }
+                            sum.add(v)?;
+                            added += 1;
                         }
                         let value = match a {
-                            Agg::Avg(_) => sum.average(rows.len())?,
+                            Agg::Avg(..) => sum.average(added)?,
                             _ => sum.literal()?,
                         };
                         Value::literal(self.snapshot, value)

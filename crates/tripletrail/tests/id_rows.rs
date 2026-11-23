@@ -1673,6 +1673,97 @@ fn averages_on_ids_are_the_evaluators() {
     }
 }
 
+/// `SUM(DISTINCT …)` and `AVG(DISTINCT …)` on ids add each value once, telling values apart as
+/// the evaluator does: `1`, `1.0` and `"1.0"^^xsd:double` are three values, `"01"` and `1` one.
+#[test]
+fn distinct_sums_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    for i in 0..400_i64 {
+        let g = i % 23;
+        data.push_str(&format!("ex:i{i} ex:g ex:g{g} ; ex:n {} .\n", i % 7 - 2));
+        data.push_str(&format!(
+            "ex:i{i} ex:d \"{}.{}\"^^xsd:decimal .\n",
+            i % 5,
+            i % 3 * 5
+        ));
+        data.push_str(&format!("ex:i{i} ex:w \"{}.5\"^^xsd:double .\n", i % 4));
+        // Equal numbers of several datatypes and forms.
+        data.push_str(&match i % 6 {
+            0 => format!("ex:i{i} ex:m 1 .\n"),
+            1 => format!("ex:i{i} ex:m \"01\"^^xsd:integer .\n"),
+            2 => format!("ex:i{i} ex:m 1.0 .\n"),
+            3 => format!("ex:i{i} ex:m \"1.00\"^^xsd:decimal .\n"),
+            4 => format!("ex:i{i} ex:m 1.0e0 .\n"),
+            _ => format!("ex:i{i} ex:m {} .\n", i % 4),
+        });
+        data.push_str(&match i % 4 {
+            0 => format!("ex:i{i} ex:k 1 .\n"),
+            1 => format!("ex:i{i} ex:k 1.0 .\n"),
+            2 => format!("ex:i{i} ex:k \"1.0\"^^xsd:double .\n"),
+            _ => format!("ex:i{i} ex:k {} .\n", i % 3),
+        });
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    // A non-canonical `"01"` or `1.0e0` is not an inline number: the evaluator sums those.
+    for (q, on_ids) in [
+        (
+            "SELECT ?g (SUM(DISTINCT ?n) AS ?s) WHERE { ?i ex:g ?g ; ex:n ?n } GROUP BY ?g",
+            true,
+        ),
+        (
+            "SELECT ?g (AVG(DISTINCT ?n) AS ?a) (AVG(?n) AS ?b) WHERE { ?i ex:g ?g ; ex:n ?n } GROUP BY ?g",
+            true,
+        ),
+        (
+            "SELECT ?g (SUM(DISTINCT ?d) AS ?s) (AVG(DISTINCT ?d) AS ?a) WHERE { ?i ex:g ?g ; ex:d ?d } GROUP BY ?g",
+            true,
+        ),
+        (
+            "SELECT ?g (SUM(DISTINCT ?w) AS ?s) (AVG(DISTINCT ?w) AS ?a) WHERE { ?i ex:g ?g ; ex:w ?w } GROUP BY ?g",
+            true,
+        ),
+        (
+            "SELECT ?g (SUM(DISTINCT ?m) AS ?s) (AVG(DISTINCT ?m) AS ?a) WHERE { ?i ex:g ?g ; ex:m ?m } GROUP BY ?g",
+            false,
+        ),
+        (
+            "SELECT (SUM(DISTINCT ?m) AS ?s) (AVG(DISTINCT ?m) AS ?a) (COUNT(DISTINCT ?m) AS ?c) WHERE { ?i ex:m ?m }",
+            false,
+        ),
+        (
+            "SELECT ?g (SUM(DISTINCT ?k) AS ?s) (AVG(DISTINCT ?k) AS ?a) WHERE { ?i ex:g ?g ; ex:k ?k } GROUP BY ?g",
+            true,
+        ),
+        (
+            "SELECT (SUM(DISTINCT ?k) AS ?s) (AVG(DISTINCT ?k) AS ?a) WHERE { ?i ex:k ?k }",
+            true,
+        ),
+        (
+            "SELECT (SUM(DISTINCT ?n * 2) AS ?s) (AVG(DISTINCT ?n + ?d) AS ?a) WHERE { ?i ex:n ?n ; ex:d ?d }",
+            true,
+        ),
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert!(!expected.is_empty(), "{q}");
+        assert_eq!(run("ids"), expected, "{q}");
+        assert_eq!(rows(&engine, &format!("{prefix} {q}")), expected, "{q}");
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}");
+    }
+}
+
 /// An alternative of predicates and their inverses (`ex:a|^ex:b`) on ids is the evaluator's
 /// union of their pairs without duplicates.
 #[test]

@@ -9,6 +9,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Added
 
+- `SUM(DISTINCT …)` and `AVG(DISTINCT …)` of integers, decimals and doubles are computed on term ids (#11), each value once, as the evaluator tells values apart (by datatype and value). They used to be left to the evaluator. On 133k synthetic orders, `SUM(DISTINCT ?qty)` per customer takes 25 instead of 164 ms and `AVG(DISTINCT ?qty)` 32 instead of 179 ms.
 - Under `--executor ids`, `GRAPH <g> { … }` and `GRAPH ?g { … }` are answered on term ids (#11): the pattern on that graph's quads, or on each graph's with its name in `?g`. On 133k synthetic orders in 8 graphs, `GRAPH ?g { ?o ex:qty ?q }` takes 50 instead of 90 ms and a join in one graph 18 instead of 40 ms.
 - Under `--executor ids`, an alternative of predicates and their inverses (`?s ex:a|^ex:b ?o`) is answered on term ids (#11), as the union of the predicates' pairs without duplicates, as the evaluator gives it. On 133k synthetic orders, `?o ex:placedBy|ex:qty ?n` takes 85 instead of 175 ms.
 - `AVG` of integers and decimals is computed on term ids too (#11), as the evaluator divides the exact sum by the count (Jena's decimal division: exact, else 24 fraction digits). It used to give up on every group whose average does not end, which is most of them. On 133k synthetic orders, `AVG` of a quantity per customer takes 35 instead of 200 ms.
