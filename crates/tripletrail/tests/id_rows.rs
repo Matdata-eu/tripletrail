@@ -1673,6 +1673,74 @@ fn averages_on_ids_are_the_evaluators() {
     }
 }
 
+/// An alternative of predicates and their inverses (`ex:a|^ex:b`) on ids is the evaluator's
+/// union of their pairs without duplicates.
+#[test]
+fn alternative_paths_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..300 {
+        data.push_str(&format!("ex:n{i} ex:a ex:n{} .\n", i * 7 % 300));
+        if i % 3 == 0 {
+            // Some pairs by both predicates.
+            data.push_str(&format!("ex:n{i} ex:b ex:n{} .\n", i * 7 % 300));
+        } else {
+            data.push_str(&format!("ex:n{i} ex:b ex:n{} .\n", (i + 1) % 300));
+        }
+        if i % 10 == 0 {
+            data.push_str(&format!("ex:n{i} ex:c \"v{i}\" ; ex:a ex:n{i} .\n"));
+        }
+        data.push_str(&format!("ex:n{i} ex:name \"N{}\" .\n", i % 40));
+    }
+    // A pair by a predicate and the same pair by an inverse, the ends in id ranges that
+    // don't overlap.
+    data.push_str("ex:x ex:d ex:y . ex:y ex:e ex:x .\n");
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for (q, on_ids) in [
+        ("SELECT * WHERE { ?s ex:d|^ex:e ?o }", true),
+        ("SELECT * WHERE { ?s ex:a|ex:b ?o }", true),
+        ("SELECT * WHERE { ?s ex:a|^ex:b ?o }", true),
+        ("SELECT * WHERE { ?s ex:a|ex:b|ex:c ?o }", true),
+        ("SELECT * WHERE { ex:n3 ex:a|ex:b ?o }", true),
+        ("SELECT * WHERE { ?s ex:a|ex:b ex:n21 }", true),
+        ("SELECT * WHERE { ex:n3 ex:a|ex:b ex:n21 }", true),
+        ("SELECT * WHERE { ex:n3 ex:a|ex:b ex:n5 }", true),
+        ("SELECT * WHERE { ?x ex:a|ex:b ?x }", true),
+        ("SELECT * WHERE { ?s ex:a|ex:b ?o . ?o ex:name ?n }", true),
+        (
+            "SELECT * WHERE { ?s ex:name ?n OPTIONAL { ?s ex:c|^ex:b ?o } }",
+            true,
+        ),
+        ("SELECT (COUNT(*) AS ?c) WHERE { ?s ex:a|^ex:a ?o }", true),
+        (
+            "SELECT ?n (COUNT(*) AS ?c) WHERE { ?s ex:a|ex:b ?o . ?o ex:name ?n } GROUP BY ?n",
+            true,
+        ),
+        (
+            "SELECT * WHERE { ?s ex:a|ex:b ?o MINUS { ?s ex:c ?v } }",
+            true,
+        ),
+        ("SELECT * WHERE { ?s ex:a|(ex:b/ex:a) ?o }", false),
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert_eq!(run("ids"), expected, "{q}");
+        assert_eq!(rows(&engine, &format!("{prefix} {q}")), expected, "{q}");
+        if on_ids {
+            let plan = engine
+                .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+                .unwrap();
+            assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+        }
+    }
+}
+
 /// Groups on a computed string, ordered on it: the strings the store does not hold get ids
 /// made up for the view the rewrites read, and the evaluator reads them back on that view
 /// (more than ~1,300 groups used to fail with "unknown term Ephemeral#0").
