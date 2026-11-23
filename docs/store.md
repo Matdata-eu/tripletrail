@@ -172,6 +172,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   1.05 → 0.19 s, the path joined with a class and counted 1.61 → 0.05 s, and
   `?s ex:id "rare" . ?s <p>+ ?o` stays at about 1 ms. A path with the same variable at both
   ends, `*` between two free variables, or other path expressions are left to the evaluator.
+  An alternative of predicates and their inverses, `?s ex:a|^ex:b ?o`, is the union of the
+  predicates' pairs without duplicates, as the evaluator gives it; when every column's ids
+  of two alternatives can't meet (an IRI and a literal object, say) no row is checked twice
+  (#11; 133k orders, `?o ex:placedBy|ex:qty ?n` 175 → 85 ms, joined with a filter on another
+  property 115 → 70 ms).
   `ORDER BY ?a DESC(?b) ... LIMIT n` (with `OFFSET`, `DISTINCT` or `REDUCED`) over a pattern
   the tables cover is ordered on ids too: IRIs and simple strings by their string ranks
   (#171), integers and booleans by value, inline doubles, decimals, dates and date-times by
