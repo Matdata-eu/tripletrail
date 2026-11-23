@@ -116,7 +116,7 @@ how that request runs (#238). Other engines read them as comments.
 | `#pragma tt.range-rewrite off` | Evaluate numeric range `FILTER`s without the range index. |
 | `#pragma tt.id-rewrites off` | Evaluate counts and rows without the shortcuts on term ids. These shortcuts order their own joins, so a `COUNT` keeps its order under `tt.optimizer off` unless this hint is given too. |
 | `#pragma tt.result-cache off` | The result cache neither answers nor keeps the query. |
-| `#pragma tt.executor ids` (or `spareval`) | Which executor answers the query, over `--executor`: `ids` answers a `SELECT` whose pattern runs on term ids straight from the id tables; `spareval` hands it to the evaluator. `/{ds}/explain` says which one did under `executor`. |
+| `#pragma tt.executor ids` (or `spareval`) | Which executor answers the query, over `--executor`: `ids` answers a `SELECT` or `CONSTRUCT` whose pattern runs on term ids straight from the id tables; `spareval` hands it to the evaluator. `/{ds}/explain` says which one did under `executor`. |
 | `#pragma tt.timeout 30s` | The request's timeout (`500ms`, `2m`, or seconds), like `?timeout=`, which wins when both are given. Never more than the server's or the dataset's timeout. |
 
 The answers stay the same; only the work done changes. A query with one of the first five
@@ -204,7 +204,7 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   `CONSTRUCT`/`DESCRIBE`, or Oxigraph's store). In the library,
   `Engine::set_result_cache` (off by default).
 - `--executor` (`TRIPLETRAIL_EXECUTOR`, `spareval` by default) picks what answers a `SELECT`
-  whose pattern runs on term ids (#11). `ids` answers it straight from the id tables (triple
+  or `CONSTRUCT` whose pattern runs on term ids (#11). `ids` answers it straight from the id tables (triple
   patterns, joins, `OPTIONAL` (with a filter on the right side's own variables), `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, the filters on ids (with the effective boolean value of a column, `FILTER(?ok)`),
   `BIND` and `SELECT (expr AS ?v)` of copies, constants, arithmetic with division, `ABS`, `CEIL`, `FLOOR`, `ROUND`, casts to `xsd:integer`, `xsd:decimal`, `xsd:string`, `xsd:boolean`, `xsd:double`, `xsd:float` and `xsd:dateTime`, `IF`, `COALESCE`, `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT`, `REPLACE`, `UCASE`, `LCASE`, `STRLEN`, `SUBSTR`, `STRBEFORE`, `STRAFTER`, `LANG`, `DATATYPE`, `isIRI`, `isBlank`, `isLiteral`, `MD5`, `SHA1`, `SHA256`, `SHA384`, `SHA512` and `ENCODE_FOR_URI`, filters comparing or testing such strings, and conditions as booleans (the full list and its limits are in [the store](store.md)), `VALUES`, sub-selects (with `DISTINCT`, an order and a slice), the `GROUP BY` counts and sums kept as ids, `ORDER BY` of variables and of the expressions the kernels compute, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
   only the terms of the answer, each once, on the query threads; anything else still goes to

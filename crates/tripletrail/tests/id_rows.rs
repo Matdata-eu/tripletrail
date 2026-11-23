@@ -1359,6 +1359,107 @@ fn casts_on_ids_are_the_evaluators() {
     }
 }
 
+/// The triples of a `CONSTRUCT`, blank nodes written `_:`, sorted, and how many distinct blank
+/// nodes they hold.
+fn triples(engine: &Engine, query: &str) -> (Vec<String>, usize) {
+    let QueryResults::Graph(triples) = engine.query(query).unwrap() else {
+        panic!("not a CONSTRUCT")
+    };
+    let mut blanks = std::collections::HashSet::new();
+    let mut out: Vec<String> = triples
+        .map(|t| {
+            let t = t.unwrap();
+            let mut part = |x: String, b: Option<String>| match b {
+                Some(b) => {
+                    blanks.insert(b);
+                    "_:".to_owned()
+                }
+                None => x,
+            };
+            let s = part(
+                t.subject.to_string(),
+                match &t.subject {
+                    oxigraph::model::NamedOrBlankNode::BlankNode(b) => Some(b.to_string()),
+                    _ => None,
+                },
+            );
+            let o = part(
+                t.object.to_string(),
+                match &t.object {
+                    oxigraph::model::Term::BlankNode(b) => Some(b.to_string()),
+                    _ => None,
+                },
+            );
+            format!("{s} {} {o}", t.predicate)
+        })
+        .collect();
+    out.sort();
+    (out, blanks.len())
+}
+
+/// `CONSTRUCT` on ids gives the evaluator's triples: unbound parts and literal subjects or
+/// non-IRI predicates left out, new blank nodes per solution, each triple without a blank node
+/// once.
+#[test]
+fn constructs_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, data().as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for (q, on_ids) in [
+        ("CONSTRUCT { ?s ex:copy ?o } WHERE { ?s ex:p ?o }", true),
+        (
+            "CONSTRUCT { ?s ex:copy ?o } WHERE { ?s ex:p ?o } ORDER BY ?s ?o LIMIT 5",
+            false,
+        ),
+        (
+            "CONSTRUCT { ?o ex:from ?s . ?o a ex:Target } WHERE { ?s ex:p ?o }",
+            true,
+        ),
+        ("CONSTRUCT { ?s a ?c . ?s a ex:C1 } WHERE { ?s a ?c }", true),
+        (
+            "CONSTRUCT { _:n ex:of ?s ; ex:v ?x } WHERE { ?s ex:val ?x }",
+            true,
+        ),
+        ("CONSTRUCT { ?x ex:back ?s } WHERE { ?s ex:val ?x }", true),
+        ("CONSTRUCT { ?s ?x 1 } WHERE { ?s ex:val ?x }", true),
+        (
+            "CONSTRUCT { ?s ex:v2 ?x } WHERE { ?s ex:p ?o OPTIONAL { ?s ex:val ?x } }",
+            true,
+        ),
+        (
+            "CONSTRUCT { ?s ex:up ?n } WHERE { ?s ex:p ?o BIND(UCASE(STR(?o)) AS ?n) }",
+            true,
+        ),
+        (
+            "CONSTRUCT { ?s ex:tag \"UNIT\" } WHERE { ?s ex:p ?o BIND(\"UNIT\" AS ?n) }",
+            true,
+        ),
+        (
+            "CONSTRUCT { ?s ex:r ?b . ?b ex:inv ?s } WHERE { ?s ex:r ?b }",
+            true,
+        ),
+        ("CONSTRUCT WHERE { ?s ex:label ?l }", true),
+        (
+            "CONSTRUCT { ?s ex:q ?v } WHERE { ?s ex:p ?o . ?o ex:q ?v FILTER(?v != \"v3\") }",
+            true,
+        ),
+    ] {
+        let run = |executor: &str| {
+            triples(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        assert_eq!(run("ids"), run("spareval"), "{q}");
+        if on_ids {
+            let plan = engine
+                .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+                .unwrap();
+            assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+        }
+    }
+}
+
 /// `MIN` and `MAX` of decimals and doubles, alone and mixed with integers and other terms,
 /// on ids are the evaluator's, ties of equal values written differently included.
 #[test]
