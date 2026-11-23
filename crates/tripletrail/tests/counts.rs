@@ -263,8 +263,9 @@ fn tree_counts_match_the_rows() {
         // Different literals may be equal values (1 and 1.0): inline numbers compare by
         // value on their ids (#170).
         ("?s ex:val ?a . ?s ex:val ?b FILTER(?a = ?b)", true),
-        // A variable that may be unbound, shared with another pattern: the evaluator decides.
-        ("?s a ?c OPTIONAL { ?s ex:feat ?f } ?f ex:pub ?r", false),
+        // A variable that may be unbound, shared with another pattern: rows pair up where
+        // it is unbound on one side or equal.
+        ("?s a ?c OPTIONAL { ?s ex:feat ?f } ?f ex:pub ?r", true),
         // A filter on the right side's own variables is the right side's (#11).
         (
             "?s a ?c OPTIONAL { ?s ex:feat ?f FILTER(?f != ex:f1) }",

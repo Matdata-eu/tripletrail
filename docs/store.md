@@ -73,9 +73,14 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   without building SPARQL solutions (#167): a basic graph pattern is joined in the store
   (merge, hash or index nested-loop joins, `Snapshot::count_ids`), and joins, `OPTIONAL`,
   `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, transitive paths and filters over them run on tables of ids (`crates/tripletrail/src/idtree.rs`). A small left side passes its values to the right
-  side, which then looks them up instead of scanning (`Snapshot::join_ids_from`). Shapes whose
-  result on ids isn't certain (a shared variable that may be unbound, `=` between different
-  literals) are evaluated as usual. An `OPTIONAL { … FILTER(e) }` is counted on ids, and under `--executor ids` answered on ids, when `e` reads only variables the right side always binds or the left side never binds, so the filter is the right side's own (#11); one that compares with a value from the left side goes to the evaluator. Filters on ids: `BOUND`, `!`,
+  side, which then looks them up instead of scanning (`Snapshot::join_ids_from`). A shared
+  variable that may be unbound on a side (`VALUES` with `UNDEF`, a value an `OPTIONAL` may not
+  give) joins as SPARQL says: rows pair up where it is equal or unbound on one side, the hash
+  on the variables both sides always bind and the rest checked per pair; with no such
+  variable, at most 2^24 pairs are checked on ids, more go to the evaluator (#11; 133k
+  orders: a `VALUES` with `UNDEF` 19 instead of 108 ms, a `MINUS` on a value an `OPTIONAL`
+  gives 57 instead of 221 ms). Shapes whose result on ids isn't certain (`=` between
+  different literals) are evaluated as usual. An `OPTIONAL { … FILTER(e) }` is counted on ids, and under `--executor ids` answered on ids, when `e` reads only variables the right side always binds or the left side never binds, so the filter is the right side's own (#11); one that compares with a value from the left side goes to the evaluator. Filters on ids: `BOUND`, `!`,
   `&&`, `||` (with SPARQL's error rules), `sameTerm`, `=` and `!=` between variables, IRIs and
   literals (values of different literals are compared by the evaluator), `isIRI` /
   `isBlank` / `isLiteral` / `isNumeric`, `LANG(?v) = "x"`, `langMatches(LANG(?v), "x")` and

@@ -1566,6 +1566,57 @@ fn extremes_of_numbers_on_ids_are_the_evaluators() {
     }
 }
 
+/// Joins, `OPTIONAL` and `MINUS` on variables a side may leave unbound (`VALUES` with
+/// `UNDEF`, a value an `OPTIONAL` may not give): compatible rows pair up, an unbound value
+/// takes the other side's.
+#[test]
+fn joins_on_maybe_unbound_variables_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..200 {
+        data.push_str(&format!("ex:s{i} ex:name \"A{}\" .\n", i % 50));
+        if i % 7 != 0 {
+            data.push_str(&format!("ex:s{i} ex:age {} .\n", 20 + i % 20));
+        }
+        if i % 4 == 0 {
+            data.push_str(&format!("ex:s{i} ex:knows ex:s{} .\n", i * 3 % 230));
+        }
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for q in [
+        "SELECT * WHERE { ?s ex:name ?n . ?s ex:age ?a } \
+         VALUES (?n ?a) { (\"A1\" UNDEF) (UNDEF 30) (\"A2\" 22) (UNDEF UNDEF) }",
+        "SELECT * WHERE { ?s ex:name ?n OPTIONAL { ?s ex:knows ?k } } VALUES ?k { ex:s3 ex:s9 }",
+        "SELECT * WHERE { ?s ex:name ?n OPTIONAL { ?s ex:knows ?k } OPTIONAL { ?k ex:age ?a } }",
+        "SELECT * WHERE { ?s ex:name ?n OPTIONAL { ?s ex:age ?a } \
+         OPTIONAL { ?s ex:knows ?k . ?k ex:age ?a } }",
+        "SELECT ?s ?t WHERE { { ?s ex:name \"A3\" OPTIONAL { ?s ex:age ?a } } ?t ex:age ?a }",
+        "SELECT * WHERE { ?s ex:name ?n OPTIONAL { ?s ex:age ?a } \
+         MINUS { ?x ex:age ?a FILTER(?a > 35) } }",
+        "SELECT * WHERE { ?s ex:name ?n \
+         MINUS { VALUES (?s ?n) { (ex:s1 UNDEF) (UNDEF \"A3\") (UNDEF UNDEF) } } }",
+        "SELECT * WHERE { ?s ex:name ?n OPTIONAL { ?s ex:age ?a } \
+         MINUS { ?s ex:knows ?k OPTIONAL { ?k ex:age ?a } } }",
+        "SELECT * WHERE { VALUES (?x ?y) { (1 UNDEF) (UNDEF 2) (3 4) } \
+         VALUES (?x ?y) { (1 2) (UNDEF 3) (3 UNDEF) (5 6) } }",
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert!(!expected.is_empty(), "{q}");
+        assert_eq!(run("ids"), expected, "{q}");
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+    }
+}
+
 /// `AVG` of integers and decimals on ids is the evaluator's decimal quotient (exact, else 24
 /// fraction digits, as Jena), of doubles a double.
 #[test]
