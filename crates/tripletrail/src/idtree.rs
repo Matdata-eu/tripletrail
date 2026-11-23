@@ -2365,9 +2365,62 @@ fn probe(
     Some(out)
 }
 
+/// The columns of the variables `a` and `b` share, as (column in `a`, column in `b`): those
+/// bound in every row of both, then those unbound in some rows of either. `None` when only
+/// the second kind is shared and pairing every row of `a` with every row of `b` would take
+/// more than [`LOOSE_PAIRS`] checks.
+fn shared_loose(a: &Table, b: &Table) -> Option<(Keys, Keys)> {
+    let (mut keys, mut loose) = (Vec::new(), Vec::new());
+    for (i, v) in a.vars.iter().enumerate() {
+        if let Some(j) = b.col(v) {
+            if a.maybe[i] || b.maybe[j] {
+                loose.push((i, j));
+            } else {
+                keys.push((i, j));
+            }
+        }
+    }
+    if keys.is_empty() && !loose.is_empty() && a.len().saturating_mul(b.len()) > LOOSE_PAIRS {
+        return None;
+    }
+    Some((keys, loose))
+}
+
+/// Pairs of columns, (in `a`, in `b`).
+type Keys = Vec<(usize, usize)>;
+
+/// The most row pairs a join on variables that may be unbound checks one by one (`VALUES`
+/// with `UNDEF`, a value an `OPTIONAL` may leave unbound).
+const LOOSE_PAIRS: usize = 1 << 24;
+
+/// Whether rows `x` of `a` and `y` of `b` agree on the `loose` columns: equal, or unbound on
+/// one side.
+fn compatible(x: &[TermId], y: &[TermId], loose: &[(usize, usize)]) -> bool {
+    loose
+        .iter()
+        .all(|&(i, j)| x[i] == UNBOUND || y[j] == UNBOUND || x[i] == y[j])
+}
+
+/// Writes the row `x` of `a` merged with `y` of `b`: `x`, its unbound `loose` columns from
+/// `y`, then `y`'s `extra` columns.
+fn merged(out: &mut Part, x: &[TermId], y: &[TermId], loose: &[(usize, usize)], extra: &[usize]) {
+    let start = out.ids.len();
+    out.ids.extend_from_slice(x);
+    for &(i, j) in loose {
+        if x[i] == UNBOUND {
+            out.ids[start + i] = y[j];
+        }
+    }
+    out.ids.extend(extra.iter().map(|&j| y[j]));
+    out.ones += 1;
+}
+
 fn join(a: &Table, b: &Table, cancelled: &(dyn Fn() -> bool + Sync)) -> Option<Table> {
-    let keys = shared(a, b)?;
-    let (vars, maybe, extra) = combined(a, b);
+    let (keys, loose) = shared_loose(a, b)?;
+    let (vars, mut maybe, extra) = combined(a, b);
+    for &(i, j) in &loose {
+        maybe[i] = a.maybe[i] && b.maybe[j];
+    }
     let index = KeyIndex::new(b, keys.iter().map(|k| k.1).collect());
     let probe_cols: Vec<usize> = keys.iter().map(|k| k.0).collect();
     probe(a, vars, maybe, cancelled, |row, out| {
@@ -2375,15 +2428,16 @@ fn join(a: &Table, b: &Table, cancelled: &(dyn Fn() -> bool + Sync)) -> Option<T
             if !out.room() {
                 return;
             }
-            out.ids.extend_from_slice(row);
-            out.ids.extend(extra.iter().map(|&j| b.row(m)[j]));
-            out.ones += 1;
+            let other = b.row(m);
+            if compatible(row, other, &loose) {
+                merged(out, row, other, &loose, &extra);
+            }
         }
     })
 }
 
 fn left_join(a: &Table, b: &Table, cancelled: &(dyn Fn() -> bool + Sync)) -> Option<Table> {
-    let keys = shared(a, b)?;
+    let (keys, loose) = shared_loose(a, b)?;
     let (vars, mut maybe, extra) = combined(a, b);
     for m in &mut maybe[a.width()..] {
         *m = true;
@@ -2396,9 +2450,10 @@ fn left_join(a: &Table, b: &Table, cancelled: &(dyn Fn() -> bool + Sync)) -> Opt
             if !out.room() {
                 return;
             }
-            out.ids.extend_from_slice(row);
-            out.ids.extend(extra.iter().map(|&j| b.row(m)[j]));
-            out.ones += 1;
+            let other = b.row(m);
+            if compatible(row, other, &loose) {
+                merged(out, row, other, &loose, &extra);
+            }
         }
         if out.ones == before {
             out.ids.extend_from_slice(row);
@@ -2428,15 +2483,34 @@ fn semi(
 }
 
 fn minus(a: &Table, b: &Table, cancelled: &(dyn Fn() -> bool + Sync)) -> Option<Table> {
-    let keys = shared(a, b)?;
+    let (keys, loose) = shared_loose(a, b)?;
     // No shared variable: nothing is removed.
-    if keys.is_empty() {
+    if keys.is_empty() && loose.is_empty() {
         let mut out = empty_like(a);
         out.ids = a.ids.clone();
         out.ones = a.len();
         return Some(out);
     }
-    semi(a, b, &keys, false, cancelled)
+    if loose.is_empty() {
+        return semi(a, b, &keys, false, cancelled);
+    }
+    // A row goes when a row of `b` is compatible with it and binds a variable it binds too.
+    let index = KeyIndex::new(b, keys.iter().map(|k| k.1).collect());
+    let probe_cols: Vec<usize> = keys.iter().map(|k| k.0).collect();
+    probe(a, a.vars.clone(), a.maybe.clone(), cancelled, |row, out| {
+        let removed = index.matches(row, &probe_cols).any(|m| {
+            let other = b.row(m);
+            compatible(row, other, &loose)
+                && (!keys.is_empty()
+                    || loose
+                        .iter()
+                        .any(|&(i, j)| row[i] != UNBOUND && other[j] != UNBOUND))
+        });
+        if !removed {
+            out.ids.extend_from_slice(row);
+            out.ones += 1;
+        }
+    })
 }
 
 fn union(a: Table, b: Table) -> Option<Table> {
