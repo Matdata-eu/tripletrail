@@ -183,6 +183,13 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   of two alternatives can't meet (an IRI and a literal object, say) no row is checked twice
   (#11; 133k orders, `?o ex:placedBy|ex:qty ?n` 175 → 85 ms, joined with a filter on another
   property 115 → 70 ms).
+  `<p>?` and `^<p>?` from a constant end, or from the values a joined pattern gives an end,
+  are each start and the nodes one edge away, once each (#11; 133k orders, under
+  `--executor ids`, a count over orders with a quantity under 50 and `ex:placedBy?` 125 →
+  42 ms, joined with the customers' names 134 → 68 ms). Between two free variables they
+  are left to the evaluator, as `*` is. For `?` and `*`, a value another pattern gives an
+  end matches itself only when it is a node of the graph read (a subject or an object
+  there), as in the evaluator; a constant end always does.
   A negated property set, `?s !(ex:a|ex:b) ?o` or `^!(…)`, is the triples whose predicate is
   not in the set, one row per triple as the evaluator gives it; joined with other patterns it
   looks the triples up from the values they give (#11; 133k orders, a count over all orders

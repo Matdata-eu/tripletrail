@@ -2095,3 +2095,123 @@ fn negated_property_sets_on_ids_are_the_evaluators() {
         assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}");
     }
 }
+
+/// `<p>?` on ids from a constant end, or from the values a joined pattern gives an end: each
+/// start itself and the nodes one edge away, once each, as the evaluator gives them.
+#[test]
+fn optional_paths_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..300 {
+        data.push_str(&format!("ex:n{i} ex:a ex:n{} .\n", i * 7 % 300));
+        if i % 4 == 0 {
+            data.push_str(&format!("ex:n{i} ex:a ex:n{} .\n", (i + 1) % 300));
+        }
+        if i % 10 == 0 {
+            // A loop: the start one edge away from itself.
+            data.push_str(&format!("ex:n{i} ex:a ex:n{i} ; a ex:C .\n"));
+        }
+        if i % 25 == 0 {
+            data.push_str(&format!("ex:n{i} a ex:D .\n"));
+        }
+        data.push_str(&format!("ex:n{i} ex:name \"N{}\" .\n", i % 40));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for (q, on_ids) in [
+        ("SELECT * WHERE { ex:n3 ex:a? ?o }", true),
+        ("SELECT * WHERE { ex:n10 ex:a? ?o }", true),
+        ("SELECT * WHERE { ?s ex:a? ex:n21 }", true),
+        ("SELECT * WHERE { ex:n21 ^ex:a? ?s }", true),
+        ("SELECT * WHERE { ex:n21 (^ex:a)? ?s }", true),
+        ("SELECT * WHERE { ?s a ex:C . ?s ex:a? ?o }", true),
+        ("SELECT * WHERE { ?o a ex:D . ?s ex:a? ?o }", true),
+        (
+            "SELECT * WHERE { ?s a ex:C . ?s ex:a? ?o . ?o ex:name ?n }",
+            true,
+        ),
+        (
+            "SELECT ?n (COUNT(*) AS ?c) WHERE { ?s a ex:C . ?s ex:a? ?o . ?o ex:name ?n } GROUP BY ?n",
+            true,
+        ),
+        (
+            "SELECT * WHERE { ?s a ex:C OPTIONAL { ?s ex:a? ?o } }",
+            true,
+        ),
+        ("SELECT * WHERE { ex:n3 ex:a? ex:n21 }", false),
+        ("SELECT * WHERE { ex:n3 ex:a? ex:n3 }", false),
+        ("SELECT * WHERE { ex:nowhere ex:a? ?o }", false),
+        ("SELECT * WHERE { ?s ex:a? ?o }", false),
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &engine,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert!(!expected.is_empty(), "{q}");
+        assert_eq!(run("ids"), expected, "{q}");
+        assert_eq!(rows(&engine, &format!("{prefix} {q}")), expected, "{q}");
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}");
+    }
+    // On a few triples the edges are read by a scan, not looked up from the start: only
+    // the start's count.
+    let small = Engine::new_tripletrail();
+    small
+        .load(
+            RdfFormat::Turtle,
+            "@prefix ex: <http://example.org/> . ex:a ex:next ex:b , ex:c . ex:b ex:next ex:c . ex:x ex:next ex:y ."
+                .as_bytes(),
+        )
+        .unwrap();
+    for q in [
+        "SELECT ?o WHERE { ex:a ex:next? ?o }",
+        "SELECT ?s WHERE { ?s ex:next? ex:c }",
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &small,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        assert_eq!(run("ids"), run("spareval"), "{q}");
+    }
+    // A value another pattern gives an end matches itself only if it is a node of the
+    // graph read: `ex:only` is in a named graph alone, `ex:a` a predicate, `ex:g1` a graph.
+    let graphs = Engine::new_tripletrail();
+    graphs
+        .load(
+            RdfFormat::TriG,
+            "@prefix ex: <http://example.org/> .
+            ex:n1 ex:a ex:n2 . ex:n2 ex:a ex:n3 . ex:n3 ex:a ex:n1 .
+            ex:g1 { ex:only ex:a ex:n3 . ex:n1 ex:a ex:n3 . }
+            ex:g2 { ex:other ex:a ex:only . }"
+                .as_bytes(),
+        )
+        .unwrap();
+    for q in [
+        "SELECT * WHERE { GRAPH ex:g1 { ?s ex:a ex:n3 } ?s ex:a? ?o }",
+        "SELECT * WHERE { GRAPH ex:g1 { ?s ex:a ex:n3 } ?s ex:a* ?o }",
+        "SELECT * WHERE { GRAPH ex:g1 { ?s ex:a ex:n3 } ?o ex:a? ?s }",
+        "SELECT * WHERE { ex:only ex:a? ?o . ?o (^ex:a)? ?x }",
+        "SELECT * WHERE { VALUES ?s { ex:only } ?s ex:a? ?o }",
+        "SELECT * WHERE { VALUES ?s { ex:only ex:n1 ex:a ex:g1 } ?s ex:a? ?o }",
+        "SELECT * WHERE { VALUES ?s { ex:only ex:n1 ex:a ex:g1 } ?s ex:a* ?o }",
+        "SELECT * WHERE { VALUES ?s { ex:a } ?s ex:a* ?o }",
+        "SELECT * WHERE { ex:only ex:a? ?o }",
+    ] {
+        let run = |executor: &str| {
+            rows(
+                &graphs,
+                &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+            )
+        };
+        let expected = run("spareval");
+        assert_eq!(run("ids"), expected, "{q}");
+        assert_eq!(rows(&graphs, &format!("{prefix} {q}")), expected, "{q}");
+    }
+}
