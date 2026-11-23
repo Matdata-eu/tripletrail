@@ -962,6 +962,18 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                             path_eval.constant_end =
                                 matches!(subject_selector, TupleSelector::Constant(_))
                                     || matches!(object_selector, TupleSelector::Constant(_));
+                            // tripletrail: a negated property set gives a row per triple.
+                            if let Some(count) = path_eval.negated_closed_count(
+                                &path,
+                                &input_subject,
+                                &input_object,
+                                input_graph_name.as_ref(),
+                            ) {
+                                return match count {
+                                    Ok(n) => Box::new(std::iter::repeat_n(from, n).map(Ok)),
+                                    Err(e) => Box::new(once(Err(e))),
+                                };
+                            }
                             match path_eval.eval_closed_in_graph(
                                 &path,
                                 &input_subject,
@@ -3606,6 +3618,38 @@ struct PathEvaluator<'a, D: QueryableDataset<'a>> {
 }
 
 impl<'a, D: QueryableDataset<'a>> PathEvaluator<'a, D> {
+    /// tripletrail: how many triples join two bound ends by a negated property set (`!(…)` or
+    /// `^!(…)`), `None` for another path. Each is a solution, as Jena counts them, and as the
+    /// set gives one row per triple when an end is open: the answer doesn't depend on which
+    /// end the join order binds first.
+    fn negated_closed_count(
+        &self,
+        path: &PropertyPath<D::InternalTerm>,
+        start: &D::InternalTerm,
+        end: &D::InternalTerm,
+        graph_name: Option<&D::InternalTerm>,
+    ) -> Option<Result<usize, QueryEvaluationError>> {
+        let (ps, start, end) = match path {
+            PropertyPath::NegatedPropertySet(ps) => (ps, start, end),
+            PropertyPath::Reverse(p) => match &**p {
+                PropertyPath::NegatedPropertySet(ps) => (ps, end, start),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let mut count = 0;
+        for t in
+            self.dataset
+                .internal_quads_for_pattern(Some(start), None, Some(end), Some(graph_name))
+        {
+            match t {
+                Ok(t) => count += usize::from(!ps.contains(&t.predicate)),
+                Err(e) => return Some(Err(e)),
+            }
+        }
+        Some(Ok(count))
+    }
+
     fn eval_closed_in_graph(
         &self,
         path: &PropertyPath<D::InternalTerm>,

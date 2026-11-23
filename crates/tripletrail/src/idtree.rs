@@ -544,7 +544,9 @@ impl Eval<'_> {
         } else {
             (subject, object)
         };
-        let p = Variable::new_unchecked("__negated_p");
+        // A name no query can hold (`-` is no character of a SPARQL variable name): the
+        // seed's columns are the query's variables.
+        let p = Variable::new_unchecked("negated-p");
         let t = self.bgp_from(
             &[spargebra::term::TriplePattern {
                 subject: s.clone(),
@@ -574,11 +576,11 @@ impl Eval<'_> {
                 ones += 1;
             }
         }
+        debug_assert_eq!(ids.len(), ones * (width - 1));
         let mut vars = t.vars;
         vars.remove(c);
         let mut maybe = t.maybe;
         maybe.remove(c);
-        debug_assert_eq!(ids.len(), ones * (width - 1));
         Some(Table {
             vars,
             ids,
@@ -892,14 +894,14 @@ impl Eval<'_> {
         }
     }
 
-    /// The pattern of an edge followed from `__path_a` to `__path_b`.
+    /// The pattern of an edge followed from `path-a` to `path-b` (names no query can hold).
     fn edge(
         predicate: &spargebra::term::NamedNode,
         forward: bool,
     ) -> (spargebra::term::TriplePattern, Variable, Variable) {
         let (a, b) = (
-            Variable::new_unchecked("__path_a"),
-            Variable::new_unchecked("__path_b"),
+            Variable::new_unchecked("path-a"),
+            Variable::new_unchecked("path-b"),
         );
         let (s, o) = if forward { (&a, &b) } else { (&b, &a) };
         let t = spargebra::term::TriplePattern {
