@@ -204,7 +204,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   without dot segments is that IRI. A direction-tagged string in `CONCAT` or
   `REPLACE`, a string `IRI` would resolve
   against a base, and `STRDT` to an XML Schema type other than `xsd:string` (whose lexical
-  form the store would not keep) leave the query to the evaluator. Such a string is also
+  form the store would not keep) leave the query to the evaluator. `LANG` (`""` for a literal
+  without a language), `DATATYPE` (decided from the kind of id for strings, integers,
+  booleans, doubles and decimals; a type of XML Schema such as `xsd:byte`, which the evaluator
+  may name otherwise, is left to it), `isIRI`, `isBlank` and `isLiteral` are computed the same
+  way, an IRI or a blank node an error for the first two (133k orders: `DATATYPE` of a double
+  70 instead of 130 ms, `isIRI` 43 instead of 78 ms). Such a string is also
   filtered on ids: `e = "text"` (false for an IRI, a blank node or a language-tagged string;
   a literal of another type is the evaluator's) and `STRSTARTS`, `STRENDS`, `CONTAINS` and
   `REGEX` of it with constant arguments (an error for anything but a string literal), each

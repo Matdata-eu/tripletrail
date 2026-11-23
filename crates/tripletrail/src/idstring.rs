@@ -1,5 +1,6 @@
 //! `BIND`s of strings and IRIs on term ids (#11): `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT`,
-//! `UCASE`, `LCASE`, `STRLEN`, `SUBSTR` (integer constants), `STRBEFORE`, `STRAFTER`
+//! `UCASE`, `LCASE`, `STRLEN`, `SUBSTR` (integer constants), `STRBEFORE`, `STRAFTER`, `LANG`,
+//! `DATATYPE`, `isIRI`, `isBlank`, `isLiteral`
 //! and `REPLACE` (a constant pattern and flags) of columns,
 //! constants and numbers the value kernels compute, with the evaluator's rules
 //! (`spareval::expression`): `STR` of an IRI or a literal is a simple literal of its text,
@@ -40,9 +41,17 @@ pub(crate) fn computable(e: &Expression) -> bool {
         Expression::FunctionCall(F::StrLang | F::StrDt | F::StrBefore | F::StrAfter, args) => {
             args.len() == 2 && args.iter().all(arg)
         }
-        Expression::FunctionCall(F::UCase | F::LCase | F::StrLen, args) => {
-            args.len() == 1 && arg(&args[0])
-        }
+        Expression::FunctionCall(
+            F::UCase
+            | F::LCase
+            | F::StrLen
+            | F::Lang
+            | F::Datatype
+            | F::IsIri
+            | F::IsBlank
+            | F::IsLiteral,
+            args,
+        ) => args.len() == 1 && arg(&args[0]),
         // A start and length that are integer constants.
         Expression::FunctionCall(F::SubStr, args) => {
             matches!(args.len(), 2 | 3)
@@ -313,6 +322,64 @@ pub(crate) fn compile<'k>(
                 }))
             })
         }
+        // `LANG` of a literal (`""` without a language), an error for an IRI or a blank node.
+        Expression::FunctionCall(F::Lang, args) if args.len() == 1 => {
+            let a = compile(&args[0], t, snapshot)?;
+            Box::new(move |row| {
+                Some(match a(row)? {
+                    Ok(Term::Literal(l)) => {
+                        Ok(Literal::new_simple_literal(l.language().unwrap_or_default()).into())
+                    }
+                    _ => Err(()),
+                })
+            })
+        }
+        // `DATATYPE` of a literal, an error for an IRI or a blank node. A type of XML Schema the
+        // evaluator may read as another (`xsd:byte` as an integer) is its to name.
+        Expression::FunctionCall(F::Datatype, args) if args.len() == 1 => {
+            let a = compile(&args[0], t, snapshot)?;
+            // Of a column, the kinds of id that name their datatype without decoding.
+            let column = match &args[0] {
+                Expression::Variable(v) => t.col(v),
+                _ => None,
+            };
+            let named = |n: oxigraph::model::NamedNodeRef<'_>| Some(Ok(Term::from(n.into_owned())));
+            let by_kind: [Option<Result<Term, ()>>; 16] = std::array::from_fn(|k| match k {
+                k if k == Kind::Iri as usize || k == Kind::Blank as usize => Some(Err(())),
+                k if k == Kind::String as usize => named(xsd::STRING),
+                k if k == Kind::Integer as usize => named(xsd::INTEGER),
+                k if k == Kind::Boolean as usize => named(xsd::BOOLEAN),
+                k if k == Kind::Double as usize => named(xsd::DOUBLE),
+                k if k == Kind::Decimal as usize => named(xsd::DECIMAL),
+                _ => None,
+            });
+            Box::new(move |row| {
+                if let Some(id) = column.map(|c| row[c]).filter(|id| *id != TermId(0))
+                    && let Some(known) = &by_kind[id.kind() as usize]
+                {
+                    return Some(known.clone());
+                }
+                Some(match a(row)? {
+                    Ok(Term::Literal(l)) => {
+                        let datatype = l.datatype();
+                        if datatype.as_str().starts_with(XSD) && !PRIMITIVE.contains(&datatype) {
+                            return None;
+                        }
+                        Ok(datatype.into_owned().into())
+                    }
+                    _ => Err(()),
+                })
+            })
+        }
+        Expression::FunctionCall(F::IsIri | F::IsBlank | F::IsLiteral, args) if args.len() == 1 => {
+            let test: fn(&Term) -> bool = match e {
+                Expression::FunctionCall(F::IsIri, _) => |t| matches!(t, Term::NamedNode(_)),
+                Expression::FunctionCall(F::IsBlank, _) => |t| matches!(t, Term::BlankNode(_)),
+                _ => |t| matches!(t, Term::Literal(_)),
+            };
+            let a = compile(&args[0], t, snapshot)?;
+            Box::new(move |row| Some(a(row)?.map(|term| Literal::from(test(&term)).into())))
+        }
         // Only the branch taken is computed, as in the evaluator.
         Expression::If(c, a, b) => {
             let (c, a, b) = (
@@ -440,6 +507,18 @@ fn substring(source: &str, start: i64, length: Option<i64>) -> Option<&str> {
     }
     Some(start_position.map_or("", |start_position| &source[start_position..]))
 }
+
+/// The types of XML Schema the evaluator names as written.
+const PRIMITIVE: &[oxigraph::model::NamedNodeRef<'static>] = &[
+    xsd::STRING,
+    xsd::BOOLEAN,
+    xsd::INTEGER,
+    xsd::DECIMAL,
+    xsd::FLOAT,
+    xsd::DOUBLE,
+    xsd::DATE_TIME,
+    xsd::DATE,
+];
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 

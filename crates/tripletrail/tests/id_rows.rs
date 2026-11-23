@@ -644,6 +644,51 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(REPLACE(?x, UCASE(\"a\"), \"_\") AS ?y) }",
         true,
     ),
+    // `LANG`, `DATATYPE`, `isIRI`, `isBlank`, `isLiteral`.
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(LANG(?l) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(LANG(?o) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(LANG(?x) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:label ?l BIND(DATATYPE(?l) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(DATATYPE(?x * 2) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x BIND(DATATYPE(?x) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:val ?x FILTER(!isBlank(?x) && !isIRI(?x) && DATATYPE(?x) != xsd:byte) BIND(DATATYPE(?x) AS ?y) }",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:p ?o BIND(DATATYPE(STR(?o)) AS ?y) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?a ?b ?c WHERE { ?s ex:val ?x BIND(isIRI(?x) AS ?a) BIND(isBlank(?x) AS ?b) BIND(isLiteral(?x) AS ?c) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?a WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x } BIND(isLiteral(?x) AS ?a) }",
+        true,
+    ),
+    (
+        "SELECT ?s ?a WHERE { ?s ex:p ?o BIND(IF(isIRI(?o), STR(?o), \"-\") AS ?a) }",
+        false,
+    ),
     // Filters on the strings the term kernels compute.
     (
         "SELECT ?s WHERE { ?s ex:p ?o FILTER(STRAFTER(STR(?o), STR(ex:)) = \"o17\") }",
