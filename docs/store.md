@@ -119,6 +119,10 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `AVG` of integers and decimals only is the evaluator's decimal division of the exact sum by
   the count (`spareval::decimal_divide`, Jena's: exact, else 24 fraction digits; #11; 133k
   orders, `AVG` of an integer per customer 200 → 35 ms, over all orders 28 → 12 ms).
+  `SUM(DISTINCT …)` and `AVG(DISTINCT …)` add each value once, told apart as the evaluator's
+  terms are: by datatype and value, so `1`, `1.0` and `"1.0"^^xsd:double` are three values and
+  `1` and `"01"^^xsd:integer` one (#11; 133k orders, `SUM(DISTINCT ?qty)` per customer
+  164 → 25 ms, `AVG(DISTINCT ?qty)` 179 → 32 ms).
   Under `--executor ids`, `/` is computed too: a quotient of integers or decimals as the
   evaluator's (`spareval::decimal_divide`, Jena's), of doubles a double, by zero an error
   (`BIND(?q / 4 AS ?h) FILTER(?h > 20)` on 133k orders 191 → 33 ms).
