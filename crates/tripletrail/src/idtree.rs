@@ -55,6 +55,22 @@ pub(crate) fn closure_path(
     }
 }
 
+/// `!(p|q|…)` and `^!(…)` (`!(^p|^q)`): the predicates left out, whether the triples are
+/// followed backwards. A set of both kinds is the evaluator's.
+pub(crate) fn negated_path(
+    path: &PropertyPathExpression,
+) -> Option<(&[spargebra::term::NamedNode], bool)> {
+    use PropertyPathExpression as P;
+    match path {
+        P::NegatedPropertySet(ps) => Some((ps, false)),
+        P::Reverse(p) => match &**p {
+            P::NegatedPropertySet(ps) => Some((ps, true)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The predicates of an alternative of predicates and their inverses (`ex:a|^ex:b|ex:c`), each
 /// with whether it is followed backwards: the evaluator's union of their pairs without
 /// duplicates.
@@ -267,9 +283,12 @@ impl Eval<'_> {
                 subject,
                 path,
                 object,
-            } => match alternative_path(path) {
-                Some(alternatives) => self.alternative(subject, &alternatives, object)?,
-                None => self.path(subject, path, object, None)?,
+            } => match (alternative_path(path), negated_path(path)) {
+                (Some(alternatives), _) => self.alternative(subject, &alternatives, object)?,
+                (_, Some((left_out, reverse))) => {
+                    self.negated(subject, left_out, reverse, object, None)?
+                }
+                _ => self.path(subject, path, object, None)?,
             },
             // `VALUES`, while the id executor answers whole queries (#11): each term by its
             // stored id, or one made up for the query; `UNDEF` unbound.
@@ -469,6 +488,79 @@ impl Eval<'_> {
             ids,
             maybe: flags,
             ones: rows,
+        })
+    }
+
+    /// `subject !(p|q|…) object`: the triples whose predicate is none of `left_out`, one row
+    /// per triple (backwards for `^!(…)`), as the evaluator gives them. With `seed`, the
+    /// triples are looked up from the values its rows give the ends, as [`Self::bgp_from`]
+    /// does.
+    fn negated(
+        &self,
+        subject: &TermPattern,
+        left_out: &[spargebra::term::NamedNode],
+        reverse: bool,
+        object: &TermPattern,
+        seed: Option<&Table>,
+    ) -> Option<Table> {
+        if [subject, object]
+            .iter()
+            .any(|t| matches!(t, TermPattern::BlankNode(_) | TermPattern::Triple(_)))
+        {
+            return None;
+        }
+        // Two constant ends match once, however many triples join them: the evaluator's.
+        if ![subject, object]
+            .iter()
+            .any(|t| matches!(t, TermPattern::Variable(_)))
+        {
+            return None;
+        }
+        let (s, o) = if reverse {
+            (object, subject)
+        } else {
+            (subject, object)
+        };
+        let p = Variable::new_unchecked("__negated_p");
+        let t = self.bgp_from(
+            &[spargebra::term::TriplePattern {
+                subject: s.clone(),
+                predicate: NamedNodePattern::Variable(p.clone()),
+                object: o.clone(),
+            }],
+            seed,
+        )?;
+        // Predicates the store doesn't hold leave out no triple.
+        let out: Vec<TermId> = left_out
+            .iter()
+            .filter_map(|n| self.snapshot.term_id(n.as_ref().into()))
+            .collect();
+        let c = t.col(&p)?;
+        let width = t.width();
+        let mut ids = Vec::with_capacity(t.ids.len());
+        let mut ones = 0;
+        for r in 0..t.len() {
+            let row = t.row(r);
+            if !out.contains(&row[c]) {
+                ids.extend(
+                    row.iter()
+                        .enumerate()
+                        .filter(|&(i, _)| i != c)
+                        .map(|(_, &id)| id),
+                );
+                ones += 1;
+            }
+        }
+        let mut vars = t.vars;
+        vars.remove(c);
+        let mut maybe = t.maybe;
+        maybe.remove(c);
+        debug_assert_eq!(ids.len(), ones * (width - 1));
+        Some(Table {
+            vars,
+            ids,
+            maybe,
+            ones,
         })
     }
 
@@ -888,6 +980,13 @@ impl Eval<'_> {
     fn right(&self, t: &Table, p: &GraphPattern) -> Option<Table> {
         match p {
             GraphPattern::Bgp { patterns } => self.bgp_from(patterns, Some(t)),
+            GraphPattern::Path {
+                subject,
+                path,
+                object,
+            } if let Some((left_out, reverse)) = negated_path(path) => {
+                self.negated(subject, left_out, reverse, object, Some(t))
+            }
             GraphPattern::Path {
                 subject,
                 path,
