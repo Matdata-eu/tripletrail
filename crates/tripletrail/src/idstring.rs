@@ -78,7 +78,8 @@ pub(crate) fn computable(e: &Expression) -> bool {
         Expression::Coalesce(list) => {
             !list.is_empty() && list.iter().all(arg) && !crate::direct::number_computable(e)
         }
-        _ => false,
+        // A condition on numbers and dates, as an `xsd:boolean`.
+        e => crate::idvalue::is_condition(e, &crate::direct::number_computable),
     }
 }
 
@@ -405,6 +406,16 @@ pub(crate) fn compile<'k>(
                     }
                 }
                 Some(Err(()))
+            })
+        }
+        // A condition on numbers and dates: `true` or `false`, or an error.
+        e if crate::idvalue::is_condition(e, &crate::direct::number_computable) => {
+            let c = crate::idvalue::condition(e, t, snapshot)?;
+            Box::new(move |row| {
+                Some(match c(row)? {
+                    Some(b) => Ok(Literal::from(b).into()),
+                    None => Err(()),
+                })
             })
         }
         // A number the value kernels compute, as the literal the evaluator writes.
