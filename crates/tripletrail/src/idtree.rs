@@ -2166,7 +2166,8 @@ pub(crate) fn value_expression(e: &Expression) -> bool {
             | Function::Month
             | Function::Day
             | Function::Hours
-            | Function::Minutes,
+            | Function::Minutes
+            | Function::Seconds,
             args,
         ) => matches!(args.as_slice(), [a] if value_expression(a)),
         // The length of a string, and a text test cast to 0 or 1 (#165).
