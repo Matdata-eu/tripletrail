@@ -3849,3 +3849,45 @@ fn a_store_with_iris_in_full_opens_and_grows() {
     // The old IRIs stay in full beside the new ones that refer to a namespace.
     assert!(iri.namespace_bytes > 0, "{iri:?}");
 }
+
+/// A term a writer commits while a view is open is not stored for that view, which holds no
+/// quad with it: every way the view gives the term an id gives it the same one made up for the
+/// view (#11), so a query computing it in chunks, or meeting it as a constant, sees one term.
+#[test]
+fn a_term_committed_after_a_view_is_one_made_up_term_in_it() {
+    let store = Store::new();
+    let ex = |s: &str| oxigraph::model::NamedNode::new(format!("http://example.com/{s}")).unwrap();
+    store
+        .insert(QuadRef::new(
+            &ex("a"),
+            &ex("p"),
+            &Literal::new_simple_literal("old value"),
+            GraphNameRef::DefaultGraph,
+        ))
+        .unwrap();
+    let view = store.snapshot();
+    let old = Term::from(Literal::new_simple_literal("old value"));
+    let new = Term::from(Literal::new_simple_literal("a value committed later"));
+    store
+        .insert(QuadRef::new(
+            &ex("b"),
+            &ex("p"),
+            new.as_ref(),
+            GraphNameRef::DefaultGraph,
+        ))
+        .unwrap();
+    let stored = view.id_of(old.clone());
+    assert_ne!(stored.kind(), Kind::Ephemeral);
+    assert_eq!(view.term_id(new.as_ref()), None);
+    let made = view.id_of(new.clone());
+    assert_eq!(made.kind(), Kind::Ephemeral);
+    let ids = view.finish_ids(view.prepare_ids([new.clone(), old.clone()]));
+    assert_eq!(ids, vec![made, stored]);
+    assert_eq!(view.term(made).unwrap(), new);
+    // A view taken after the write stores it.
+    let later = store.snapshot();
+    let id = later.id_of(new.clone());
+    assert_ne!(id.kind(), Kind::Ephemeral);
+    assert_eq!(later.term_id(new.as_ref()), Some(id));
+    assert_eq!(later.finish_ids(later.prepare_ids([new])), vec![id]);
+}
