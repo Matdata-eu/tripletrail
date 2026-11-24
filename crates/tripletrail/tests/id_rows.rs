@@ -1444,8 +1444,8 @@ fn groups_read_back_on_ids_are_the_evaluators() {
     }
 }
 
-/// The casts to `xsd:string`, `xsd:boolean`, `xsd:double`, `xsd:float`, `xsd:integer` and
-/// `xsd:dateTime` on ids give the evaluator's terms, for every kind of argument.
+/// The casts to `xsd:string`, `xsd:boolean`, `xsd:double`, `xsd:float`, `xsd:integer`,
+/// `xsd:dateTime`, `xsd:date` and `xsd:time` on ids give the evaluator's terms, for every kind of argument.
 #[test]
 fn casts_on_ids_are_the_evaluators() {
     let engine = Engine::new_tripletrail();
@@ -1494,6 +1494,14 @@ fn casts_on_ids_are_the_evaluators() {
         "\"2002-10-10T17:00:00\"^^xsd:dateTime",
         "\"2002-10-10T17:00:00+02:00\"^^xsd:dateTime",
         "\"2002-10-10\"^^xsd:date",
+        "\"2002-10-10+02:00\"^^xsd:date",
+        "\"2002-10-10\"",
+        "\"17:00:00.5+02:00\"",
+        "\"17:00:00\"^^xsd:time",
+        "\"2002-10-10-05:00\"",
+        "\"2002-13-10\"",
+        "\"2002-10-10T23:59:59.999-14:00\"^^xsd:dateTime",
+        "\"-0044-03-15T12:00:00Z\"^^xsd:dateTime",
         "\"300\"^^xsd:byte",
         "\"-7\"^^xsd:byte",
         "\"12\"^^xsd:unsignedShort",
@@ -1514,7 +1522,7 @@ fn casts_on_ids_are_the_evaluators() {
     engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
     let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
     for cast in [
-        "string", "boolean", "double", "float", "integer", "dateTime",
+        "string", "boolean", "double", "float", "integer", "dateTime", "date", "time",
     ] {
         for (q, on_ids) in [
             (
