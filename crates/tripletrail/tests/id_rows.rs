@@ -1184,7 +1184,8 @@ const GROUPS: &[(&str, bool)] = &[
         "SELECT ?c (COUNT(DISTINCT ?k) AS ?n) WHERE { ?o ex:by ?c ; ex:q ?q BIND(?q / 2 AS ?k) } GROUP BY ?c",
         false,
     ),
-    // `GROUP_CONCAT` of strings, in the order of the rows; anything else is the evaluator's.
+    // `GROUP_CONCAT` of strings, in order of their text on ids (SPARQL leaves the order open;
+    // the evaluator's follows its plan); anything else is the evaluator's.
     (
         "SELECT ?c (GROUP_CONCAT(?l) AS ?g) WHERE { ?o ex:by ?c ; ex:label ?l } GROUP BY ?c",
         true,
@@ -1353,11 +1354,24 @@ fn groups_read_back_on_ids_are_the_evaluators() {
                 rows(&engine, &q)
             }
         };
-        assert_eq!(run("ids"), run("spareval"), "{q}");
+        // The strings of a `GROUP_CONCAT` may come in another order than the evaluator's:
+        // compared as the characters of each row.
+        let same = |mut rows: Vec<String>| {
+            if q.contains("GROUP_CONCAT") {
+                for r in &mut rows {
+                    let mut chars: Vec<char> = r.chars().collect();
+                    chars.sort_unstable();
+                    *r = chars.into_iter().collect();
+                }
+                rows.sort();
+            }
+            rows
+        };
+        assert_eq!(same(run("ids")), same(run("spareval")), "{q}");
         // And the evaluator alone, without the count passes both executors run.
         assert_eq!(
-            run("ids"),
-            run("spareval\n#pragma tt.id-rewrites off"),
+            same(run("ids")),
+            same(run("spareval\n#pragma tt.id-rewrites off")),
             "{q}"
         );
         let plan = engine
@@ -1366,6 +1380,19 @@ fn groups_read_back_on_ids_are_the_evaluators() {
         if on_ids {
             assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
         }
+    }
+    // On ids, the strings of a group in order of their text, whatever the plan.
+    for q in [
+        "SELECT (GROUP_CONCAT(DISTINCT ?l ; SEPARATOR = \"|\") AS ?g) WHERE { ?o ex:label ?l }",
+        "SELECT (GROUP_CONCAT(DISTINCT ?l ; SEPARATOR = \"|\") AS ?g) WHERE { ?o ex:label ?l ; ex:by ?c }",
+        "SELECT (GROUP_CONCAT(DISTINCT ?l ; SEPARATOR = \"|\") AS ?g) WHERE { ?o ex:by ?c ; ex:label ?l }",
+    ] {
+        let [row] = ordered(&engine, &format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .try_into()
+            .unwrap();
+        let text = row.split('"').nth(1).unwrap().to_owned();
+        let parts: Vec<&str> = text.split('|').collect();
+        assert!(parts.len() > 3 && parts.is_sorted(), "{q}: {text}");
     }
 }
 

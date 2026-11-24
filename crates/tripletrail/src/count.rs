@@ -488,7 +488,7 @@ enum Agg<'a> {
     /// `AVG` of numbers on ids (#62), of the distinct values if `true`.
     Avg(&'a Expression, bool),
     /// `GROUP_CONCAT` of a variable's strings (#11), of the distinct ones if `true`, with this
-    /// separator.
+    /// separator, in order of their text.
     GroupConcat(&'a Variable, bool, &'a str),
 }
 
@@ -1632,6 +1632,8 @@ impl Pass<'_> {
         }
         // A group's values from its rows; groups of many rows on several cores (#4), each chunk
         // of groups with its own `Pick`, the values back in the order of the groups.
+        let text_bytes = std::sync::atomic::AtomicUsize::new(0);
+        let text_limit = tripletrail_store::memory_limit().unwrap_or(usize::MAX);
         let value_of = |pick: &mut crate::idtree::Pick, g: usize, values: &mut Vec<Value>| {
             let rows = by_rows.as_ref().map_or(&[][..], |r| r.rows(g));
             for (i, a) in aggs.iter().enumerate() {
@@ -1671,15 +1673,13 @@ impl Pass<'_> {
                     // the evaluator's an error: left to it.
                     (Agg::GroupConcat(v, distinct, separator), Some(t)) => {
                         let c = t.col(v)?;
-                        let mut text = String::new();
-                        let mut seen = std::collections::HashSet::new();
-                        let mut first = true;
-                        for &r in rows {
-                            let id = t.row(r as usize)[c];
-                            if *distinct && !seen.insert(id) {
-                                continue;
-                            }
-                            let Term::Literal(l) = self.snapshot.term(id).ok()? else {
+                        // Each distinct term decoded once, with how often it comes.
+                        let mut ids: Vec<TermId> =
+                            rows.iter().map(|&r| t.row(r as usize)[c]).collect();
+                        ids.sort_unstable();
+                        let mut parts: Vec<(Literal, usize)> = Vec::new();
+                        for run in ids.chunk_by(|a, b| a == b) {
+                            let Term::Literal(l) = self.snapshot.term(run[0]).ok()? else {
                                 return None;
                             };
                             if l.datatype() != oxigraph::model::vocab::xsd::STRING
@@ -1687,11 +1687,29 @@ impl Pass<'_> {
                             {
                                 return None;
                             }
-                            if !first {
-                                text.push_str(separator);
+                            parts.push((l, if *distinct { 1 } else { run.len() }));
+                        }
+                        // SPARQL leaves the order open, and the evaluator's follows its plan:
+                        // here the strings in order of their text, whatever the plan.
+                        parts.sort_unstable_by(|a, b| a.0.value().cmp(b.0.value()));
+                        let mut text = String::new();
+                        let mut first = true;
+                        for (l, n) in &parts {
+                            for _ in 0..*n {
+                                if !first {
+                                    text.push_str(separator);
+                                }
+                                first = false;
+                                text.push_str(l.value());
                             }
-                            first = false;
-                            text.push_str(l.value());
+                        }
+                        // The text counts against the query's memory (#874): past it, the
+                        // evaluator's GROUP_CONCAT, which fails at the limit.
+                        let held = text_bytes
+                            .fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed)
+                            + text.len();
+                        if held > text_limit {
+                            return None;
                         }
                         Value::literal(self.snapshot, Literal::new_simple_literal(text))
                     }
