@@ -2315,8 +2315,10 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                     }
                 }
                 AggregateFunction::Sample => {
+                    // tripletrail: the value as written, the term in the data (Jena): a sample of
+                    // "-92"^^xsd:int is that term, not -92.
                     let evaluator =
-                        self.expression_evaluator(expr, encoded_variables, stat_children)?;
+                        self.written_expression_evaluator(expr, encoded_variables, stat_children)?;
                     Box::new(move || AccumulatorWrapper::Sample {
                         evaluator: Rc::clone(&evaluator),
                         value: None,

@@ -3475,6 +3475,43 @@ fn orders_of_integers_and_decimals_of_the_dictionary_are_the_evaluators() {
     }
 }
 
+/// `SAMPLE` gives a stored term as it is in the data, as Jena does (`"-92"^^xsd:int`, `"2.50"`,
+/// `1.5e0`), under every executor, the evaluator without the id rewrites included (#11).
+#[test]
+fn samples_keep_the_term_as_written() {
+    let engine = Engine::new_tripletrail();
+    engine
+        .load(
+            RdfFormat::Turtle,
+            "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+             ex:a ex:g ex:x ; ex:v \"-92\"^^xsd:int . ex:b ex:g ex:y ; ex:v 2.50 .\n\
+             ex:c ex:g ex:z ; ex:v 1.5e0 . ex:d ex:g ex:w ; ex:v \"+7\"^^xsd:integer .\n\
+             ex:e ex:g ex:u ; ex:v \"007\"^^xsd:long .\n"
+                .as_bytes(),
+        )
+        .unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    let q = "SELECT ?g (SAMPLE(?v) AS ?s) WHERE { ?o ex:g ?g ; ex:v ?v } GROUP BY ?g";
+    let expected = rows(&engine, &format!("#pragma tt.executor ids\n{prefix} {q}"));
+    assert!(
+        expected
+            .iter()
+            .any(|r| r.contains(r#""-92"^^<http://www.w3.org/2001/XMLSchema#int>"#)),
+        "{expected:?}"
+    );
+    for pragma in [
+        "",
+        "#pragma tt.executor spareval\n",
+        "#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n",
+    ] {
+        assert_eq!(
+            rows(&engine, &format!("{pragma}{prefix} {q}")),
+            expected,
+            "{pragma}"
+        );
+    }
+}
+
 /// Expressions the evaluator's own code computes on ids (`IF` with a string test, `LANG`,
 /// `COALESCE`) that read a value an `OPTIONAL` may leave unbound run on ids (#11), with the
 /// evaluator's answers: an unbound value is an unbound input, not a row the ids can't read.

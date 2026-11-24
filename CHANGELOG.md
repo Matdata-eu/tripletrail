@@ -51,6 +51,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- With `#pragma tt.id-rewrites off`, `SAMPLE` gives the stored term as it is written in the data (`"-92"^^xsd:int`, `2.50`), as Jena does and as the other executors already did, not the canonical number (`-92`).
 - `COUNT(DISTINCT *)` over a pattern with a blank node and a filter counted the solutions on term ids without the blank node's values, which the evaluator tells them apart by (3,000 instead of 15,000 in the test). Such a count is now left to the evaluator.
 - On term ids, a `NaN` double or float compared with itself (`FILTER(?m = ?m)`, `?m IN (?m)`, or two variables holding the same `NaN`) was equal, so the row was kept. `NaN` now equals nothing, itself included, as the evaluator and Jena have it, under `=`, `!=` and `IN` (#11).
 - A filter comparing a literal with an IRI the store doesn't hold read the IRI's placeholder id as a date-time on term ids (a panic in debug builds). It is now unequal to every term the store holds.
