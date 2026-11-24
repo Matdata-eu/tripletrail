@@ -107,9 +107,15 @@ fn select(pattern: &GraphPattern, eval: &Eval, top: bool) -> Option<Selected> {
             OrderExpression::Desc(e) => (e, true),
         };
         match e {
-            // An order on a computed `BIND` value: its ids (made up for values not inline)
-            // don't order, so the evaluator answers it, before any work here.
-            Expression::Variable(v) if computed(&body, v) => return None,
+            // An order on a computed `BIND` value: a number's id orders when it is inline, as
+            // for an expression computed here (#11); other computed values (strings, made-up
+            // ids) don't, so the evaluator answers those, before any work here.
+            Expression::Variable(v) if computed(&body, v) => {
+                if !bound_by(&body, v).is_some_and(number_computable) {
+                    return None;
+                }
+                by.push((v.clone(), descending));
+            }
             Expression::Variable(v) => by.push((v.clone(), descending)),
             e if computable(e, true) => {
                 let key = Variable::new_unchecked(format!("__tripletrail_order_{i}"));
@@ -163,6 +169,36 @@ fn select(pattern: &GraphPattern, eval: &Eval, top: bool) -> Option<Selected> {
         columns,
         rows,
     })
+}
+
+/// The expression a `BIND` of `p` binds `v` to, if one does.
+fn bound_by<'p>(p: &'p GraphPattern, v: &Variable) -> Option<&'p Expression> {
+    use GraphPattern as G;
+    match p {
+        G::Extend {
+            inner,
+            variable,
+            expression,
+        } => {
+            if variable == v {
+                Some(expression)
+            } else {
+                bound_by(inner, v)
+            }
+        }
+        G::Join { left, right }
+        | G::Minus { left, right }
+        | G::Union { left, right }
+        | G::LeftJoin { left, right, .. } => bound_by(left, v).or_else(|| bound_by(right, v)),
+        G::Filter { inner, .. }
+        | G::Project { inner, .. }
+        | G::Graph { inner, .. }
+        | G::Distinct { inner }
+        | G::Reduced { inner }
+        | G::OrderBy { inner, .. }
+        | G::Slice { inner, .. } => bound_by(inner, v),
+        _ => None,
+    }
 }
 
 /// Whether `v` is bound by a `BIND` of `p` to a computed value (not a copy or a constant).

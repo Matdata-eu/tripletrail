@@ -254,8 +254,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   straight into its id, and any other value is given its id once; an error leaves the cell unbound. A `FILTER` on such a value is evaluated on the
   expression itself, under the `BIND` (`BIND(?a * ?q AS ?g) FILTER(?g > 400000)` on 133k
   orders 222 → 49 ms; a select expression over a join 197 → 59 ms). A computed double that
-  doesn't fit an inline id gets one made up for the query, which doesn't order, so an
-  `ORDER BY` of a computed value is left to the evaluator. `STR`, `CONCAT`, `IRI`,
+  doesn't fit an inline id gets one made up for the query, which doesn't order: an
+  `ORDER BY` of a computed number is on ids while its ids are inline, and left to the
+  evaluator when one isn't (133k orders, `BIND(?q * 3 AS ?x)` ordered by `DESC(?x)` with
+  `LIMIT 10` 229 → 13 ms, by `YEAR(?d)` 291 → 18 ms). An order on a computed string is left
+  to the evaluator. `STR`, `CONCAT`, `IRI`,
   `STRLANG`, `STRDT` and `REPLACE` (with a pattern and flags without variables, such as
   `STR(ex:)`, compiled once), `UCASE`, `LCASE`, `STRLEN`, `SUBSTR` (with an integer start
   and length), `STRBEFORE` and `STRAFTER` of
