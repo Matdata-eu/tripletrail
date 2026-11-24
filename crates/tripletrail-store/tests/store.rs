@@ -3868,9 +3868,11 @@ fn a_term_committed_after_a_view_is_one_made_up_term_in_it() {
     let view = store.snapshot();
     let old = Term::from(Literal::new_simple_literal("old value"));
     let new = Term::from(Literal::new_simple_literal("a value committed later"));
+    // Subject and predicate are stored already: the new literal is the first key after the
+    // view's last (`holds` at its bound).
     store
         .insert(QuadRef::new(
-            &ex("b"),
+            &ex("a"),
             &ex("p"),
             new.as_ref(),
             GraphNameRef::DefaultGraph,

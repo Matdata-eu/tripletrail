@@ -298,7 +298,17 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `STRSTARTS`, `STRENDS`, `CONTAINS` and `REGEX` of a variable or of a string these kernels
   compute, with constant arguments (`BIND(CONTAINS(?name, "7") AS ?b)`; an error for anything
   but a string literal; 133k orders under `--executor ids`, grouped by such a test of the
-  customer's name 24 instead of 140 ms). A string these kernels compute is
+  customer's name 24 instead of 140 ms). Any other `BIND` expression of the values alone
+  (`TZ`, `TIMEZONE`, date-time and duration arithmetic, `IN`, `sameTerm`, `LANGMATCHES`, the
+  duration casts, and a number the value kernels give up on, such as the double `?a / ?q`) is
+  computed with the evaluator's own expression code (`spareval::expression_kernel`), each
+  distinct pair of the ids it reads once, so it gives the evaluator's terms. What depends on
+  more than the values is left to the evaluator: `NOW`, `RAND`, `UUID`, `STRUUID`, `BNODE`,
+  `IRI` (a base may resolve it), `EXISTS` and custom functions (TripleTrail's call their
+  arguments as written). 133k orders under `--executor ids`: `TZ(?placedAt)` 53 instead of
+  175 ms, `?placedAt + "P1D"^^xsd:dayTimeDuration` 67 instead of 275 ms, `?placedAt -
+  "2024-01-01T00:00:00Z"^^xsd:dateTime` 75 instead of 236 ms, `?amount / ?qty` 115 instead of
+  368 ms. A string these kernels compute is
   also filtered on ids: `e = "text"` (false for an IRI, a blank node or a language-tagged string;
   a literal of another type is the evaluator's) and `STRSTARTS`, `STRENDS`, `CONTAINS` and
   `REGEX` of it with constant arguments (an error for anything but a string literal), each

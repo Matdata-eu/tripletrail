@@ -440,121 +440,19 @@ impl Eval<'_> {
                 column.resize(rows, id);
                 false
             }
-            // Strings and IRIs (`STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT`, `REPLACE`): a term a
-            // row, given its id.
-            e if crate::idstring::computable(e) => {
-                // Gives up here, before any chunk, when the kernels can't compute it.
-                let _ = crate::idstring::compile(e, &t, self.snapshot)?;
-                // The value depends only on the columns the expression reads: with one or
-                // two, each distinct pair of ids is computed once.
-                let mut names = std::collections::HashSet::new();
-                crate::plan::expression_variables(e, &mut names)?;
-                let cols: Vec<usize> = names
-                    .iter()
-                    .filter_map(|n| t.vars.iter().position(|v| v.as_str() == n))
-                    .collect();
-                let key = |row: &[TermId]| match cols[..] {
-                    [] => Some((TermId(0), TermId(0))),
-                    [a] => Some((row[a], TermId(0))),
-                    [a, b] => Some((row[a], row[b])),
-                    _ => None,
-                };
-                // Each distinct pair computed once (the pairs met first, then their strings).
-                // From 8,192 strings to compute on several cores (a string costs more than a
-                // number), each chunk with its own kernel, its terms then given their ids under
-                // one lock.
-                let t = &t;
-                let repeats = cols.len() <= 2;
-                // The rows to compute, and for each row of `t` its place among them.
-                let (todo, at): (Vec<usize>, Option<Vec<u32>>) = if repeats {
-                    let mut index: HashMap<(TermId, TermId), u32, PairHash> = HashMap::default();
-                    let mut todo = Vec::new();
-                    let mut at = Vec::with_capacity(rows);
-                    for r in 0..rows {
-                        if r % 65_536 == 0 && (self.cancelled)() {
-                            return None;
-                        }
-                        let i = *index.entry(key(t.row(r))?).or_insert_with(|| {
-                            todo.push(r);
-                            (todo.len() - 1) as u32
-                        });
-                        at.push(i);
-                    }
-                    (todo, Some(at))
-                } else {
-                    ((0..rows).collect(), None)
-                };
-                let parts =
-                    tripletrail_store::par::chunks_sized(todo.len(), 8_192, 2_048, |range| {
-                        let kernel = crate::idstring::compile(e, t, self.snapshot)?;
-                        let mut terms = Vec::new();
-                        // Whether each row's term is in `terms` (false: an error).
-                        let mut made = Vec::with_capacity(range.len());
-                        for (n, &r) in todo[range].iter().enumerate() {
-                            if n % 4096 == 0 && (self.cancelled)() {
-                                return None;
-                            }
-                            match kernel(t.row(r))? {
-                                Ok(term) => {
-                                    terms.push(term);
-                                    made.push(true);
-                                }
-                                Err(()) => made.push(false),
-                            }
-                        }
-                        Some((self.snapshot.prepare_ids(terms), made))
-                    });
-                let mut computed = Vec::with_capacity(todo.len());
-                for part in parts {
-                    let (terms, made) = part?;
-                    let mut ids = self.snapshot.finish_ids(terms).into_iter();
-                    for m in made {
-                        computed.push(if m { ids.next()? } else { TermId(0) });
-                    }
+            // Strings and IRIs (`STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT`, `REPLACE`), and what
+            // the evaluator's own code computes (`idstring::evaluated`): a term a row.
+            e if crate::idstring::computable(e) => self.term_column(&t, e, false, &mut column)?,
+            // A number; a value the number kernels give up on (date-time arithmetic) is
+            // computed with the evaluator's own code.
+            e => match self.number_column(&t, e, &mut column) {
+                Some(unbound) => unbound,
+                None if crate::idstring::evaluated(e) => {
+                    column.clear();
+                    self.term_column(&t, e, true, &mut column)?
                 }
-                match at {
-                    Some(at) => column.extend(at.iter().map(|&i| computed[i as usize])),
-                    None => column.extend(computed),
-                }
-                column.contains(&TermId(0))
-            }
-            _ => {
-                let kernel = crate::idvalue::compile_output(expression, &t, self.snapshot)?;
-                // Each value once: the same value (in the same form) gives the same id.
-                let mut ids: HashMap<((u8, i128), crate::idvalue::Form), TermId> = HashMap::new();
-                let mut unbound = false;
-                for r in 0..rows {
-                    if r % 4096 == 0 && (self.cancelled)() {
-                        return None;
-                    }
-                    match kernel(t.row(r))? {
-                        Ok((v, form)) => {
-                            // An inline number is its id: no lookup, no literal.
-                            if let Some(id) = crate::idvalue::inline_id(v, form) {
-                                column.push(id);
-                                continue;
-                            }
-                            let key = (value_key(v)?, form);
-                            let id = match ids.get(&key) {
-                                Some(&id) => id,
-                                None => {
-                                    let id = self
-                                        .snapshot
-                                        .id_of(crate::idvalue::literal(v, form)?.into());
-                                    ids.insert(key, id);
-                                    id
-                                }
-                            };
-                            column.push(id);
-                        }
-                        Err(()) => {
-                            unbound = true;
-                            column.push(TermId(0));
-                        }
-                    }
-                }
-                unbound
-            }
+                None => return None,
+            },
         };
         let mut vars = t.vars;
         vars.push(variable.clone());
@@ -571,6 +469,144 @@ impl Eval<'_> {
             maybe: flags,
             ones: rows,
         })
+    }
+
+    /// The terms of `e` for the rows of `t` in `column`, with [`crate::idstring::compile`] (or,
+    /// `evaluated`, the evaluator's own code), each distinct pair of the ids it reads once;
+    /// whether a cell is unbound. `None` when the kernels give up.
+    fn term_column(
+        &self,
+        t: &Table,
+        e: &Expression,
+        evaluated: bool,
+        column: &mut Vec<TermId>,
+    ) -> Option<bool> {
+        let rows = t.len();
+        let compile = |e: &Expression, t: &Table| {
+            if evaluated {
+                crate::idstring::evaluator_kernel(e, t, self.snapshot)
+            } else {
+                crate::idstring::compile(e, t, self.snapshot)
+            }
+        };
+        // Gives up here, before any chunk, when the kernels can't compute it.
+        let _ = compile(e, t)?;
+        // The value depends only on the columns the expression reads: with one or
+        // two, each distinct pair of ids is computed once.
+        let mut names = std::collections::HashSet::new();
+        crate::plan::expression_variables(e, &mut names)?;
+        let cols: Vec<usize> = names
+            .iter()
+            .filter_map(|n| t.vars.iter().position(|v| v.as_str() == n))
+            .collect();
+        let key = |row: &[TermId]| match cols[..] {
+            [] => Some((TermId(0), TermId(0))),
+            [a] => Some((row[a], TermId(0))),
+            [a, b] => Some((row[a], row[b])),
+            _ => None,
+        };
+        // Each distinct pair computed once (the pairs met first, then their strings).
+        // From 8,192 strings to compute on several cores (a string costs more than a
+        // number), each chunk with its own kernel, its terms then given their ids under
+        // one lock.
+        let repeats = cols.len() <= 2;
+        // The rows to compute, and for each row of `t` its place among them.
+        let (todo, at): (Vec<usize>, Option<Vec<u32>>) = if repeats {
+            let mut index: HashMap<(TermId, TermId), u32, PairHash> = HashMap::default();
+            let mut todo = Vec::new();
+            let mut at = Vec::with_capacity(rows);
+            for r in 0..rows {
+                if r % 65_536 == 0 && (self.cancelled)() {
+                    return None;
+                }
+                let i = *index.entry(key(t.row(r))?).or_insert_with(|| {
+                    todo.push(r);
+                    (todo.len() - 1) as u32
+                });
+                at.push(i);
+            }
+            (todo, Some(at))
+        } else {
+            ((0..rows).collect(), None)
+        };
+        let parts = tripletrail_store::par::chunks_sized(todo.len(), 8_192, 2_048, |range| {
+            let kernel = compile(e, t)?;
+            let mut terms = Vec::new();
+            // Whether each row's term is in `terms` (false: an error).
+            let mut made = Vec::with_capacity(range.len());
+            for (n, &r) in todo[range].iter().enumerate() {
+                if n % 4096 == 0 && (self.cancelled)() {
+                    return None;
+                }
+                match kernel(t.row(r))? {
+                    Ok(term) => {
+                        terms.push(term);
+                        made.push(true);
+                    }
+                    Err(()) => made.push(false),
+                }
+            }
+            Some((self.snapshot.prepare_ids(terms), made))
+        });
+        let mut computed = Vec::with_capacity(todo.len());
+        for part in parts {
+            let (terms, made) = part?;
+            let mut ids = self.snapshot.finish_ids(terms).into_iter();
+            for m in made {
+                computed.push(if m { ids.next()? } else { TermId(0) });
+            }
+        }
+        match at {
+            Some(at) => column.extend(at.iter().map(|&i| computed[i as usize])),
+            None => column.extend(computed),
+        }
+        Some(column.contains(&TermId(0)))
+    }
+
+    /// The numbers of `e` for the rows of `t` in `column`, as inline ids or literals; whether
+    /// a cell is unbound. `None` when the kernels give up.
+    fn number_column(
+        &self,
+        t: &Table,
+        expression: &Expression,
+        column: &mut Vec<TermId>,
+    ) -> Option<bool> {
+        let rows = t.len();
+        let kernel = crate::idvalue::compile_output(expression, t, self.snapshot)?;
+        // Each value once: the same value (in the same form) gives the same id.
+        let mut ids: HashMap<((u8, i128), crate::idvalue::Form), TermId> = HashMap::new();
+        let mut unbound = false;
+        for r in 0..rows {
+            if r % 4096 == 0 && (self.cancelled)() {
+                return None;
+            }
+            match kernel(t.row(r))? {
+                Ok((v, form)) => {
+                    // An inline number is its id: no lookup, no literal.
+                    if let Some(id) = crate::idvalue::inline_id(v, form) {
+                        column.push(id);
+                        continue;
+                    }
+                    let key = (value_key(v)?, form);
+                    let id = match ids.get(&key) {
+                        Some(&id) => id,
+                        None => {
+                            let id = self
+                                .snapshot
+                                .id_of(crate::idvalue::literal(v, form)?.into());
+                            ids.insert(key, id);
+                            id
+                        }
+                    };
+                    column.push(id);
+                }
+                Err(()) => {
+                    unbound = true;
+                    column.push(TermId(0));
+                }
+            }
+        }
+        Some(unbound)
     }
 
     /// `subject !(p|q|…) object`: the triples whose predicate is none of `left_out`, one row

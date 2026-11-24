@@ -93,9 +93,59 @@ pub(crate) fn computable(e: &Expression) -> bool {
         Expression::FunctionCall(F::StrStarts | F::StrEnds | F::Contains | F::Regex, _) => {
             crate::idtree::text_test_on(e).is_some_and(|(a, _)| arg(a))
         }
-        // A condition on numbers and dates, as an `xsd:boolean`.
-        e => crate::idvalue::is_condition(e, &crate::direct::number_computable),
+        // A condition on numbers and dates, as an `xsd:boolean`; else any expression of the
+        // values alone, with the evaluator's own code ([`evaluated`]).
+        e => {
+            crate::idvalue::is_condition(e, &crate::direct::number_computable)
+                || (evaluated(e) && !crate::direct::number_computable(e))
+        }
     }
+}
+
+/// Whether `e` depends only on the values of its variables, so the evaluator's own code
+/// ([`spareval::expression_kernel`]) computes it once per distinct tuple of ids: built-ins
+/// and the casts the evaluator defines, but not `NOW`, `RAND`, `UUID`, `STRUUID`, `BNODE`,
+/// `IRI` (which may resolve against the query's base), `EXISTS` or another custom function
+/// (one TripleTrail registers is called as written, from the query's registry).
+pub(crate) fn evaluated(e: &Expression) -> bool {
+    use Expression as E;
+    use Function as F;
+    match e {
+        E::Variable(_) | E::Literal(_) | E::NamedNode(_) | E::Bound(_) => true,
+        E::Exists(_) => false,
+        E::Or(a, b)
+        | E::And(a, b)
+        | E::Equal(a, b)
+        | E::SameTerm(a, b)
+        | E::Greater(a, b)
+        | E::GreaterOrEqual(a, b)
+        | E::Less(a, b)
+        | E::LessOrEqual(a, b)
+        | E::Add(a, b)
+        | E::Subtract(a, b)
+        | E::Multiply(a, b)
+        | E::Divide(a, b) => evaluated(a) && evaluated(b),
+        E::UnaryPlus(a) | E::UnaryMinus(a) | E::Not(a) => evaluated(a),
+        E::If(a, b, c) => evaluated(a) && evaluated(b) && evaluated(c),
+        E::In(a, list) => evaluated(a) && list.iter().all(evaluated),
+        E::Coalesce(list) => list.iter().all(evaluated),
+        E::FunctionCall(F::Now | F::Rand | F::Uuid | F::StrUuid | F::BNode | F::Iri, _) => false,
+        E::FunctionCall(F::Custom(f), args) => {
+            native_cast(f.as_ref()) && args.iter().all(evaluated)
+        }
+        E::FunctionCall(_, args) => args.iter().all(evaluated),
+    }
+}
+
+/// A cast the evaluator builds itself, which no function TripleTrail registers overrides.
+fn native_cast(f: NamedNodeRef<'_>) -> bool {
+    cast(f)
+        || [
+            xsd::DURATION,
+            xsd::YEAR_MONTH_DURATION,
+            xsd::DAY_TIME_DURATION,
+        ]
+        .contains(&f)
 }
 
 /// Whether `f` is a cast the evaluator computes itself ([`spareval::cast`]).
@@ -557,26 +607,68 @@ pub(crate) fn compile<'k>(
             })
         }
         // A condition on numbers and dates: `true` or `false`, or an error.
+        // A row whose values the value kernels give up on (a comparison of two date-times
+        // with and without a zone, of strings) is computed with the evaluator's own code.
         e if crate::idvalue::is_condition(e, &crate::direct::number_computable) => {
             let c = crate::idvalue::condition(e, t, snapshot)?;
-            Box::new(move |row| {
-                Some(match c(row)? {
-                    Some(b) => Ok(Literal::from(b).into()),
-                    None => Err(()),
-                })
+            let other = evaluator_kernel(e, t, snapshot);
+            Box::new(move |row| match c(row) {
+                Some(Some(b)) => Some(Ok(Literal::from(b).into())),
+                Some(None) => Some(Err(())),
+                None => other.as_ref()?(row),
             })
         }
         // A number the value kernels compute, as the literal the evaluator writes.
-        e => {
+        e if crate::direct::number_computable(e) => {
             let k = crate::idvalue::compile_output(e, t, snapshot)?;
-            Box::new(move |row| {
-                Some(match k(row)? {
-                    Ok((v, form)) => Ok(crate::idvalue::literal(v, form)?.into()),
-                    Err(()) => Err(()),
-                })
+            let other = evaluator_kernel(e, t, snapshot);
+            Box::new(move |row| match k(row) {
+                Some(Ok((v, form))) => crate::idvalue::literal(v, form).map(|l| Ok(l.into())),
+                Some(Err(())) => Some(Err(())),
+                None => other.as_ref()?(row),
             })
         }
+        e => evaluator_kernel(e, t, snapshot)?,
     })
+}
+
+/// `e` ([`evaluated`]) with the evaluator's own code, of the ids it reads (the caller computes
+/// each distinct pair once). A row whose ids only the query knows as rows of a table gives up.
+pub(crate) fn evaluator_kernel<'k>(
+    e: &Expression,
+    t: &Table,
+    snapshot: &'k Snapshot,
+) -> Option<TermKernel<'k>> {
+    if !evaluated(e) {
+        return None;
+    }
+    let mut names = std::collections::HashSet::new();
+    crate::plan::expression_variables(e, &mut names)?;
+    let mut names: Vec<String> = names.into_iter().collect();
+    names.sort();
+    let variables: Vec<spargebra::term::Variable> = names
+        .into_iter()
+        .map(spargebra::term::Variable::new_unchecked)
+        .collect();
+    let cols: Vec<Option<usize>> = variables.iter().map(|v| t.col(v)).collect();
+    let kernel = spareval::expression_kernel(snapshot, e, &variables)?;
+    Some(Box::new(move |row| {
+        let ids: Vec<TermId> = cols
+            .iter()
+            .map(|c| c.map_or(TermId(0), |c| row[c]))
+            .collect();
+        if ids
+            .iter()
+            .any(|id| matches!(id.kind(), Kind::Row | Kind::Column | Kind::DefaultGraph))
+        {
+            return None;
+        }
+        let tuple: Vec<Option<TermId>> = ids
+            .iter()
+            .map(|id| (*id != TermId(0)).then_some(*id))
+            .collect();
+        Some(kernel(&tuple).ok_or(()))
+    }))
 }
 
 /// A constant string argument: `Some(None)` when there is none, `None` when it isn't one.

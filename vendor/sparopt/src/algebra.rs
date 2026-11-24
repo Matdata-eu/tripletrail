@@ -252,6 +252,12 @@ impl Expression {
         }
     }
 
+    /// tripletrail (#11): an expression of the query algebra outside any `GRAPH`, as a query
+    /// converts it.
+    pub fn from_sparql(expression: &AlExpression) -> Self {
+        Self::from_sparql_algebra(expression, None)
+    }
+
     fn from_sparql_algebra(
         expression: &AlExpression,
         graph_name: Option<&NamedNodePattern>,

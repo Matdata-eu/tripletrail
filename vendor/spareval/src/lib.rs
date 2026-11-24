@@ -8,6 +8,7 @@ mod dataset;
 mod error;
 mod eval;
 mod expression;
+mod kernel;
 mod model;
 mod service;
 mod update;
@@ -16,6 +17,7 @@ mod update;
 pub use crate::dataset::ExpressionTriple;
 pub use crate::dataset::{decimal_divide, decimal_lexical, decimal_literal, decimal_multiply};
 pub use crate::expression::cast;
+pub use crate::kernel::expression_kernel;
 pub use crate::dataset::{ExpressionTerm, InternalQuad, QueryableDataset};
 pub use crate::error::QueryEvaluationError;
 pub use crate::eval::{

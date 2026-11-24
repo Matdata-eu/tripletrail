@@ -2696,3 +2696,91 @@ fn date_time_extremes_on_ids_are_the_evaluators() {
         assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "on ids: {q}");
     }
 }
+
+/// Expressions the kernels don't compute themselves (`TZ`, date-time arithmetic, durations,
+/// `IN`, `LANGMATCHES`, …) are computed on ids with the evaluator's own code, so they give its
+/// terms; what depends on more than the values (`NOW`, `RAND`, `BNODE`) is left to it.
+#[test]
+fn expressions_of_values_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let values = [
+        "\"2024-01-01T00:00:00Z\"^^xsd:dateTime",
+        "\"2024-02-29T23:59:59.999+05:30\"^^xsd:dateTime",
+        "\"2024-03-31T02:30:00\"^^xsd:dateTime",
+        "\"-0044-03-15T12:00:00-14:00\"^^xsd:dateTime",
+        "\"2024-01-01\"^^xsd:date",
+        "\"2024-01-01+01:00\"^^xsd:date",
+        "\"12:30:00Z\"^^xsd:time",
+        "\"P1DT2H\"^^xsd:dayTimeDuration",
+        "\"P1Y2M\"^^xsd:yearMonthDuration",
+        "\"P1Y2M3DT4H\"^^xsd:duration",
+        "\"3\"^^xsd:integer",
+        "\"9223372036854775807\"^^xsd:integer",
+        "\"2.5\"^^xsd:decimal",
+        "\"1e0\"^^xsd:double",
+        "\"0\"^^xsd:double",
+        "\"text\"",
+        "\"chat\"@fr",
+        "<http://example.org/iri>",
+        "_:b",
+    ];
+    let mut data = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    for (i, v) in values.iter().enumerate() {
+        for j in 0..3 {
+            data.push_str(&format!(
+                "ex:s{i}_{j} ex:v {v} ; ex:w {} .\n",
+                values[(i + j) % values.len()]
+            ));
+        }
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    for (e, on_ids) in [
+        ("TZ(?v)", true),
+        ("TIMEZONE(?v)", true),
+        ("?v - \"2024-01-01T00:00:00Z\"^^xsd:dateTime", true),
+        ("?v + \"P1D\"^^xsd:dayTimeDuration", true),
+        ("?v - \"P1M\"^^xsd:yearMonthDuration", true),
+        ("?v - ?w", true),
+        ("?v + ?w", true),
+        ("?v * ?w", true),
+        ("?v / ?w", true),
+        ("?v * 2", true),
+        ("-?v", true),
+        ("?v IN (3, \"text\", ?w)", true),
+        ("sameTerm(?v, ?w)", true),
+        ("?v = ?w", true),
+        ("?v < ?w", true),
+        ("LANGMATCHES(LANG(?v), \"fr\")", true),
+        ("xsd:dayTimeDuration(CONCAT(\"PT\", STR(?v), \"S\"))", true),
+        ("xsd:duration(?v)", true),
+        ("IF(BOUND(?u), 1, TZ(?v))", true),
+        ("COALESCE(?v - ?w, \"none\")", true),
+        ("?v - NOW()", false),
+        ("?v * RAND()", false),
+        ("CONCAT(STR(?v), STR(BNODE()))", false),
+    ] {
+        for q in [
+            format!("SELECT ?s ?y WHERE {{ ?s ex:v ?v ; ex:w ?w BIND({e} AS ?y) }}"),
+            format!(
+                "SELECT ?y (COUNT(*) AS ?n) WHERE {{ ?s ex:v ?v ; ex:w ?w BIND({e} AS ?y) }} GROUP BY ?y"
+            ),
+        ] {
+            let run = |executor: &str| {
+                rows(
+                    &engine,
+                    &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+                )
+            };
+            if on_ids {
+                assert_eq!(run("ids"), run("spareval"), "{q}");
+            }
+            let plan = engine
+                .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+                .unwrap();
+            assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "on ids: {q}");
+        }
+    }
+}
