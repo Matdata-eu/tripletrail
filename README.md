@@ -225,8 +225,8 @@ their licenses are listed in [NOTICE](NOTICE); `cargo deny check` (see [deny.tom
 keeps dependencies to permissive and weak-copyleft licenses.
 
 TripleTrail is developed by Matdata as open core: this repository is the open-source engine, and
-Matdata offers commercial editions and support on top of it. Contributions need a signed
-Contributor License Agreement; see [CONTRIBUTING.md](CONTRIBUTING.md). Vulnerabilities go
+Matdata offers commercial editions and support on top of it. Contributions are welcome under
+the Apache License 2.0, with no agreement to sign; see [CONTRIBUTING.md](CONTRIBUTING.md). Vulnerabilities go
 through [SECURITY.md](SECURITY.md).
 
 TripleTrail is built on [Oxigraph](https://github.com/oxigraph/oxigraph) and is not affiliated
