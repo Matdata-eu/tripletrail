@@ -283,7 +283,7 @@ fn branch(e: &Expression) -> bool {
 
 /// Whether the id tables may answer `p`: what [`crate::rows::covered`] covers, and `BIND`
 /// over it (`idtree::Eval::extend` decides the expression).
-fn covered(p: &GraphPattern) -> bool {
+pub(crate) fn covered(p: &GraphPattern) -> bool {
     use GraphPattern as G;
     match p {
         G::Extend {
