@@ -2962,3 +2962,79 @@ fn exists_filters_reading_the_outer_row_are_the_evaluators() {
         assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}");
     }
 }
+
+/// Closures of an alternative of predicates and their inverses (`(ex:a|^ex:b)*`,
+/// `(ex:a|ex:b)+`) run on ids (#11), with the evaluator's answers from a constant end, from
+/// values another pattern gives, and between two variables.
+#[test]
+fn closures_of_alternatives_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..300 {
+        data.push_str(&format!("ex:n{i} ex:a ex:n{} .\n", (i * 7 + 3) % 300));
+        if i % 3 == 0 {
+            data.push_str(&format!("ex:n{} ex:b ex:n{i} .\n", (i * 13 + 1) % 300));
+        }
+        if i % 11 == 0 {
+            data.push_str(&format!("ex:n{i} ex:b \"leaf {i}\" .\n"));
+            data.push_str(&format!("ex:n{i} ex:label \"node {}\" .\n", i % 4));
+        }
+    }
+    // A small cycle of its own, and a chain on `ex:b` alone.
+    data.push_str("ex:x ex:a ex:y . ex:y ex:b ex:x . ex:y ex:a ex:z .\n");
+    data.push_str("ex:c0 ex:b ex:c1 . ex:c1 ex:b ex:c2 . ex:c2 ex:a ex:c3 .\n");
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for (q, on_ids) in [
+        ("SELECT ?o WHERE { ex:n5 (ex:a|^ex:b)* ?o }", true),
+        ("SELECT ?o WHERE { ex:n5 (ex:a|ex:b)+ ?o }", true),
+        ("SELECT ?s WHERE { ?s (ex:a|^ex:b)+ ex:n9 }", true),
+        ("SELECT ?s WHERE { ?s ^(ex:a|ex:b)* ex:x }", true),
+        ("SELECT ?o WHERE { ex:c0 (ex:b|ex:a)+ ?o }", true),
+        ("SELECT ?o WHERE { ex:c3 (^ex:a|^ex:b)+ ?o }", true),
+        ("SELECT ?o WHERE { ex:x (ex:a|ex:a)* ?o }", true),
+        ("SELECT ?s ?o WHERE { ?s (ex:a|ex:b)+ ?o }", true),
+        ("SELECT ?s ?o WHERE { ?s (ex:a|^ex:b)+ ?o }", true),
+        (
+            "SELECT ?s ?o WHERE { ?s ex:label ?l . ?s (ex:a|^ex:b)* ?o }",
+            true,
+        ),
+        (
+            "SELECT ?l (COUNT(DISTINCT ?o) AS ?n) WHERE { ?s ex:label ?l . ?s (ex:a|ex:b)+ ?o } GROUP BY ?l",
+            true,
+        ),
+        // A filter on the values the path starts from: on those first.
+        (
+            "SELECT ?s ?o WHERE { ?s ex:label ?l . ?s (ex:a|ex:b)+ ?o FILTER(?l = \"node 1\") }",
+            true,
+        ),
+        (
+            "SELECT ?s ?o WHERE { ?s ex:a+ ?o . ?s ex:label ?l FILTER(?l != \"node 1\" && ?s != ex:n0) }",
+            true,
+        ),
+        // A filter reading a value the path gives: on the joined rows.
+        (
+            "SELECT ?s ?o WHERE { ?s ex:label ?l . ?s (ex:a|^ex:b)* ?o FILTER(?l = \"node 2\" && ?o != ex:n1) }",
+            true,
+        ),
+        // A step that is no predicate or inverse: the evaluator's.
+        ("SELECT ?o WHERE { ex:n5 (ex:a|ex:a/ex:b)* ?o }", false),
+    ] {
+        let evaluator = rows(
+            &engine,
+            &format!("#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n{prefix} {q}"),
+        );
+        assert!(!evaluator.is_empty(), "{q}");
+        for pragma in ["#pragma tt.executor ids\n", ""] {
+            assert_eq!(
+                rows(&engine, &format!("{pragma}{prefix} {q}")),
+                evaluator,
+                "{pragma}{q}"
+            );
+        }
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}");
+    }
+}

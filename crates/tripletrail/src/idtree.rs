@@ -29,11 +29,21 @@ const LOOKUP: f64 = 40.0;
 /// A key found by walking a sorted scan forward costs about as much as scanning this many
 /// quads.
 const WALK: f64 = 4.0;
-/// The predicate of `<p>+`, `^<p>+` (also `(^<p>)+`) and `<p>*` forms, whether it is
-/// followed backwards, and whether a zero-length path counts.
-pub(crate) fn closure_path(
-    path: &PropertyPathExpression,
-) -> Option<(&spargebra::term::NamedNode, bool, bool)> {
+/// The edges of one step of a path: predicates and their inverses (`ex:a`, `^ex:a`,
+/// `ex:a|^ex:b`), each with whether it is followed backwards.
+pub(crate) type Steps<'p> = Vec<(&'p spargebra::term::NamedNode, bool)>;
+
+/// `p` as [`Steps`]: a predicate, its inverse, or an alternative of those.
+fn steps(p: &PropertyPathExpression) -> Option<Steps<'_>> {
+    let mut out = Vec::new();
+    walk_alternative(p, &mut out)?;
+    Some(out)
+}
+
+/// `<p>+`, `<p>*` and their inverses, where `<p>` is a predicate, its inverse or an
+/// alternative of those (`(ex:a|^ex:b)*`, #11): the step's edges, whether the whole path is
+/// followed backwards, and whether it matches zero-length paths.
+pub(crate) fn closure_path(path: &PropertyPathExpression) -> Option<(Steps<'_>, bool, bool)> {
     use PropertyPathExpression as P;
     let (inner, zero, outer_reverse) = match path {
         P::OneOrMore(p) => (&**p, false, false),
@@ -45,14 +55,7 @@ pub(crate) fn closure_path(
         },
         _ => return None,
     };
-    match inner {
-        P::NamedNode(n) => Some((n, outer_reverse, zero)),
-        P::Reverse(p) => match &**p {
-            P::NamedNode(n) => Some((n, !outer_reverse, zero)),
-            _ => None,
-        },
-        _ => None,
-    }
+    Some((steps(inner)?, outer_reverse, zero))
 }
 
 /// `!(p|q|…)` and `^!(…)` (`!(^p|^q)`): the predicates left out, whether the triples are
@@ -100,36 +103,33 @@ pub(crate) fn optional_path(
 pub(crate) fn alternative_path(
     path: &PropertyPathExpression,
 ) -> Option<Vec<(&spargebra::term::NamedNode, bool)>> {
-    fn walk<'p>(
-        p: &'p PropertyPathExpression,
-        out: &mut Vec<(&'p spargebra::term::NamedNode, bool)>,
-    ) -> Option<()> {
-        use PropertyPathExpression as P;
-        match p {
-            P::Alternative(a, b) => {
-                walk(a, out)?;
-                walk(b, out)
-            }
-            P::NamedNode(n) => {
-                out.push((n, false));
-                Some(())
-            }
-            P::Reverse(r) => match &**r {
-                P::NamedNode(n) => {
-                    out.push((n, true));
-                    Some(())
-                }
-                _ => None,
-            },
-            _ => None,
-        }
-    }
     if !matches!(path, PropertyPathExpression::Alternative(..)) {
         return None;
     }
-    let mut out = Vec::new();
-    walk(path, &mut out)?;
-    Some(out)
+    steps(path)
+}
+
+/// Adds the predicates of an alternative of predicates and their inverses to `out`.
+fn walk_alternative<'p>(p: &'p PropertyPathExpression, out: &mut Steps<'p>) -> Option<()> {
+    use PropertyPathExpression as P;
+    match p {
+        P::Alternative(a, b) => {
+            walk_alternative(a, out)?;
+            walk_alternative(b, out)
+        }
+        P::NamedNode(n) => {
+            out.push((n, false));
+            Some(())
+        }
+        P::Reverse(r) => match &**r {
+            P::NamedNode(n) => {
+                out.push((n, true));
+                Some(())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The operands of a tree of joins, in order.
@@ -854,11 +854,11 @@ impl Eval<'_> {
         seed: Option<&Table>,
     ) -> Option<Table> {
         // `<p>?`: the starts themselves and their next nodes.
-        let (predicate, reverse, zero, one) = match closure_path(path) {
-            Some((p, reverse, zero)) => (p, reverse, zero, false),
+        let (steps, reverse, zero, one) = match closure_path(path) {
+            Some((steps, reverse, zero)) => (steps, reverse, zero, false),
             None => {
                 let (p, reverse) = optional_path(path)?;
-                (p, reverse, true, true)
+                (vec![(p, false)], reverse, true, true)
             }
         };
         let end = |t: &TermPattern| match t {
@@ -921,12 +921,40 @@ impl Eval<'_> {
         {
             return None;
         }
+        // The rows the closure may give: those the table it is joined into can hold (each
+        // gives at least one joined row, with the seed's columns and the path's new end).
+        let max_rows = max_ids() / (seed.map_or(1, |t| t.vars.len()) + 1);
         let mut ids = match &starts {
-            Some(starts) if one => self.one_step(predicate, forward, starts, from.is_err())?,
-            Some(starts) if (starts.len() as f64) * LEVEL_COST < self.edge_estimate(predicate) => {
-                self.closure_by_levels(predicate, forward, zero, starts, from.is_err())?
+            Some(starts) if one => self.one_step(&steps, forward, starts, from.is_err())?,
+            Some(starts) if (starts.len() as f64) * LEVEL_COST < self.edge_estimate(&steps) => {
+                let budget = self.edge_estimate(&steps) / LEVEL_COST;
+                match self.closure_by_levels(
+                    &steps,
+                    forward,
+                    zero,
+                    starts,
+                    from.is_err(),
+                    budget,
+                )? {
+                    Some(ids) => ids,
+                    None => self.closure_of_all(
+                        &steps,
+                        forward,
+                        zero,
+                        Some(starts.clone()),
+                        from.is_err(),
+                        max_rows,
+                    )?,
+                }
             }
-            _ => self.closure_of_all(predicate, forward, zero, starts.clone(), from.is_err())?,
+            _ => self.closure_of_all(
+                &steps,
+                forward,
+                zero,
+                starts.clone(),
+                from.is_err(),
+                max_rows,
+            )?,
         };
         let seeded = starts.filter(|_| zero && from.is_err());
         // A value another pattern gives an end matches itself only if it is a node of the
@@ -995,11 +1023,48 @@ impl Eval<'_> {
         })
     }
 
-    fn edge_estimate(&self, predicate: &spargebra::term::NamedNode) -> f64 {
-        match self.snapshot.term_id(predicate.as_ref().into()) {
-            Some(p) => self.snapshot.estimate_ids(None, Some(p), None, self.graph) as f64,
-            None => 0.0,
+    fn edge_estimate(&self, steps: &Steps<'_>) -> f64 {
+        steps
+            .iter()
+            .filter_map(|(p, _)| self.snapshot.term_id(p.as_ref().into()))
+            .map(|p| self.snapshot.estimate_ids(None, Some(p), None, self.graph) as f64)
+            .sum()
+    }
+
+    /// The edges of one step, followed `forward` (or backwards), looked up from `nodes` (sorted)
+    /// or all read: (from, to) pairs, an edge possibly more than once, and looked-up edges
+    /// may start elsewhere too. `None` past the memory limit.
+    fn step_edges(
+        &self,
+        steps: &Steps<'_>,
+        forward: bool,
+        nodes: Option<&[TermId]>,
+    ) -> Option<Vec<(TermId, TermId)>> {
+        let mut pairs = Vec::new();
+        for &(predicate, reverse) in steps {
+            let (pattern, a, b) = Self::edge(predicate, forward != reverse);
+            let edges = match nodes {
+                Some(nodes) => {
+                    let level = Table {
+                        vars: vec![a.clone()],
+                        ones: nodes.len(),
+                        ids: nodes.to_vec(),
+                        maybe: vec![false],
+                    };
+                    self.bgp_from(std::slice::from_ref(&pattern), Some(&level))?
+                }
+                None => self.bgp(std::slice::from_ref(&pattern))?,
+            };
+            let (ca, cb) = (edges.col(&a)?, edges.col(&b)?);
+            pairs.extend((0..edges.len()).map(|r| {
+                let row = edges.row(r);
+                (row[ca], row[cb])
+            }));
+            if pairs.len().saturating_mul(4) > max_ids() {
+                return None;
+            }
         }
+        Some(pairs)
     }
 
     /// The pattern of an edge followed from `path-a` to `path-b` (names no query can hold).
@@ -1024,37 +1089,26 @@ impl Eval<'_> {
     /// Rows are (start, end), or the ends alone without `pairs`.
     fn one_step(
         &self,
-        predicate: &spargebra::term::NamedNode,
+        steps: &Steps<'_>,
         forward: bool,
         starts: &[TermId],
         pairs: bool,
     ) -> Option<Vec<TermId>> {
-        let (pattern, a, b) = Self::edge(predicate, forward);
-        let level = Table {
-            vars: vec![a.clone()],
-            ones: starts.len(),
-            ids: starts.to_vec(),
-            maybe: vec![false],
-        };
-        let edges = self.bgp_from(std::slice::from_ref(&pattern), Some(&level))?;
+        let edges = self.step_edges(steps, forward, Some(starts))?;
         let width = usize::from(pairs) + 1;
         if (starts.len() + edges.len()).saturating_mul(width + 2) > max_ids() {
             return None;
         }
-        let (ca, cb) = (edges.col(&a)?, edges.col(&b)?);
         // Each pair once: a start matches itself, and an edge may be read twice when the
         // default graph is the union of the graphs.
         // The edges read may start elsewhere too (the seed narrows the scan, it doesn't
         // filter): only those from a start.
         let mut found: Vec<(TermId, TermId)> = starts.iter().map(|&s| (s, s)).collect();
-        found.extend((0..edges.len()).filter_map(|r| {
-            let row = edges.row(r);
-            starts
-                .binary_search(&row[ca])
-                .is_ok()
-                .then_some((row[ca], row[cb]))
-        }));
-        drop(edges);
+        found.extend(
+            edges
+                .into_iter()
+                .filter(|(x, _)| starts.binary_search(x).is_ok()),
+        );
         found.sort_unstable();
         found.dedup();
         let mut ids = Vec::with_capacity(found.len() * width);
@@ -1068,16 +1122,19 @@ impl Eval<'_> {
     }
 
     /// The closure from a few starts: the edges of each level's nodes looked up by their
-    /// values. Rows are (start, end), or the ends alone without `pairs`.
+    /// values. Rows are (start, end), or the ends alone without `pairs`. `Some(None)` once
+    /// more than `budget` nodes would have been looked up: reading all the edges once is then
+    /// cheaper (a closure that reaches most of the graph).
     fn closure_by_levels(
         &self,
-        predicate: &spargebra::term::NamedNode,
+        steps: &Steps<'_>,
         forward: bool,
         zero: bool,
         starts: &[TermId],
         pairs: bool,
-    ) -> Option<Vec<TermId>> {
-        let (pattern, a, b) = Self::edge(predicate, forward);
+        budget: f64,
+    ) -> Option<Option<Vec<TermId>>> {
+        let mut looked_up = 0usize;
         let limit = max_ids();
         let mut ids = Vec::new();
         let mut seen: std::collections::HashSet<(TermId, TermId)> = Default::default();
@@ -1103,18 +1160,14 @@ impl Eval<'_> {
             let mut nodes: Vec<TermId> = frontier.iter().map(|&(_, n)| n).collect();
             nodes.sort_unstable();
             nodes.dedup();
-            let level = Table {
-                vars: vec![a.clone()],
-                ones: nodes.len(),
-                ids: nodes,
-                maybe: vec![false],
-            };
-            let edges = self.bgp_from(std::slice::from_ref(&pattern), Some(&level))?;
-            let (ca, cb) = (edges.col(&a)?, edges.col(&b)?);
+            looked_up += nodes.len();
+            if looked_up as f64 > budget {
+                return Some(None);
+            }
+            let edges = self.step_edges(steps, forward, Some(&nodes))?;
             let mut next_of: HashMap<TermId, Vec<TermId>> = HashMap::new();
-            for r in 0..edges.len() {
-                let row = edges.row(r);
-                next_of.entry(row[ca]).or_default().push(row[cb]);
+            for &(x, y) in &edges {
+                next_of.entry(x).or_default().push(y);
             }
             // The most pairs this level can add, before any is made: past the limit, the
             // evaluator's (it streams them). The edges read and `next_of` hold four ids each.
@@ -1141,29 +1194,23 @@ impl Eval<'_> {
             }
             frontier = next;
         }
-        Some(ids)
+        Some(Some(ids))
     }
 
     /// The closure from `starts`, or from every node with an edge, over all the predicate's
-    /// edges read once.
+    /// edges read once. `None` past `max_rows` rows, or once the starts searched so far
+    /// foretell that many (a closure reaching most of a large graph from many starts: the
+    /// evaluator's, which streams its rows).
     fn closure_of_all(
         &self,
-        predicate: &spargebra::term::NamedNode,
+        steps: &Steps<'_>,
         forward: bool,
         zero: bool,
         starts: Option<Vec<TermId>>,
         pairs_out: bool,
+        max_rows: usize,
     ) -> Option<Vec<TermId>> {
-        let (pattern, a, b) = Self::edge(predicate, forward);
-        let edges = self.bgp(std::slice::from_ref(&pattern))?;
-        let (ca, cb) = (edges.col(&a)?, edges.col(&b)?);
-        let mut pairs: Vec<(TermId, TermId)> = (0..edges.len())
-            .map(|r| {
-                let row = edges.row(r);
-                (row[ca], row[cb])
-            })
-            .collect();
-        drop(edges);
+        let mut pairs = self.step_edges(steps, forward, None)?;
         pairs.sort_unstable();
         pairs.dedup();
         let next = |n: TermId| {
@@ -1178,12 +1225,16 @@ impl Eval<'_> {
             s.dedup();
             s
         });
-        let limit = max_ids();
+        let limit = max_ids().min(max_rows.saturating_mul(usize::from(pairs_out) + 1));
         let mut ids: Vec<TermId> = Vec::new();
         let mut seen: HashMap<TermId, usize> = HashMap::new();
         let mut stack: Vec<TermId> = Vec::new();
         for (i, &start) in starts.iter().enumerate() {
             if i % 4096 == 0 && (self.cancelled)() {
+                return None;
+            }
+            // After a few starts, their rows on average for every start.
+            if i >= 8 && (ids.len() / i).saturating_mul(starts.len()) > limit {
                 return None;
             }
             let emit = |end: TermId, ids: &mut Vec<TermId>| {
@@ -2847,6 +2898,47 @@ fn string_prefix(e: &Expression) -> Option<(&Variable, String)> {
 fn pushed_filter(e: &Expression, inner: &GraphPattern) -> Option<GraphPattern> {
     use GraphPattern as G;
     match inner {
+        // A filter on the values of the triple patterns a path is joined with: on those
+        // first, so fewer starts are searched (a variable of the patterns is bound in each of
+        // their rows, and the joined row holds the same value).
+        G::Join { left, right } => {
+            let (patterns, path, path_right) = match (&**left, &**right) {
+                (G::Bgp { patterns }, p @ G::Path { .. }) => (patterns, p, true),
+                (p @ G::Path { .. }, G::Bgp { patterns }) => (patterns, p, false),
+                _ => return None,
+            };
+            let mut names = std::collections::HashSet::new();
+            crate::plan::expression_variables(e, &mut names)?;
+            let mut bound = std::collections::HashSet::new();
+            for t in patterns {
+                for v in [&t.subject, &t.object] {
+                    if let spargebra::term::TermPattern::Variable(v) = v {
+                        bound.insert(v.as_str());
+                    }
+                }
+                if let NamedNodePattern::Variable(v) = &t.predicate {
+                    bound.insert(v.as_str());
+                }
+            }
+            if names.is_empty() || !names.iter().all(|n| bound.contains(n.as_str())) {
+                return None;
+            }
+            let filtered = G::Filter {
+                expr: e.clone(),
+                inner: Box::new(G::Bgp {
+                    patterns: patterns.clone(),
+                }),
+            };
+            let (left, right) = if path_right {
+                (filtered, path.clone())
+            } else {
+                (path.clone(), filtered)
+            };
+            Some(G::Join {
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+        }
         G::Union { left, right } => {
             let side = |p: &GraphPattern| G::Filter {
                 expr: e.clone(),

@@ -202,8 +202,16 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   block, say) is left to the evaluator, which also starts from those values. On a tree of
   200,000 nodes (1.48 million pairs): `GROUP BY ?o` with `COUNT` over `?s <p>+ ?o`
   1.05 → 0.19 s, the path joined with a class and counted 1.61 → 0.05 s, and
-  `?s ex:id "rare" . ?s <p>+ ?o` stays at about 1 ms. A path with the same variable at both
-  ends, `*` between two free variables, or other path expressions are left to the evaluator.
+  `?s ex:id "rare" . ?s <p>+ ?o` stays at about 1 ms. The step may be an alternative of
+  predicates and their inverses too, `(ex:a|^ex:b)*` or `(ex:a|ex:b)+`: each level follows
+  every predicate's edges. A search from a few starts that reaches most of the graph switches
+  to reading all the edges once, a filter on the values the path starts from is applied
+  before the path, and a closure whose rows from the first starts foretell more than the
+  joined table can hold is left to the evaluator early (#11; 200,000 random nodes and
+  300,000 edges: `(ex:a|^ex:b)*` from a constant 192 → 83 ms, `(ex:p|ex:q)+` between two
+  variables 6.3 → 0.4 s, from 29 labelled starts with `FILTER(?l = "l3")` 5.4 → 1.7 s). A
+  path with the same variable at both ends, `*` between two free variables, or other path
+  expressions are left to the evaluator.
   An alternative of predicates and their inverses, `?s ex:a|^ex:b ?o`, is the union of the
   predicates' pairs without duplicates, as the evaluator gives it; when every column's ids
   of two alternatives can't meet (an IRI and a literal object, say) no row is checked twice
