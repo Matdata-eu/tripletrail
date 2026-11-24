@@ -459,6 +459,43 @@ fn ranked(t: &Table, c: usize, snapshot: &Snapshot) -> Option<Ranks> {
                 .collect(),
         );
     }
+    // All integers (`xsd:int`, `xsd:long`, `"+7"`: terms of the dictionary), or all decimals:
+    // the evaluator orders them by value, compared here as numbers, not through `cmp_terms`
+    // term by term (#11).
+    let numbers: Option<Vec<i128>> = match terms.first().map(|(_, t)| t) {
+        Some(spareval::ExpressionTerm::IntegerLiteral(_)) => terms
+            .iter()
+            .map(|(_, t)| match t {
+                spareval::ExpressionTerm::IntegerLiteral(i) => Some(i128::from(i64::from(*i))),
+                _ => None,
+            })
+            .collect(),
+        Some(spareval::ExpressionTerm::DecimalLiteral(_)) => terms
+            .iter()
+            .map(|(_, t)| match t {
+                spareval::ExpressionTerm::DecimalLiteral(d) => {
+                    Some(i128::from_be_bytes(d.to_be_bytes()))
+                }
+                _ => None,
+            })
+            .collect(),
+        _ => None,
+    };
+    if let Some(values) = numbers {
+        let mut order: Vec<usize> = (0..terms.len()).collect();
+        order.sort_unstable_by_key(|&i| values[i]);
+        // Equal values written differently (`"07"` and `7`): the evaluator's.
+        if order.windows(2).any(|w| values[w[0]] == values[w[1]]) {
+            return None;
+        }
+        return Some(
+            order
+                .iter()
+                .zip(1..)
+                .map(|(&i, rank)| (terms[i].0, rank))
+                .collect(),
+        );
+    }
     terms.sort_by(|(_, a), (_, b)| spareval::cmp_terms(Some(a), Some(b)));
     // Two different terms the evaluator orders as equal (`"…Z"` and `"…+00:00"`) come in the
     // order its sort leaves them, which the ids can't tell: those are its to order.
