@@ -771,10 +771,15 @@ fn evaluated_inputs(
         cols.iter()
             .map(|c| {
                 let id = c.map_or(TermId(0), |c| row[c]);
+                // Unbound (`TermId(0)`, whose kind reads as the default graph's) first: an
+                // `OPTIONAL` leaves it in a row (#11).
+                if id == TermId(0) {
+                    return Some(None);
+                }
                 if matches!(id.kind(), Kind::Row | Kind::Column | Kind::DefaultGraph) {
                     return None;
                 }
-                Some((id != TermId(0)).then_some(id))
+                Some(Some(id))
             })
             .collect::<Option<Vec<_>>>()
     };

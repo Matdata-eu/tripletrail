@@ -3125,12 +3125,8 @@ ex:c ex:f "1e2"^^xsd:double ; ex:l "z" ; ex:i "+9"^^xsd:integer ; ex:n "n3"@en ;
         let plan = engine
             .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
             .unwrap();
-        // A variable no pattern binds (`?nope`) is the evaluator's.
-        assert_eq!(
-            plan.contains(r#""executor":"ids""#),
-            !e.contains("?nope"),
-            "{q}"
-        );
+        // A variable no pattern binds (`?nope`) is unbound on ids too.
+        assert!(plan.contains(r#""executor":"ids""#), "{q}");
     }
 }
 
@@ -3513,5 +3509,54 @@ fn samples_keep_the_term_as_written() {
             expected,
             "{pragma}"
         );
+    }
+}
+
+/// Expressions the evaluator's own code computes on ids (`IF` with a string test, `LANG`,
+/// `COALESCE`) that read a value an `OPTIONAL` may leave unbound run on ids (#11), with the
+/// evaluator's answers: an unbound value is an unbound input, not a row the ids can't read.
+#[test]
+fn evaluated_expressions_of_optional_values_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..600 {
+        data.push_str(&format!(
+            "ex:o{i} ex:q {} ; ex:s \"s{}\" ; ex:l \"item {i}\"@{} .\n",
+            i % 97,
+            10 + i % 90,
+            if i % 3 == 0 { "nl" } else { "en" }
+        ));
+        match i % 4 {
+            0 => data.push_str(&format!("ex:o{i} ex:p {} .\n", i % 13)),
+            1 => data.push_str(&format!("ex:o{i} ex:p \"p{i}\" .\n")),
+            2 => data.push_str(&format!("ex:o{i} ex:p {}.5e0 .\n", i % 7)),
+            _ => {}
+        }
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    let w = "?o ex:q ?q ; ex:s ?s ; ex:l ?l OPTIONAL { ?o ex:p ?p }";
+    for e in [
+        r#"IF(?s < "s50", ?p, ?q)"#,
+        r#"IF(LANG(?l) = "en", ?p, 0)"#,
+        r#"COALESCE(IF(STRENDS(?s, "7"), ?p, ?q), 0)"#,
+        r#"IF(true, ?p, 1)"#,
+        r#"IF(?p > 3, "big", "small")"#,
+        r#"COALESCE(?p, ?s)"#,
+    ] {
+        for q in [
+            format!("SELECT ?o ?x WHERE {{ {w} BIND({e} AS ?x) }}"),
+            format!("SELECT ?o ({e} AS ?x) WHERE {{ {w} }}"),
+            format!("SELECT ?x (COUNT(*) AS ?n) WHERE {{ {w} BIND({e} AS ?x) }} GROUP BY ?x"),
+        ] {
+            let run = |pragma: &str| rows(&engine, &format!("{pragma}{prefix} {q}"));
+            let evaluator = run("#pragma tt.executor spareval\n");
+            assert_eq!(run("#pragma tt.executor ids\n"), evaluator, "{q}");
+            assert_eq!(run(""), evaluator, "{q}");
+            let plan = engine
+                .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+                .unwrap();
+            assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+        }
     }
 }
