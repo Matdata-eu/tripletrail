@@ -4083,10 +4083,11 @@ impl<'a> Pick<'a> {
     /// `MIN(?var)` (`max: false`) or `MAX(?var)` in SPARQL's order of terms, `UNBOUND` when
     /// a row has it unbound (the aggregate is an error then) or there are no rows. `None` for
     /// values this doesn't order on ids: blank nodes, quoted triples, literals other than
-    /// strings, language strings, numbers and booleans, and literals of different kinds; and
-    /// for the ties Jena breaks by text (#517): language strings with different tags, equal
-    /// integers written differently. Decimals and doubles (with integers) are ordered as the
-    /// evaluator orders them, ties included.
+    /// strings, language strings, numbers, booleans and inline date-times, and literals of
+    /// different kinds; and for the ties Jena breaks by text (#517): language strings with
+    /// different tags, equal integers written differently. Decimals and doubles (with
+    /// integers) are ordered as the evaluator orders them, ties included; date-times by
+    /// instant, when they are all alike (with or without a time zone, dates or not).
     pub(crate) fn extreme(
         &mut self,
         t: &Table,
@@ -4102,6 +4103,31 @@ impl<'a> Pick<'a> {
             let id = t.row(r as usize)[c];
             if id == UNBOUND {
                 return Some(UNBOUND);
+            }
+            // Inline date-times (#11), by instant: all `xsd:dateTime` or all `xsd:date`, all
+            // with a time zone or all without (others aren't ordered by instant alone), and
+            // two values at one instant written differently (`Z` and `+00:00`) left to the
+            // evaluator, whose pick of those depends on their order.
+            if id.kind() == Kind::DateTime || best.is_some_and(|b| b.kind() == Kind::DateTime) {
+                let v = id.date_time_value()?;
+                let Some(b) = best else {
+                    best = Some(id);
+                    continue;
+                };
+                let w = b.date_time_value()?;
+                if (v.date, v.tz.is_some()) != (w.date, w.tz.is_some()) {
+                    return None;
+                }
+                if b != id {
+                    let o = v.instant.cmp(&w.instant);
+                    if o.is_eq() {
+                        return None;
+                    }
+                    if if max { o.is_gt() } else { o.is_lt() } {
+                        best = Some(id);
+                    }
+                }
+                continue;
             }
             // Decimals, doubles and floats, and integers with them, in the evaluator's own
             // order (Jena's: by value, then as written).

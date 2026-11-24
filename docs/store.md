@@ -102,7 +102,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   booleans by value. Decimals, doubles and floats, also mixed with integers, are compared
   with the evaluator's own order (`spareval::cmp_values_as_jena`: by value, then as written,
   as Jena: `"03"` before `3`), so a query over amounts or measures stays on ids (about as
-  fast as the evaluator for the aggregate itself). Other values (blank
+  fast as the evaluator for the aggregate itself). Date-times and dates are compared by
+  instant when a group's are all alike: all `xsd:dateTime` or all `xsd:date`, all with a
+  time zone or all without; two writings of one instant (`Z` and `+01:00` an hour later)
+  leave the group to the evaluator, whose pick depends on their order (133k orders, the
+  first and last order date 489 → 5 ms, the last per customer 309 → 16 ms). Other values (blank
   nodes, language strings, other typed literals, mixed literal kinds) leave the group to the
   evaluator. `GROUP_CONCAT` of a variable (with `DISTINCT` and `SEPARATOR`) joins the
   group's strings on ids into a simple literal, in order of their text (#11). SPARQL leaves
