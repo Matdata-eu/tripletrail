@@ -167,7 +167,10 @@ fn optional_conditions_on_its_own_side_apply_inside_it() {
     }";
     assert_eq!(count(&e, query, "n"), 200);
     assert_eq!(count(&e, query, "k"), 20);
-    let plan = plan(&e, query);
+    // The evaluator's plan (the id executor takes this query too, #11).
+    let plan = e
+        .explain(&format!("#pragma tt.executor spareval\n{PREFIXES}{query}"))
+        .unwrap();
     // The plan is JSON: the condition is a filter of its own, not in a left join's expression.
     let names: Vec<&str> = plan.split("\"name\":\"").skip(1).collect();
     assert!(
