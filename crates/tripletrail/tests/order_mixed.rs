@@ -119,13 +119,40 @@ fn values_of_every_kind_sort_without_panicking() {
 /// offset, instead of leaving the query to the evaluator.
 #[test]
 fn mixed_kinds_are_ordered_on_ids_as_the_evaluator_orders_them() {
-    let e = engine();
-    e.load(
-        RdfFormat::Turtle,
-        b"@prefix ex: <http://example.org/> .\nex:b1 ex:a _:x1 ; ex:b 1 .\nex:b2 ex:a _:x2 ; ex:b \"z\" .\n"
-            .as_slice(),
-    )
-    .unwrap();
+    // Every value but those equal by value to another (`1`, `"1"^^xsd:long`, `1.0`, `1e0`):
+    // the evaluator orders those in the order its sort leaves them, and they stay its to
+    // order (checked by `ties_are_the_evaluators` below).
+    let values: Vec<&str> = VALUES
+        .iter()
+        .copied()
+        .filter(|v| !v.contains("xsd:long") && !v.contains("1.0") && !v.contains("1e0"))
+        .collect();
+    let mut ttl = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    let mut i = 0;
+    for a in &values {
+        for b in &values {
+            ttl.push_str(&format!("ex:s{i} ex:a {a} ; ex:b {b} .\n"));
+            i += 1;
+        }
+    }
+    ttl.push_str("ex:b1 ex:a _:x1 ; ex:b 1 .\nex:b2 ex:a _:x2 ; ex:b \"z\" .\n");
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    check(&e, true);
+}
+
+/// Values equal by value but written differently (`1` and `1.0`) are ordered by the
+/// evaluator, with the same answers.
+#[test]
+fn ties_are_the_evaluators() {
+    check(&engine(), false);
+}
+
+/// The queries of an order on `e` give the evaluator's rows under the ids executor, on ids
+/// when `on_ids`.
+fn check(e: &Engine, on_ids: bool) {
     let rows = |pragma: &str, q: &str| {
         let q = format!("{pragma}PREFIX ex: <http://example.org/>\n{q}");
         let QueryResults::Solutions(s) = e.query(&q).unwrap() else {
@@ -163,6 +190,6 @@ fn mixed_kinds_are_ordered_on_ids_as_the_evaluator_orders_them() {
                 "#pragma tt.executor ids\nPREFIX ex: <http://example.org/>\n{q}"
             ))
             .unwrap();
-        assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}: {plan}");
     }
 }

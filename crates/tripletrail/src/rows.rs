@@ -303,8 +303,8 @@ fn shape(p: &GraphPattern) -> Option<Shape<'_>> {
 /// The numbers of the first `keep` rows of `t` in the order `by` (the first row of each
 /// combination of the `distinct` variables only, when given), in that order. A column whose
 /// values are of one class is ordered on ids; any other column (classes mixed, blank nodes,
-/// literals of other datatypes) is ordered as the evaluator orders terms (`cmp_terms`), each
-/// of its distinct values decoded once (#11). `None` when a value can't be decoded.
+/// literals of other datatypes) is ordered as the evaluator orders terms (`cmp_terms`), its
+/// distinct values decoded and ranked once (#11). `None` when a value can't be decoded.
 pub(crate) fn first_rows(
     t: &Table,
     by: Vec<(&Variable, bool)>,
@@ -315,11 +315,11 @@ pub(crate) fn first_rows(
     use crate::idtree::Pick;
     use std::cmp::Ordering;
     let mut pick = Pick::new(snapshot);
-    let mut columns: Vec<(Option<usize>, bool, Option<Terms>)> = Vec::with_capacity(by.len());
+    let mut columns: Vec<(Option<usize>, bool, Option<Ranks>)> = Vec::with_capacity(by.len());
     for (v, descending) in &by {
         let c = t.col(v);
         let terms = match c {
-            Some(c) if !one_class(t, c, &pick) => Some(decoded(t, c, snapshot)?),
+            Some(c) if !one_class(t, c, &pick) => Some(ranked(t, c, snapshot)?),
             _ => None,
         };
         columns.push((c, *descending, terms));
@@ -330,7 +330,10 @@ pub(crate) fn first_rows(
             let Some(c) = *c else { continue };
             let (x, y) = (t.row(*a)[c], t.row(*b)[c]);
             let order = match terms {
-                Some(terms) => Some(spareval::cmp_terms(terms.get(&x), terms.get(&y))),
+                Some(ranks) => {
+                    let rank = |id: TermId| ranks.get(&id).copied().unwrap_or(0);
+                    Some(rank(x).cmp(&rank(y)))
+                }
                 None => sort_order(&mut pick, x, y),
             };
             match order {
@@ -391,8 +394,9 @@ pub(crate) fn first_rows(
     (!failed).then_some(rows)
 }
 
-/// The evaluator's terms of the ids of a column.
-type Terms = HashMap<TermId, spareval::ExpressionTerm>;
+/// The rank of each id of a column in the evaluator's order of terms (unbound is 0, before
+/// all).
+type Ranks = HashMap<TermId, u32>;
 
 /// Whether the values of column `c` of `t` are of one [`sort_class`] (IRIs before literals,
 /// so IRIs mix with one class of literals): then they are ordered on ids.
@@ -412,18 +416,39 @@ fn one_class(t: &Table, c: usize, pick: &crate::idtree::Pick) -> bool {
     true
 }
 
-/// The distinct values of column `c` of `t` as the evaluator's terms. `None` when one can't
-/// be decoded.
-fn decoded(t: &Table, c: usize, snapshot: &Snapshot) -> Option<Terms> {
-    let mut terms = HashMap::new();
+/// The distinct values of column `c` of `t` ranked in the evaluator's order of terms
+/// (`cmp_terms`), each decoded once. `None` when one can't be decoded, or two are different
+/// terms the evaluator orders as equal.
+fn ranked(t: &Table, c: usize, snapshot: &Snapshot) -> Option<Ranks> {
+    let mut ids = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for r in 0..t.len() {
         let id = t.row(r)[c];
-        if id == TermId(0) || terms.contains_key(&id) {
-            continue;
+        if id != TermId(0) && seen.insert(id) {
+            ids.push(id);
         }
-        terms.insert(id, spareval::ExpressionTerm::from(snapshot.term(id).ok()?));
     }
-    Some(terms)
+    drop(seen);
+    let mut terms = Vec::with_capacity(ids.len());
+    for id in ids {
+        terms.push((id, spareval::ExpressionTerm::from(snapshot.term(id).ok()?)));
+    }
+    terms.sort_by(|(_, a), (_, b)| spareval::cmp_terms(Some(a), Some(b)));
+    // Two different terms the evaluator orders as equal (`"…Z"` and `"…+00:00"`) come in the
+    // order its sort leaves them, which the ids can't tell: those are its to order.
+    if terms
+        .windows(2)
+        .any(|w| spareval::cmp_terms(Some(&w[0].1), Some(&w[1].1)).is_eq())
+    {
+        return None;
+    }
+    Some(
+        terms
+            .iter()
+            .zip(1..)
+            .map(|((id, _), rank)| (*id, rank))
+            .collect(),
+    )
 }
 
 /// The class of values `id` is sorted with: [`crate::idtree::Pick::order_class`], and the

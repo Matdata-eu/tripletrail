@@ -135,16 +135,12 @@ fn select(pattern: &GraphPattern, eval: &Eval, top: bool) -> Option<Selected> {
     let t = eval.eval(&body)?;
     let rows: Vec<usize> = match order {
         Some(_) => {
-            // All the rows in order: only the slice is kept below, after DISTINCT. A computed
-            // key the ids don't order (a double made up for the query) leaves it to the
-            // evaluator.
-            let keep = if distinct {
-                t.len()
-            } else {
-                length.map_or(t.len(), |l| start.saturating_add(l).min(t.len()))
-            };
+            // The rows the slice keeps in order (under DISTINCT, the first row of each
+            // combination of the projected variables); the slice itself is taken below.
+            let keep = length.map_or(t.len(), |l| start.saturating_add(l).min(t.len()));
             let by = by.iter().map(|(v, d)| (v, *d)).collect();
-            crate::rows::first_rows(&t, by, None, keep, eval.snapshot)?
+            let kept = distinct.then_some(variables.as_slice());
+            crate::rows::first_rows(&t, by, kept, keep, eval.snapshot)?
         }
         None => (0..t.len()).collect(),
     };
