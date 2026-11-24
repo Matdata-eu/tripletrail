@@ -2890,3 +2890,41 @@ fn strings_past_the_pair_trial_are_the_evaluators() {
         assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
     }
 }
+
+/// An `IF` or `COALESCE` whose parts the term kernels don't all decide themselves (a
+/// condition on a language, a string comparison) is computed on ids with the evaluator's
+/// own code (#11), with its answers.
+#[test]
+fn if_and_coalesce_of_any_values_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, data().as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    for e in [
+        "IF(LANG(?l) = \"en\", true, false)",
+        "IF(LANGMATCHES(LANG(?l), \"en\"), ?l, STR(?s))",
+        "IF(?l = \"plain3\", 1, 0)",
+        "IF(STR(?l) < \"l5\", ?s, ?l)",
+        "COALESCE(IF(LANG(?l) = \"nl\", ?l, 1/0), \"none\")",
+        "COALESCE()",
+        "IF(LANG(?l) = \"en\", 3.0e0, \"a\")",
+        "COALESCE(IF(LANG(?l) = \"fr\", 1/0, ?l), xsd:double(\"2.50\"))",
+        "IF(1/0, false, true)",
+    ] {
+        let q = format!("SELECT ?s ?v WHERE {{ ?s ex:label ?l BIND({e} AS ?v) }}");
+        let evaluator = rows(
+            &engine,
+            &format!("#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n{prefix} {q}"),
+        );
+        for pragma in ["#pragma tt.executor ids\n", ""] {
+            assert_eq!(
+                rows(&engine, &format!("{pragma}{prefix} {q}")),
+                evaluator,
+                "{pragma}{q}"
+            );
+        }
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+    }
+}

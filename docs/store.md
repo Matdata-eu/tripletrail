@@ -309,9 +309,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   but a string literal; 133k orders under `--executor ids`, grouped by such a test of the
   customer's name 24 instead of 140 ms). Any other `BIND` expression of the values alone
   (`TZ`, `TIMEZONE`, date-time and duration arithmetic, `IN`, `sameTerm`, `LANGMATCHES`, the
-  duration casts, and a number the value kernels give up on, such as the double `?a / ?q`) is
-  computed with the evaluator's own expression code (`spareval::expression_kernel`), each
-  distinct pair of the ids it reads once, so it gives the evaluator's terms. What depends on
+  duration casts, a number the value kernels give up on, such as the double `?a / ?q`, and an
+  `IF` or `COALESCE` with a part the term kernels don't decide, such as `IF(LANG(?l) = "en",
+  …)` or a comparison of strings) is computed with the evaluator's own expression code
+  (`spareval::expression_kernel`), each distinct pair of the ids it reads once, so it gives
+  the evaluator's terms (133k orders: `IF(LANG(?l) = "", ?l, "x")` 103 → 43 ms, a
+  `COALESCE` over an `IF` on `STRENDS` 262 → 94 ms). What depends on
   more than the values is left to the evaluator: `NOW`, `RAND`, `UUID`, `STRUUID`, `BNODE`,
   `IRI` (a base may resolve it), `EXISTS` and custom functions (TripleTrail's call their
   arguments as written). 133k orders under `--executor ids`: `TZ(?placedAt)` 53 instead of
