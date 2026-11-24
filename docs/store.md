@@ -77,10 +77,16 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   pattern of an `EXISTS` may hold `FILTER`s and nested `EXISTS` too, when every value they
   read that the row binds is also bound by the pattern itself (for a filter inside an inner
   `{ }` group, by that group): the evaluator substitutes the
-  row's values, which then gives the same rows as the join. A filter reading a value only the
-  row gives (`EXISTS { ?s ex:label ?l FILTER(?w = "x") }`) is left to the evaluator (#11;
-  133k orders, a count with `EXISTS { ?o ex:label ?l FILTER(?l = "item 5") }` 141 → 8 ms,
-  a `NOT EXISTS` over a join with `STRSTARTS` 343 → 31 ms). A shared
+  row's values, which then gives the same rows as the join (#11; 133k orders, a count with
+  `EXISTS { ?o ex:label ?l FILTER(?l = "item 5") }` 141 → 8 ms, a `NOT EXISTS` over a join
+  with `STRSTARTS` 343 → 31 ms). A last `FILTER` of the pattern that reads a value only the
+  row gives (`EXISTS { ?o ex:amount ?a FILTER(?a > ?q) }`) runs on the row's columns joined
+  with the pattern's rows, numbered by row: a row is kept when one of its joined rows passes
+  (or, under `NOT`, none does). A value the row leaves unbound is then unbound for the filter,
+  or bound by the pattern, as substituted. This needs a variable that both bind in every row
+  (133k orders, `EXISTS { ?o ex:totalAmount ?a FILTER(?a > 50 * ?q) }` 198 → 49 ms, its
+  `NOT EXISTS` counted 139 → 23 ms). Other filters reading a value only the row gives are
+  left to the evaluator. A shared
   variable that may be unbound on a side (`VALUES` with `UNDEF`, a value an `OPTIONAL` may not
   give) joins as SPARQL says: rows pair up where it is equal or unbound on one side, the hash
   on the variables both sides always bind and the rest checked per pair; with no such

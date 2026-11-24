@@ -1891,7 +1891,16 @@ impl Eval<'_> {
         // same values. A filter reading a value only the row gives is left to the evaluator.
         // Each filter sees only the rows of its own group, so the check is per filter (#208).
         if !filters_see_their_own(t, p) {
-            return None;
+            // `EXISTS { r FILTER(e) }` where `e` reads a value only the row gives (`?a > ?q`):
+            // `e` on the rows of `t` joined with those of `r`, as the substituted row sees
+            // them (#11).
+            return match p {
+                GraphPattern::Filter { expr, inner } if filters_see_their_own(t, inner) => {
+                    let inner = self.exists_rows(t, inner)?;
+                    self.exists_filtered(t, &inner, expr, keep)
+                }
+                _ => None,
+            };
         }
         let inner = self.exists_rows(t, p)?;
         let keys = shared(t, &inner)?;
@@ -1969,6 +1978,47 @@ impl<'a> Eval<'a> {
         }
         // Not in the order of `l` after all: give up rather than lose rows.
         (next == joined.len()).then_some(out)
+    }
+
+    /// The rows of `t` for which some row of `r` joined with it passes `e` (`keep`), or for
+    /// which none does (`!keep`): `FILTER EXISTS { r FILTER(e) }` and its `NOT`, where `e`
+    /// reads values of `t` too. Joined, `e` sees the row's values and the pattern's, as it
+    /// does when the row is substituted into the pattern; a variable the row leaves unbound
+    /// is the pattern's to bind, or unbound for both.
+    fn exists_filtered(&self, t: &Table, r: &Table, e: &Expression, keep: bool) -> Option<Table> {
+        // Without a key both are bound by, every row would pair with every row of `r`.
+        if !shared(t, r).is_some_and(|keys| !keys.is_empty()) {
+            return None;
+        }
+        let width = t.width();
+        let mut numbered = Table {
+            vars: t.vars.clone(),
+            ids: Vec::with_capacity(t.len() * (width + 1)),
+            maybe: t.maybe.clone(),
+            ones: t.len(),
+        };
+        numbered.vars.push(Variable::new_unchecked(" row"));
+        numbered.maybe.push(false);
+        for i in 0..t.len() {
+            numbered.ids.extend_from_slice(t.row(i));
+            numbered.ids.push(TermId(i as u64 + 1));
+        }
+        let joined = self.filter(e, join(&numbered, r, self.cancelled)?)?;
+        let number = joined.col(&Variable::new_unchecked(" row"))?;
+        let mut passed = vec![false; t.len()];
+        for j in 0..joined.len() {
+            passed[(joined.row(j)[number].0 - 1) as usize] = true;
+        }
+        let mut out = empty_like(t);
+        for (i, passed) in passed.into_iter().enumerate() {
+            if i % 4096 == 0 && (self.cancelled)() {
+                return None;
+            }
+            if passed == keep {
+                out.push(t.row(i));
+            }
+        }
+        Some(out)
     }
 
     /// A variable of `t` or a constant, as a row's id (`None`: unbound).

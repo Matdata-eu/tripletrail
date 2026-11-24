@@ -2482,23 +2482,24 @@ const EXISTS_FILTERS: &[(&str, bool)] = &[
         "?s ex:p ?o FILTER NOT EXISTS { ?s ex:label ?l FILTER NOT EXISTS { ?s ex:r ?b } }",
         true,
     ),
-    // The nested pattern reads `?o`, which only the row binds: substituted, not joined.
+    // The nested pattern reads `?o`, which only the row binds: as a last filter, on the row
+    // joined with the pattern's rows, where `?o` is the row's.
     (
         "?s ex:p ?o FILTER EXISTS { ?s ex:label ?l FILTER EXISTS { ?o ex:q ?v } }",
-        false,
+        true,
     ),
     (
         "?s ex:p ?o FILTER EXISTS { ?o ex:q ?v FILTER NOT EXISTS { ?s ex:r ?b } }",
-        false,
+        true,
     ),
-    // A filter on a value of the row alone.
+    // A last filter on a value of the row alone: on the row joined with the pattern's rows.
     (
         "?s ex:p ?o . ?o ex:q ?w FILTER EXISTS { ?s ex:label ?l FILTER(?w = \"v3\") }",
-        false,
+        true,
     ),
     (
         "?s ex:p ?o FILTER EXISTS { ?s ex:label ?l FILTER(BOUND(?o)) }",
-        false,
+        true,
     ),
     // A filter of an inner group sees that group's rows only: on ids it would not see `?o`.
     (
@@ -2888,5 +2889,76 @@ fn strings_past_the_pair_trial_are_the_evaluators() {
             .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
             .unwrap();
         assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+    }
+}
+
+/// `FILTER EXISTS { … FILTER(e) }` and its `NOT`, where `e` reads a value only the outer row
+/// gives, run on ids (#11): `e` on the outer rows joined with the pattern's, with the
+/// evaluator's answers, also when the outer value may be unbound.
+#[test]
+fn exists_filters_reading_the_outer_row_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..2000 {
+        data.push_str(&format!("ex:o{i} ex:qty {} .\n", i % 97));
+        if i % 3 > 0 {
+            data.push_str(&format!("ex:o{i} ex:amount {} .\n", (i * 7) % 113));
+        }
+        if i % 5 == 0 {
+            data.push_str(&format!("ex:o{i} ex:amount {} .\n", (i * 11) % 89));
+        }
+        if i % 4 == 0 {
+            data.push_str(&format!("ex:o{i} ex:limit {} .\n", i % 50));
+        }
+        data.push_str(&format!("ex:o{i} ex:label \"item {}\" .\n", i % 37));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for (q, on_ids) in [
+        (
+            "SELECT ?o WHERE { ?o ex:qty ?q FILTER EXISTS { ?o ex:amount ?a FILTER(?a > ?q) } }",
+            true,
+        ),
+        (
+            "SELECT ?o WHERE { ?o ex:qty ?q FILTER NOT EXISTS { ?o ex:amount ?a FILTER(?a > ?q) } }",
+            true,
+        ),
+        (
+            "SELECT ?o ?q WHERE { ?o ex:qty ?q FILTER EXISTS { ?o ex:amount ?a FILTER(?a > ?q && ?a < 2 * ?q) } }",
+            true,
+        ),
+        (
+            "SELECT ?o WHERE { ?o ex:qty ?q ; ex:label ?l FILTER EXISTS { ?o ex:amount ?a FILTER(?a = ?q || STRENDS(?l, \"1\")) } }",
+            true,
+        ),
+        // The outer value may be unbound: then the filter sees it unbound.
+        (
+            "SELECT ?o WHERE { ?o ex:qty ?q OPTIONAL { ?o ex:limit ?m } FILTER EXISTS { ?o ex:amount ?a FILTER(!BOUND(?m) || ?a < ?m) } }",
+            true,
+        ),
+        (
+            "SELECT ?o WHERE { ?o ex:qty ?q OPTIONAL { ?o ex:limit ?m } FILTER NOT EXISTS { ?o ex:amount ?a FILTER(?a < ?m) } }",
+            true,
+        ),
+        (
+            "SELECT (COUNT(*) AS ?n) WHERE { ?o ex:qty ?q FILTER NOT EXISTS { ?o ex:amount ?a FILTER(?a <= ?q) } }",
+            true,
+        ),
+    ] {
+        let evaluator = rows(
+            &engine,
+            &format!("#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n{prefix} {q}"),
+        );
+        for pragma in ["#pragma tt.executor ids\n", ""] {
+            assert_eq!(
+                rows(&engine, &format!("{pragma}{prefix} {q}")),
+                evaluator,
+                "{pragma}{q}"
+            );
+        }
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}");
     }
 }
