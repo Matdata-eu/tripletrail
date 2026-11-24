@@ -240,7 +240,9 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   blank nodes, other literals or two kinds of literals (an integer and a double, a string and
   a number, date-times with and without a time zone) is ordered on ids too (#11): its
   distinct terms are decoded and ranked once with the evaluator's own comparison
-  (`spareval::cmp_terms`), and the rows are ordered by those ranks. When two different terms
+  (`spareval::cmp_terms`), and the rows are ordered by those ranks. Terms that are all
+  integers (`xsd:int`, `xsd:long`, `"+7"`) or all decimals are ranked by their values as
+  numbers instead (300 k `xsd:long` values, the ten largest 797 → 86 ms). When two different terms
   of such a column are equal to that comparison (`1` and `1.0`, `Z` and `+00:00`), the
   evaluator's sort decides their order, so the query is left to it, as are order
   expressions other than variables. On 133 k orders, `ORDER BY` of doubles and integers
