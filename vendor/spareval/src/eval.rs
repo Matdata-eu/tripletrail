@@ -3202,8 +3202,9 @@ fn cmp_number_keys((x, ex): (f64, Option<Decimal>), (y, ey): (f64, Option<Decima
     }
 }
 
-/// Comparison for ordering
-fn cmp_terms(a: Option<&ExpressionTerm>, b: Option<&ExpressionTerm>) -> Ordering {
+/// Comparison for ordering. tripletrail (#11): public, so that an `ORDER BY` on ids orders
+/// the terms it can't order on ids as the evaluator does.
+pub fn cmp_terms(a: Option<&ExpressionTerm>, b: Option<&ExpressionTerm>) -> Ordering {
     match (a, b) {
         (Some(a), Some(b)) => {
             match a {

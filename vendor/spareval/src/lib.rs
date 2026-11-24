@@ -21,7 +21,7 @@ pub use crate::kernel::expression_kernel;
 pub use crate::dataset::{ExpressionTerm, InternalQuad, QueryableDataset};
 pub use crate::error::QueryEvaluationError;
 pub use crate::eval::{
-    CancellationToken, cmp_values_as_jena, custom_function_call_cancelled, set_build_memory,
+    CancellationToken, cmp_terms, cmp_values_as_jena, custom_function_call_cancelled, set_build_memory,
     set_lookup_joins,
 };
 use crate::eval::{EvalNodeWithStats, SimpleEvaluator, Timer};

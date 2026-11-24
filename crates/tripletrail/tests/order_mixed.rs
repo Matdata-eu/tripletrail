@@ -113,3 +113,56 @@ fn values_of_every_kind_sort_without_panicking() {
         ["\"1z\"", "\"9\"", "\"abc\""]
     );
 }
+
+/// The ids executor orders a column of mixed kinds, blank nodes and literals of other
+/// datatypes as the evaluator does (#11), with and without a limit, `DISTINCT` and an
+/// offset, instead of leaving the query to the evaluator.
+#[test]
+fn mixed_kinds_are_ordered_on_ids_as_the_evaluator_orders_them() {
+    let e = engine();
+    e.load(
+        RdfFormat::Turtle,
+        b"@prefix ex: <http://example.org/> .\nex:b1 ex:a _:x1 ; ex:b 1 .\nex:b2 ex:a _:x2 ; ex:b \"z\" .\n"
+            .as_slice(),
+    )
+    .unwrap();
+    let rows = |pragma: &str, q: &str| {
+        let q = format!("{pragma}PREFIX ex: <http://example.org/>\n{q}");
+        let QueryResults::Solutions(s) = e.query(&q).unwrap() else {
+            unreachable!("SELECT")
+        };
+        s.map(|row| {
+            let row = row.unwrap();
+            row.iter()
+                .map(|(v, t)| {
+                    // Blank nodes as a kind only: labels are the writer's.
+                    let t = match t {
+                        oxigraph::model::Term::BlankNode(_) => "_:".to_owned(),
+                        t => t.to_string(),
+                    };
+                    format!("{v}={t}")
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+    };
+    for q in [
+        "SELECT ?a ?s WHERE { ?s ex:a ?a } ORDER BY ?a ?s",
+        "SELECT ?a ?s WHERE { ?s ex:a ?a } ORDER BY DESC(?a) ?s LIMIT 40",
+        "SELECT ?a ?b ?s WHERE { ?s ex:a ?a ; ex:b ?b } ORDER BY ?b DESC(?a) ?s LIMIT 100 OFFSET 7",
+        "SELECT DISTINCT ?a WHERE { ?s ex:a ?a } ORDER BY ?a",
+        "SELECT DISTINCT ?b WHERE { ?s ex:b ?b } ORDER BY DESC(?b) LIMIT 9",
+        "SELECT ?a ?s WHERE { ?s ex:a ?a OPTIONAL { ?s ex:c ?c } } ORDER BY ?c ?a ?s LIMIT 30",
+        "SELECT ?x ?s WHERE { { ?s ex:a ?x } UNION { ?s ex:b ?x } } ORDER BY ?x ?s LIMIT 50",
+    ] {
+        let ids = rows("#pragma tt.executor ids\n", q);
+        assert_eq!(ids, rows("#pragma tt.executor spareval\n", q), "{q}");
+        let plan = e
+            .explain(&format!(
+                "#pragma tt.executor ids\nPREFIX ex: <http://example.org/>\n{q}"
+            ))
+            .unwrap();
+        assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+    }
+}
