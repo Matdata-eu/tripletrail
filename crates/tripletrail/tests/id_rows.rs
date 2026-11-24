@@ -2356,6 +2356,20 @@ const EXISTS_FILTERS: &[(&str, bool)] = &[
         "?s ex:p ?o FILTER EXISTS { ?s ex:label ?l FILTER(BOUND(?o)) }",
         false,
     ),
+    // A filter of an inner group sees that group's rows only: on ids it would not see `?o`.
+    (
+        "?s ex:p ?o FILTER EXISTS { { ?s ex:label ?l FILTER(?o != ex:nothing) } ?s ex:p ?o }",
+        false,
+    ),
+    (
+        "?s ex:p ?o FILTER EXISTS { { ?s ex:label ?l FILTER EXISTS { ?o ex:q ?v } } ?s ex:p ?o }",
+        false,
+    ),
+    // Its own group binds `?o`: the same rows joined or substituted.
+    (
+        "?s ex:p ?o FILTER EXISTS { { ?s ex:p ?o FILTER(?o != ex:nothing) } ?s ex:label ?l }",
+        true,
+    ),
     // Not an `EXISTS` shape on ids.
     (
         "?s ex:p ?o FILTER EXISTS { ?o ex:q ?v OPTIONAL { ?s ex:r ?b } FILTER(!BOUND(?b)) }",

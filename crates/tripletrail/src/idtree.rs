@@ -1761,16 +1761,9 @@ impl Eval<'_> {
         // for `FILTER`s and nested `EXISTS` inside (#11), when everything they read that the
         // row binds is bound by the pattern itself: substituted or joined, they then see the
         // same values. A filter reading a value only the row gives is left to the evaluator.
-        if !matches!(p, GraphPattern::Bgp { .. }) {
-            let bound = crate::plan::certain(p);
-            let mut read = std::collections::HashSet::new();
-            filters_read(p, &mut read);
-            if read
-                .iter()
-                .any(|v| t.vars.iter().any(|c| c.as_str() == v) && !bound.contains(v))
-            {
-                return None;
-            }
+        // Each filter sees only the rows of its own group, so the check is per filter (#208).
+        if !filters_see_their_own(t, p) {
+            return None;
         }
         let inner = self.exists_rows(t, p)?;
         let keys = shared(t, &inner)?;
@@ -2235,8 +2228,29 @@ fn exists_shape(p: &GraphPattern) -> bool {
     }
 }
 
-/// The variables the `FILTER`s of `p` read, also in the patterns of `EXISTS` inside them.
-fn filters_read(p: &GraphPattern, out: &mut std::collections::HashSet<String>) {
+/// Whether every `FILTER` of an `EXISTS` pattern ([`exists_shape`]) reads, of the variables
+/// of `t`, only those its own group certainly binds: evaluated on ids a filter sees its group's
+/// rows, substituted it would see the row's values for the others.
+fn filters_see_their_own(t: &Table, p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::Join { left, right } => {
+            filters_see_their_own(t, left) && filters_see_their_own(t, right)
+        }
+        GraphPattern::Filter { expr, inner } => {
+            let bound = crate::plan::certain(inner);
+            let mut read = std::collections::HashSet::new();
+            expression_reads(expr, &mut read);
+            !read
+                .iter()
+                .any(|v| t.vars.iter().any(|c| c.as_str() == v) && !bound.contains(v))
+                && filters_see_their_own(t, inner)
+        }
+        _ => true,
+    }
+}
+
+/// The variables a filter reads, also every variable of the patterns of `EXISTS` inside it.
+fn expression_reads(e: &Expression, out: &mut std::collections::HashSet<String>) {
     fn expression(e: &Expression, out: &mut std::collections::HashSet<String>) {
         match e {
             Expression::Variable(v) | Expression::Bound(v) => {
@@ -2303,17 +2317,7 @@ fn filters_read(p: &GraphPattern, out: &mut std::collections::HashSet<String>) {
             _ => {}
         }
     }
-    match p {
-        GraphPattern::Join { left, right } => {
-            filters_read(left, out);
-            filters_read(right, out);
-        }
-        GraphPattern::Filter { expr, inner } => {
-            expression(expr, out);
-            filters_read(inner, out);
-        }
-        _ => {}
-    }
+    expression(e, out);
 }
 
 fn has_exists(e: &Expression) -> bool {
