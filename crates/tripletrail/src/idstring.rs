@@ -639,6 +639,33 @@ pub(crate) fn evaluator_kernel<'k>(
     t: &Table,
     snapshot: &'k Snapshot,
 ) -> Option<TermKernel<'k>> {
+    let (variables, tuple) = evaluated_inputs(e, t)?;
+    let kernel = spareval::expression_kernel(snapshot, e, &variables)?;
+    Some(Box::new(move |row| Some(kernel(&tuple(row)?).ok_or(()))))
+}
+
+/// The effective boolean value of `e` ([`evaluated`]) with the evaluator's own code, as a
+/// `FILTER` reads it: `Some(None)` an error, `None` when the ids don't decide it.
+pub(crate) fn evaluator_condition<'k>(
+    e: &Expression,
+    t: &Table,
+    snapshot: &'k Snapshot,
+) -> Option<crate::idtree::Kernel<'k>> {
+    let (variables, tuple) = evaluated_inputs(e, t)?;
+    let kernel = spareval::condition_kernel(snapshot, e, &variables)?;
+    Some(Box::new(move |row| Some(kernel(&tuple(row)?))))
+}
+
+/// The variables `e` ([`evaluated`]) reads, and the tuple of their ids in a row of `t`
+/// (`None` unbound); no tuple for a row holding ids the query only knows as rows of a table.
+#[expect(clippy::type_complexity)]
+fn evaluated_inputs(
+    e: &Expression,
+    t: &Table,
+) -> Option<(
+    Vec<spargebra::term::Variable>,
+    impl Fn(&[TermId]) -> Option<Vec<Option<TermId>>> + use<>,
+)> {
     if !evaluated(e) {
         return None;
     }
@@ -651,24 +678,18 @@ pub(crate) fn evaluator_kernel<'k>(
         .map(spargebra::term::Variable::new_unchecked)
         .collect();
     let cols: Vec<Option<usize>> = variables.iter().map(|v| t.col(v)).collect();
-    let kernel = spareval::expression_kernel(snapshot, e, &variables)?;
-    Some(Box::new(move |row| {
-        let ids: Vec<TermId> = cols
-            .iter()
-            .map(|c| c.map_or(TermId(0), |c| row[c]))
-            .collect();
-        if ids
-            .iter()
-            .any(|id| matches!(id.kind(), Kind::Row | Kind::Column | Kind::DefaultGraph))
-        {
-            return None;
-        }
-        let tuple: Vec<Option<TermId>> = ids
-            .iter()
-            .map(|id| (*id != TermId(0)).then_some(*id))
-            .collect();
-        Some(kernel(&tuple).ok_or(()))
-    }))
+    let tuple = move |row: &[TermId]| {
+        cols.iter()
+            .map(|c| {
+                let id = c.map_or(TermId(0), |c| row[c]);
+                if matches!(id.kind(), Kind::Row | Kind::Column | Kind::DefaultGraph) {
+                    return None;
+                }
+                Some((id != TermId(0)).then_some(id))
+            })
+            .collect::<Option<Vec<_>>>()
+    };
+    Some((variables, tuple))
 }
 
 /// A constant string argument: `Some(None)` when there is none, `None` when it isn't one.

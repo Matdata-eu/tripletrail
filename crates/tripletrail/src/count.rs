@@ -458,6 +458,48 @@ fn tag_classes(snapshot: &Snapshot, t: &mut crate::idtree::Table, v: &Variable) 
     Some(())
 }
 
+/// Whether an aggregate is `COUNT(DISTINCT *)`.
+fn distinct_star(aggregates: &[(Variable, AggregateExpression)]) -> bool {
+    aggregates
+        .iter()
+        .any(|(_, a)| matches!(a, AggregateExpression::CountSolutions { distinct: true }))
+}
+
+/// Whether `p` has a blank node a solution binds (a hidden variable): in a triple pattern or
+/// a path, outside `EXISTS`. Any other pattern is taken to have one.
+fn has_blank(p: &GraphPattern) -> bool {
+    use GraphPattern as G;
+    let blank = |t: &TermPattern| {
+        !matches!(
+            t,
+            TermPattern::Variable(_) | TermPattern::NamedNode(_) | TermPattern::Literal(_)
+        )
+    };
+    match p {
+        G::Bgp { patterns } => patterns
+            .iter()
+            .any(|t| blank(&t.subject) || blank(&t.object)),
+        G::Path {
+            subject, object, ..
+        } => blank(subject) || blank(object),
+        G::Join { left, right }
+        | G::LeftJoin { left, right, .. }
+        | G::Lateral { left, right }
+        | G::Union { left, right }
+        | G::Minus { left, right } => has_blank(left) || has_blank(right),
+        G::Filter { inner, .. }
+        | G::Graph { inner, .. }
+        | G::Extend { inner, .. }
+        | G::OrderBy { inner, .. }
+        | G::Distinct { inner }
+        | G::Reduced { inner }
+        | G::Slice { inner, .. } => has_blank(inner),
+        // A sub-select's own blank nodes are projected away.
+        G::Project { .. } | G::Group { .. } | G::Values { .. } => false,
+        G::Service { .. } => true,
+    }
+}
+
 /// Each aggregate as (counted variable, distinct), if all are `COUNT(*)` or `COUNT(?v)`.
 fn count_aggregates(
     aggregates: &[(Variable, AggregateExpression)],
@@ -1529,6 +1571,11 @@ impl Pass<'_> {
         top: Option<&Top>,
     ) -> Option<GraphPattern> {
         let aggs = id_aggregates(aggregates)?;
+        // `COUNT(DISTINCT *)` tells solutions apart by the blank nodes of the pattern too, which
+        // the id tables don't keep as columns.
+        if distinct_star(aggregates) && has_blank(inner) {
+            return None;
+        }
         let counts_only = aggs.iter().all(|a| matches!(a, Agg::Count(..)));
         let wanted: Vec<(Option<&Variable>, bool)> = aggs
             .iter()
@@ -2015,6 +2062,9 @@ impl Pass<'_> {
             return None;
         }
         let wanted = count_aggregates(aggregates)?;
+        if distinct_star(aggregates) && has_blank(inner) {
+            return None;
+        }
         let eval = crate::idtree::Eval {
             snapshot: self.snapshot,
             cancelled: self.cancelled,
