@@ -4,17 +4,17 @@ Thank you for your interest in TripleTrail. Bug reports, questions and ideas are
 GitHub issues.
 Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
-## Contributor License Agreement
+## Licensing of contributions
 
 TripleTrail is developed by Matdata as open core: this repository is open source under the
 Apache License 2.0 (see [LICENSE](LICENSE)), and Matdata offers commercial editions and
-support on top of it. To keep that possible, every code contribution needs a signed
-Contributor License Agreement (CLA) before it can be merged. The CLA lets Matdata license
-your contribution under the Apache License 2.0 and under its commercial licenses; you keep
-the copyright in your work.
+support on top of it. There is no Contributor License Agreement to sign. As section 5 of the
+Apache License 2.0 says, a contribution you submit for inclusion is licensed under the Apache
+License 2.0, the same licence the project uses, and you keep the copyright in your work.
+Only submit work you have the right to license this way.
 
-The CLA is not published yet. Until it is, we can't accept pull requests from outside
-Matdata. Please open an issue instead, and we'll pick it up.
+Pull requests are welcome. For a larger change, open an issue first so we can agree on the
+approach; to work on an open issue, say so in a comment on it.
 
 ## Pull requests
 
