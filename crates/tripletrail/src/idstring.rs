@@ -107,6 +107,8 @@ fn cast(f: NamedNodeRef<'_>) -> bool {
         xsd::FLOAT,
         xsd::INTEGER,
         xsd::DATE_TIME,
+        xsd::DATE,
+        xsd::TIME,
     ]
     .contains(&f)
 }

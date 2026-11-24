@@ -2637,7 +2637,8 @@ fn double_text(t: &ExpressionTerm) -> Option<String> {
 
 /// tripletrail: a cast of an argument as written (as a variable gives it, see
 /// `ExpressionTerm::from_literal_as_written`) to `xsd:string`, `xsd:boolean`, `xsd:double`,
-/// `xsd:float`, `xsd:integer`, `xsd:decimal` or `xsd:dateTime`, as the evaluator computes it.
+/// `xsd:float`, `xsd:integer`, `xsd:decimal`, `xsd:dateTime`, `xsd:date` or `xsd:time`, as the
+/// evaluator computes it.
 /// `None` for an error, and for another name.
 pub fn cast(name: NamedNodeRef<'_>, t: ExpressionTerm) -> Option<ExpressionTerm> {
     if name == xsd::DOUBLE {
@@ -2728,6 +2729,20 @@ fn cast_value(name: NamedNodeRef<'_>, t: ExpressionTerm) -> Option<ExpressionTer
             ExpressionTerm::DateTimeLiteral(value) => value,
             #[cfg(feature = "sep-0002")]
             ExpressionTerm::DateLiteral(value) => value.try_into().ok()?,
+            ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
+            _ => return None,
+        }),
+        #[cfg(feature = "sep-0002")]
+        xsd::DATE => ExpressionTerm::DateLiteral(match t {
+            ExpressionTerm::DateLiteral(value) => value,
+            ExpressionTerm::DateTimeLiteral(value) => value.try_into().ok()?,
+            ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
+            _ => return None,
+        }),
+        #[cfg(feature = "sep-0002")]
+        xsd::TIME => ExpressionTerm::TimeLiteral(match t {
+            ExpressionTerm::TimeLiteral(value) => value,
+            ExpressionTerm::DateTimeLiteral(value) => value.into(),
             ExpressionTerm::StringLiteral(value) => value.parse().ok()?,
             _ => return None,
         }),
