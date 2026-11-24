@@ -23,8 +23,11 @@ fn count(e: &Engine, query: &str, var: &str) -> usize {
     n.split('"').nth(1).unwrap().parse().unwrap()
 }
 
+/// The evaluator's plan, whichever executor is the default (the id executor may answer the
+/// whole query, #11).
 fn plan(e: &Engine, query: &str) -> String {
-    e.explain(&format!("{PREFIXES}{query}")).unwrap()
+    e.explain(&format!("#pragma tt.executor spareval\n{PREFIXES}{query}"))
+        .unwrap()
 }
 
 fn load(data: &str) -> Engine {

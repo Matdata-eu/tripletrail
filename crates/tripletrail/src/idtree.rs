@@ -2282,6 +2282,11 @@ pub(crate) fn is_numeric_datatype(d: oxigraph::model::NamedNodeRef<'_>) -> bool 
 /// `x = y` on two bound ids: `Some(Some(b))` a value, `Some(None)` an error, `None` when the
 /// ids don't decide it.
 fn equal_ids(x: TermId, y: TermId) -> Option<Option<bool>> {
+    // An IRI the store doesn't hold equals no term it holds; two of them, the ids don't tell
+    // apart. (Its id is no kind of term: never read as one.)
+    if x == ABSENT || y == ABSENT {
+        return (x != y).then_some(Some(false));
+    }
     if x == y {
         return Some(Some(true));
     }

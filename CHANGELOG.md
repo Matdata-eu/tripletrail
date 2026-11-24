@@ -43,6 +43,8 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- `COUNT(DISTINCT *)` over a pattern with a blank node and a filter counted the solutions on term ids without the blank node's values, which the evaluator tells them apart by (3,000 instead of 15,000 in the test). Such a count is now left to the evaluator.
+- A filter comparing a literal with an IRI the store doesn't hold read the IRI's placeholder id as a date-time on term ids (a panic in debug builds). It is now unequal to every term the store holds.
 - A term that another writer commits while a query runs on term ids (#11) now gets one id in that query, whichever thread meets it first. It could get two before, so `DISTINCT` and joins on a value the query computes could see two terms.
 - A negated property set between two bound ends (`?s ex:a ?o . ?s !ex:name ?o`, or two constants) gave one row in the evaluator however many triples join the pair, but one row per triple when an end is open, so the count depended on the join order. It now gives one row per matching triple in every case, as Jena does, and the id executor agrees. The id executor also no longer reads a query variable named `?__negated_p` as its own (#11).
 - Under `--executor ids`, `<p>*` with an end bound by another pattern (`VALUES`, a `GRAPH` block) matched a term with itself even when the term is no node of the graph read (it occurs only in another graph, or only as a predicate). The evaluator gives no row there, and now neither does the id executor (#11).

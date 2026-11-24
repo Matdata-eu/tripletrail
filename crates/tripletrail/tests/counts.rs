@@ -1278,3 +1278,32 @@ fn union_counts_by_the_other_sides_keys_match_oxigraph() {
     }
     check("after writes");
 }
+
+/// `COUNT(DISTINCT *)` tells solutions apart by the blank nodes of the pattern too (hidden
+/// variables), as the evaluator does, also under a filter the id tables decide, ungrouped and
+/// per group.
+#[test]
+fn distinct_solutions_count_the_blank_nodes() {
+    let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..3000 {
+        ttl.push_str(&format!("ex:a{i} ex:pub ex:p{} .\n", i % 37));
+        if i % 7 == 0 {
+            ttl.push_str(&format!("ex:p{} ex:loc _:l{} .\n", i % 37, i % 5));
+        }
+    }
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    for f in ["", "FILTER(true)", "FILTER(BOUND(?s))", "FILTER(isIRI(?s))"] {
+        for q in [
+            format!(
+                "PREFIX ex: <http://example.org/> SELECT (COUNT(DISTINCT *) AS ?n) WHERE {{ ?s ex:pub ?p . ?p ex:loc _:b {f} }}"
+            ),
+            format!(
+                "PREFIX ex: <http://example.org/> SELECT ?p (COUNT(DISTINCT *) AS ?n) WHERE {{ ?s ex:pub ?p . ?p ex:loc _:b {f} }} GROUP BY ?p"
+            ),
+        ] {
+            let alone = format!("#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n{q}");
+            assert_eq!(values(&engine, &q), values(&engine, &alone), "{q}");
+        }
+    }
+}
