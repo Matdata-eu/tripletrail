@@ -690,11 +690,33 @@ fn branch_variables<'e>(e: &'e Expression, out: &mut Vec<&'e spargebra::term::Va
     }
 }
 
+/// Whether a branch of `e` that is a variable holds, in a row of `t`, a term whose text may not
+/// be canonical (a double or decimal as loaded, another typed literal, a term made up for the
+/// query): then the kernels' value is not that term. Read once for all the chunks of `t`.
+pub(crate) fn written_branches(e: &Expression, t: &Table) -> bool {
+    if !branches(e) {
+        return false;
+    }
+    let mut names = Vec::new();
+    branch_variables(e, &mut names);
+    names.iter().filter_map(|v| t.col(v)).any(|c| {
+        (0..t.len()).any(|r| {
+            matches!(
+                t.row(r)[c].kind(),
+                Kind::Typed | Kind::Double | Kind::Decimal | Kind::Ephemeral
+            )
+        })
+    })
+}
+
 /// The [`IdKernel`] of `e`, when `e` is such an `IF` or `COALESCE`.
+/// `written` ([`written_branches`]): whether a branch may give back a term as written that
+/// the kernels would compute as a value.
 pub(crate) fn id_kernel<'k>(
     e: &Expression,
     t: &Table,
     snapshot: &'k Snapshot,
+    written: bool,
 ) -> Option<IdKernel<'k>> {
     if !branches(e) {
         return None;
@@ -703,19 +725,7 @@ pub(crate) fn id_kernel<'k>(
     if let Some(kernel) = spareval::internal_kernel(snapshot, e, &variables) {
         return Some(Box::new(move |row| Some(kernel(&tuple(row)?))));
     }
-    // A branch computed: the branch picked, a variable as written (#11). Only when a branch
-    // that is a variable holds a term whose text may not be canonical (a double or decimal
-    // as loaded, another typed literal); else the kernels' value is that term.
-    let mut names = Vec::new();
-    branch_variables(e, &mut names);
-    let written = names.iter().filter_map(|v| t.col(v)).any(|c| {
-        (0..t.len()).any(|r| {
-            matches!(
-                t.row(r)[c].kind(),
-                Kind::Typed | Kind::Double | Kind::Decimal | Kind::Ephemeral
-            )
-        })
-    });
+    // A branch computed: the branch picked, a variable as written (#11), when `written`.
     if !written {
         return None;
     }

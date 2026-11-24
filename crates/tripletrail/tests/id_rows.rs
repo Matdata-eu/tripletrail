@@ -3190,3 +3190,43 @@ ex:c ex:f "1e2"^^xsd:double ; ex:i 12 ; ex:ok true .
         }
     }
 }
+
+/// Groups ordered by a sum or an average of doubles (terms the query makes up) are ordered on
+/// ids by value, as the evaluator orders them (#11); equal sums are the evaluator's to order.
+/// The sums are exact, rounded once, under both executors.
+#[test]
+fn orders_of_sums_of_doubles_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..3000 {
+        data.push_str(&format!(
+            "ex:o{i} ex:by ex:c{} ; ex:amount \"{}.{}\"^^<http://www.w3.org/2001/XMLSchema#double> ; ex:w {}e0 .\n",
+            i % 211,
+            (i * 37) % 1000,
+            i % 7,
+            (i % 5) as f64 - 2.0
+        ));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for q in [
+        "SELECT ?c (SUM(?a) AS ?s) WHERE { ?o ex:by ?c ; ex:amount ?a } GROUP BY ?c ORDER BY DESC(?s) LIMIT 10",
+        "SELECT ?c (AVG(?a) AS ?s) WHERE { ?o ex:by ?c ; ex:amount ?a } GROUP BY ?c ORDER BY ?s ?c",
+        "SELECT ?c (SUM(?a) AS ?s) WHERE { ?o ex:by ?c ; ex:amount ?a } GROUP BY ?c ORDER BY ?s OFFSET 5 LIMIT 20",
+        // Many equal sums (0, -0, 1, ...): their order is the evaluator's.
+        "SELECT ?c (SUM(?w) AS ?s) WHERE { ?o ex:by ?c ; ex:w ?w } GROUP BY ?c ORDER BY DESC(?s) ?c LIMIT 30",
+    ] {
+        let evaluator = ordered(
+            &engine,
+            // Its rewrites on: sums of doubles exact, rounded once, as on ids.
+            &format!("#pragma tt.executor spareval\n{prefix} {q}"),
+        );
+        for pragma in ["#pragma tt.executor ids\n", ""] {
+            assert_eq!(
+                ordered(&engine, &format!("{pragma}{prefix} {q}")),
+                evaluator,
+                "{pragma}{q}"
+            );
+        }
+    }
+}

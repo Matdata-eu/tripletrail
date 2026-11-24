@@ -488,9 +488,10 @@ impl Eval<'_> {
         let rows = t.len();
         // An `IF` or `COALESCE`: the term it gives back, as the evaluator holds it (a number
         // keeps its text), on several cores from 8,192 rows, each chunk with its own kernel.
-        if crate::idstring::id_kernel(e, t, self.snapshot).is_some() {
+        let written = crate::idstring::written_branches(e, t);
+        if crate::idstring::id_kernel(e, t, self.snapshot, written).is_some() {
             let parts = tripletrail_store::par::chunks_sized(rows, 8_192, 2_048, |range| {
-                let kernel = crate::idstring::id_kernel(e, t, self.snapshot)?;
+                let kernel = crate::idstring::id_kernel(e, t, self.snapshot, written)?;
                 let mut ids = Vec::with_capacity(range.len());
                 for (n, r) in range.enumerate() {
                     if n % 4096 == 0 && (self.cancelled)() {

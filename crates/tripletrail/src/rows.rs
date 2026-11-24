@@ -433,6 +433,32 @@ fn ranked(t: &Table, c: usize, snapshot: &Snapshot) -> Option<Ranks> {
     for id in ids {
         terms.push((id, spareval::ExpressionTerm::from(snapshot.term(id).ok()?)));
     }
+    // All doubles but NaN (sums and averages of doubles made up for the query): the
+    // evaluator orders them by value, compared here as numbers.
+    let doubles: Option<Vec<f64>> = terms
+        .iter()
+        .map(|(_, t)| match t {
+            spareval::ExpressionTerm::DoubleLiteral(d) => {
+                Some(f64::from(*d)).filter(|d| !d.is_nan())
+            }
+            _ => None,
+        })
+        .collect();
+    if let Some(values) = doubles {
+        let mut order: Vec<usize> = (0..terms.len()).collect();
+        order.sort_unstable_by(|&a, &b| values[a].total_cmp(&values[b]));
+        // Equal values (`0` and `-0`, the same value written differently): the evaluator's.
+        if order.windows(2).any(|w| values[w[0]] == values[w[1]]) {
+            return None;
+        }
+        return Some(
+            order
+                .iter()
+                .zip(1..)
+                .map(|(&i, rank)| (terms[i].0, rank))
+                .collect(),
+        );
+    }
     terms.sort_by(|(_, a), (_, b)| spareval::cmp_terms(Some(a), Some(b)));
     // Two different terms the evaluator orders as equal (`"…Z"` and `"…+00:00"`) come in the
     // order its sort leaves them, which the ids can't tell: those are its to order.
