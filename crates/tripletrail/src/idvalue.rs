@@ -105,7 +105,7 @@ pub(crate) fn compile_output<'k>(
     match e {
         Expression::FunctionCall(Function::Custom(f), args) if f.as_ref() == xsd::DECIMAL => {
             let [a] = args.as_slice() else { return None };
-            let a = compile(a, t, snapshot)?;
+            let a = cast_argument(a, t, snapshot)?;
             Some(Box::new(move |row| match a(row)? {
                 Ok(x) => {
                     let form = match x {
@@ -275,7 +275,7 @@ pub(crate) fn compile<'k>(
         {
             let [a] = args.as_slice() else { return None };
             let to_integer = f.as_ref() == xsd::INTEGER;
-            let a = compile(a, t, snapshot)?;
+            let a = cast_argument(a, t, snapshot)?;
             Box::new(move |row| match a(row)? {
                 Ok(x) => cast(to_integer, x).map(Ok),
                 Err(()) => Some(Err(())),
@@ -481,20 +481,57 @@ fn string_of<T>(snapshot: &Snapshot, id: TermId, f: impl Fn(&str) -> T) -> Optio
     }
 }
 
-/// The value of a stored term: [`of_id`], or an `xsd:double` of the dictionary, written in a
-/// form the id doesn't hold (`1.5e0`, `1E3`), read from its key as the evaluator parses it.
-/// Not finite (`INF`, `NaN`) or not valid: `None`.
+/// The value of a stored term: [`of_id`], or a number of the dictionary, read from its key as
+/// the evaluator parses it: an `xsd:double` in a form the id doesn't hold (`1.5e0`, `1E3`), an
+/// `xsd:integer` or a type derived from it (`"+7"`, `"007"`, `"5"^^xsd:int`, `xsd:long`), and
+/// an `xsd:decimal` in a form the id doesn't hold (`"+1.5"`, `".5"`). A double that is not
+/// finite (`INF`, `NaN`), a number that is not valid or out of range, or any other datatype
+/// (`xsd:float`): `None`.
 pub(crate) fn of_stored(snapshot: &Snapshot, id: TermId) -> Option<Value> {
     if id.kind() != Kind::Typed {
         return of_id(id);
     }
     let reader = snapshot.reader();
     let (datatype, value) = reader.typed_value(id)?;
-    if datatype != xsd::DOUBLE.as_str() {
-        return None;
+    let local = datatype.strip_prefix("http://www.w3.org/2001/XMLSchema#")?;
+    match local {
+        "double" => {
+            let v = f64::from(value.parse::<oxsdatatypes::Double>().ok()?);
+            v.is_finite().then_some(Value::Double(v))
+        }
+        // The evaluator's integers: these datatypes, as `xsd:integer` (#11).
+        "integer" | "byte" | "short" | "int" | "long" | "unsignedByte" | "unsignedShort"
+        | "unsignedInt" | "unsignedLong" | "positiveInteger" | "negativeInteger"
+        | "nonPositiveInteger" | "nonNegativeInteger" => value
+            .parse::<oxsdatatypes::Integer>()
+            .ok()
+            .map(|i| Value::Integer(i64::from(i))),
+        // More than 18 fraction digits are rounded by the evaluator: left to it.
+        "decimal" => {
+            let v: oxsdatatypes::Decimal = value.parse().ok()?;
+            Some(Value::Decimal(i128::from_be_bytes(v.to_be_bytes())))
+        }
+        _ => None,
     }
-    let v = f64::from(value.parse::<oxsdatatypes::Double>().ok()?);
-    v.is_finite().then_some(Value::Double(v))
+}
+
+/// The argument of a cast. A cast of a stored term reads its text (`xsd:decimal("+7")` is
+/// `"+7"^^xsd:decimal`, a cast of an `xsd:int` is an error), so a variable is read from the
+/// ids alone: a number of the dictionary gives up.
+fn cast_argument<'k>(a: &Expression, t: &Table, snapshot: &'k Snapshot) -> Option<ValueKernel<'k>> {
+    let Expression::Variable(v) = a else {
+        return compile(a, t, snapshot);
+    };
+    Some(match t.col(v) {
+        Some(c) => Box::new(move |row| {
+            let id = row[c];
+            if id == TermId(0) {
+                return Some(Err(()));
+            }
+            of_id(id).map(Ok)
+        }),
+        None => Box::new(|_| Some(Err(()))),
+    })
 }
 
 fn column<'k>(t: &Table, v: &Variable, snapshot: &'k Snapshot) -> ValueKernel<'k> {
