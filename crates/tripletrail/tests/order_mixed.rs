@@ -113,3 +113,83 @@ fn values_of_every_kind_sort_without_panicking() {
         ["\"1z\"", "\"9\"", "\"abc\""]
     );
 }
+
+/// The ids executor orders a column of mixed kinds, blank nodes and literals of other
+/// datatypes as the evaluator does (#11), with and without a limit, `DISTINCT` and an
+/// offset, instead of leaving the query to the evaluator.
+#[test]
+fn mixed_kinds_are_ordered_on_ids_as_the_evaluator_orders_them() {
+    // Every value but those equal by value to another (`1`, `"1"^^xsd:long`, `1.0`, `1e0`):
+    // the evaluator orders those in the order its sort leaves them, and they stay its to
+    // order (checked by `ties_are_the_evaluators` below).
+    let values: Vec<&str> = VALUES
+        .iter()
+        .copied()
+        .filter(|v| !v.contains("xsd:long") && !v.contains("1.0") && !v.contains("1e0"))
+        .collect();
+    let mut ttl = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    let mut i = 0;
+    for a in &values {
+        for b in &values {
+            ttl.push_str(&format!("ex:s{i} ex:a {a} ; ex:b {b} .\n"));
+            i += 1;
+        }
+    }
+    ttl.push_str("ex:b1 ex:a _:x1 ; ex:b 1 .\nex:b2 ex:a _:x2 ; ex:b \"z\" .\n");
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    check(&e, true);
+}
+
+/// Values equal by value but written differently (`1` and `1.0`) are ordered by the
+/// evaluator, with the same answers.
+#[test]
+fn ties_are_the_evaluators() {
+    check(&engine(), false);
+}
+
+/// The queries of an order on `e` give the evaluator's rows under the ids executor, on ids
+/// when `on_ids`.
+fn check(e: &Engine, on_ids: bool) {
+    let rows = |pragma: &str, q: &str| {
+        let q = format!("{pragma}PREFIX ex: <http://example.org/>\n{q}");
+        let QueryResults::Solutions(s) = e.query(&q).unwrap() else {
+            unreachable!("SELECT")
+        };
+        s.map(|row| {
+            let row = row.unwrap();
+            row.iter()
+                .map(|(v, t)| {
+                    // Blank nodes as a kind only: labels are the writer's.
+                    let t = match t {
+                        oxigraph::model::Term::BlankNode(_) => "_:".to_owned(),
+                        t => t.to_string(),
+                    };
+                    format!("{v}={t}")
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+    };
+    for q in [
+        "SELECT ?a ?s WHERE { ?s ex:a ?a } ORDER BY ?a ?s",
+        "SELECT ?a ?s WHERE { ?s ex:a ?a } ORDER BY DESC(?a) ?s LIMIT 40",
+        "SELECT ?a ?b ?s WHERE { ?s ex:a ?a ; ex:b ?b } ORDER BY ?b DESC(?a) ?s LIMIT 100 OFFSET 7",
+        "SELECT DISTINCT ?a WHERE { ?s ex:a ?a } ORDER BY ?a",
+        "SELECT DISTINCT ?b WHERE { ?s ex:b ?b } ORDER BY DESC(?b) LIMIT 9",
+        "SELECT ?a ?s WHERE { ?s ex:a ?a OPTIONAL { ?s ex:c ?c } } ORDER BY ?c ?a ?s LIMIT 30",
+        "SELECT ?x ?s WHERE { { ?s ex:a ?x } UNION { ?s ex:b ?x } } ORDER BY ?x ?s LIMIT 50",
+    ] {
+        let ids = rows("#pragma tt.executor ids\n", q);
+        assert_eq!(ids, rows("#pragma tt.executor spareval\n", q), "{q}");
+        let plan = e
+            .explain(&format!(
+                "#pragma tt.executor ids\nPREFIX ex: <http://example.org/>\n{q}"
+            ))
+            .unwrap();
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}: {plan}");
+    }
+}

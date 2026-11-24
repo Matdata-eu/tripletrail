@@ -227,9 +227,15 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   (#171), integers and booleans by value, inline doubles, decimals, dates and date-times by
   the order key of their ids (#64), unbound values first, and only the first
   `OFFSET + LIMIT` rows are read back (the evaluator orders those few again). A column with
-  blank nodes, other literals or two kinds of literals (an integer and a double, a date and
-  a date-time, date-times with and without a time zone) is left to the evaluator, as are
-  order expressions other than variables. On 300 k labels, `ORDER BY ?label LIMIT 10`
+  blank nodes, other literals or two kinds of literals (an integer and a double, a string and
+  a number, date-times with and without a time zone) is ordered on ids too (#11): its
+  distinct terms are decoded and ranked once with the evaluator's own comparison
+  (`spareval::cmp_terms`), and the rows are ordered by those ranks. When two different terms
+  of such a column are equal to that comparison (`1` and `1.0`, `Z` and `+00:00`), the
+  evaluator's sort decides their order, so the query is left to it, as are order
+  expressions other than variables. On 133 k orders, `ORDER BY` of doubles and integers
+  together takes 461 ms instead of 1.7 s, and `SELECT DISTINCT ?x` over every object
+  ordered by `?x` with `LIMIT 10` 280 ms instead of 1.9 s. On 300 k labels, `ORDER BY ?label LIMIT 10`
   1.1 s → 11 ms, `SELECT DISTINCT ?t ... ORDER BY ?t LIMIT 10` 1.0 s → 12 ms. The top 50 of
   133 k double amounts 54 → 17 ms, and with a three-pattern join 319 → 34 ms.
 - **Whole queries on term ids.** Under `--executor ids` (#11, `crates/tripletrail/src/direct.rs`)
