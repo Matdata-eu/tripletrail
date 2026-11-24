@@ -149,9 +149,10 @@ fn results_larger_than_an_entry_or_not_read_to_the_end_are_not_kept() {
     assert_eq!(rows(&e, all).1, CacheStatus::Miss);
 
     e.set_result_cache(64 << 20);
-    // Streamed by the evaluator (`TZ` is not computed on ids): the id executor (#11) has the
-    // whole answer at once, which the cache keeps however much of it is read.
-    let all = "SELECT ?s ?o WHERE { ?s <http://example.com/p> ?o BIND(TZ(?o) AS ?t) }";
+    // Streamed by the evaluator (an `EXISTS` in a `BIND` is not computed on ids): the id
+    // executor (#11) has the whole answer at once, which the cache keeps however much of it
+    // is read.
+    let all = "SELECT ?s ?o WHERE { ?s <http://example.com/p> ?o BIND(EXISTS { ?o ?q ?s } AS ?t) }";
     let (r, _) = e
         .query_with_cache_status(all, QueryOptions::default())
         .unwrap();
