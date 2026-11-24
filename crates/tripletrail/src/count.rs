@@ -651,6 +651,10 @@ fn top_order(p: &GraphPattern) -> Option<(Vec<(Variable, bool)>, bool)> {
     (!keys.is_empty()).then_some((keys, complete))
 }
 
+/// The rows a group must have on average for [`Pass::eager_group`] to group first when the
+/// kernels could compute the expressions on every row (#11).
+const EAGER_ROWS_ON_IDS: u64 = 16;
+
 impl Pass<'_> {
     fn walk(&mut self, p: GraphPattern) -> GraphPattern {
         use GraphPattern as G;
@@ -687,9 +691,18 @@ impl Pass<'_> {
                 // the grouped counts below would compute it for every row (#11).
                 let computed = matches!(*inner, G::Extend { .. })
                     || matches!(&*inner, G::Filter { inner, .. } if matches!(**inner, G::Extend { .. }));
+                // When the kernels compute the expressions on ids, a row costs little there:
+                // grouping first pays only with many rows a group (a `DATATYPE` read as a
+                // few classes), not with a `MONTH` of 21,000 distinct dates.
+                let per_group = if crate::direct::covered(&inner) {
+                    EAGER_ROWS_ON_IDS
+                } else {
+                    2
+                };
                 if computed
                     && crate::executor_ids()
-                    && let Some(group) = self.eager_group(&inner, &variables, &aggregates)
+                    && let Some(group) =
+                        self.eager_group(&inner, &variables, &aggregates, per_group)
                 {
                     self.done += 1;
                     return group;
@@ -702,7 +715,7 @@ impl Pass<'_> {
                     self.done += 1;
                     return values;
                 }
-                if let Some(group) = self.eager_group(&inner, &variables, &aggregates) {
+                if let Some(group) = self.eager_group(&inner, &variables, &aggregates, 2) {
                     self.done += 1;
                     return group;
                 }
@@ -876,6 +889,7 @@ impl Pass<'_> {
         inner: &GraphPattern,
         keys: &[Variable],
         aggregates: &[(Variable, AggregateExpression)],
+        per_group: u64,
     ) -> Option<GraphPattern> {
         // `BIND`s and `FILTER`s, outermost first, down to the basic graph pattern.
         let mut chain: Vec<&GraphPattern> = Vec::new();
@@ -1034,14 +1048,17 @@ impl Pass<'_> {
                         table = self.surviving_values(table, values, &used, v, &chain)?;
                     }
                 }
-                crate::idtree::group_counts(&table, &used, &rows, MAX_EAGER_GROUPS)?
+                // No more groups than pay (below): stops as soon as there are more.
+                let cap = (table.len() as u64 / per_group) as usize;
+                crate::idtree::group_counts(&table, &used, &rows, cap.min(MAX_EAGER_GROUPS))?
             }
         };
         // Grouping pays when the expressions then run once per group instead of once per
         // row. With nearly as many groups as rows (a filter on prices), the block of groups
         // costs more than the rows: 300 k distinct decimals took 600 ms instead of 30.
         let total: u64 = groups.iter().map(|(_, counts)| counts[0]).sum();
-        if groups.len() as u64 * 2 > total {
+        // `per_group`: the rows a group must have on average.
+        if groups.len() as u64 * per_group > total {
             return None;
         }
         let count = Variable::new_unchecked("__tripletrail_count");

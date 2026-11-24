@@ -1229,6 +1229,25 @@ const GROUPS: &[(&str, bool)] = &[
         "SELECT ?c (GROUP_CONCAT(?x) AS ?g) WHERE { ?o ex:by ?c ; ex:label ?l OPTIONAL { ?o ex:other ?x } } GROUP BY ?c",
         false,
     ),
+    // With many distinct inputs (3 rows each) and an expression the kernels compute: per row
+    // on ids, the groups counted there.
+    (
+        "SELECT ?k (COUNT(*) AS ?n) WHERE { ?o ex:v ?v BIND(?v / 10 AS ?k) } GROUP BY ?k",
+        true,
+    ),
+    (
+        "SELECT ?k (COUNT(*) AS ?n) (SUM(?v) AS ?t) WHERE { ?o ex:v ?v } GROUP BY (?v * 2 AS ?k)",
+        true,
+    ),
+    // Whole decimals the kernels make are written either way (`3` or `3.0`): the evaluator's.
+    (
+        "SELECT ?k (COUNT(*) AS ?n) (SUM(?v) AS ?t) WHERE { ?o ex:v ?v } GROUP BY (FLOOR(?v / 7) AS ?k)",
+        false,
+    ),
+    (
+        "SELECT ?k (COUNT(*) AS ?n) WHERE { ?o ex:v ?v BIND(?v - 3 AS ?k) FILTER(?k > 100) } GROUP BY ?k",
+        true,
+    ),
     (
         "SELECT ?c (COUNT(*) AS ?n) WHERE { ?o ex:by ?c } GROUP BY ?c",
         true,
@@ -1318,6 +1337,7 @@ fn groups_read_back_on_ids_are_the_evaluators() {
         if i % 11 == 0 {
             data.push_str(&format!("ex:o{i} ex:other {} .\n", i % 13));
         }
+        data.push_str(&format!("ex:o{i} ex:v {} .\n", i % 3000));
         if i < 2500 && i % 3 != 0 {
             data.push_str(&format!("ex:c{i} ex:name \"c{}\" .\n", i % 400));
         }
