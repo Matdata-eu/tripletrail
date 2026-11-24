@@ -3230,3 +3230,76 @@ fn orders_of_sums_of_doubles_are_the_evaluators() {
         }
     }
 }
+
+/// Doubles written with an exponent (`1.5e0`, `25E-1`, Turtle's short form) are kept in the
+/// dictionary, not in the id: their sums, averages, arithmetic and comparisons are read from
+/// the dictionary key on ids (#11), with the evaluator's answers. `INF`, `NaN` and doubles
+/// that are not valid are left to the evaluator.
+#[test]
+fn doubles_with_exponents_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    for i in 0..2000 {
+        data.push_str(&format!(
+            "ex:o{i} ex:by ex:c{} ; ex:a {}.{}e{} ; ex:b \"{}E-2\"^^xsd:double ; ex:c \"{}.25\"^^xsd:double .\n",
+            i % 97,
+            (i * 37) % 1000,
+            i % 10,
+            i % 3,
+            (i * 13) % 5000,
+            i % 11,
+        ));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    let queries = [
+        "SELECT ?c (SUM(?a) AS ?s) WHERE { ?o ex:by ?c ; ex:a ?a } GROUP BY ?c",
+        "SELECT ?c (AVG(?a * ?b) AS ?s) WHERE { ?o ex:by ?c ; ex:a ?a ; ex:b ?b } GROUP BY ?c",
+        "SELECT ?c (SUM(?a + ?c2) AS ?s) WHERE { ?o ex:by ?c ; ex:a ?a ; ex:c ?c2 } GROUP BY ?c ORDER BY DESC(?s) LIMIT 10",
+        "SELECT (COUNT(*) AS ?n) WHERE { ?o ex:a ?a ; ex:b ?b FILTER(?a * 1.21 > ?b) }",
+        "SELECT ?o ?t WHERE { ?o ex:a ?a BIND(?a / 2 AS ?t) FILTER(?t < 3) }",
+        "SELECT (SUM(DISTINCT ?b) AS ?s) WHERE { ?o ex:b ?b }",
+    ];
+    for q in queries {
+        let run = |pragma: &str| {
+            let q = format!("{pragma}{prefix} {q}");
+            if q.contains("ORDER BY") {
+                ordered(&engine, &q)
+            } else {
+                rows(&engine, &q)
+            }
+        };
+        // Its rewrites on: sums of doubles exact, rounded once, as on ids.
+        let evaluator = run("#pragma tt.executor spareval\n");
+        assert_eq!(run("#pragma tt.executor ids\n"), evaluator, "{q}");
+        assert_eq!(run(""), evaluator, "{q}");
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+    }
+    // Doubles that are not finite or not valid: the evaluator's answers.
+    engine
+        .load(
+            RdfFormat::Turtle,
+            "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+             ex:o0 ex:d \"INF\"^^xsd:double . ex:o1 ex:d 2e0 . ex:o2 ex:d \"NaN\"^^xsd:double .\n\
+             ex:o3 ex:e \"abc\"^^xsd:double . ex:o4 ex:e 1E1 .\n"
+                .as_bytes(),
+        )
+        .unwrap();
+    for q in [
+        "SELECT (SUM(?d) AS ?s) WHERE { ?o ex:d ?d }",
+        "SELECT (SUM(?e) AS ?s) WHERE { ?o ex:e ?e }",
+        "SELECT ?o WHERE { ?o ex:d|ex:e ?d FILTER(?d > 1) }",
+    ] {
+        let run = |pragma: &str| rows(&engine, &format!("{pragma}{prefix} {q}"));
+        assert_eq!(
+            run("#pragma tt.executor ids\n"),
+            run("#pragma tt.executor spareval\n"),
+            "{q}"
+        );
+    }
+}

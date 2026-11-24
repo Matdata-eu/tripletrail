@@ -3,7 +3,8 @@
 //! and comparisons on them that FILTERs and `SUM` use.
 //!
 //! Everything here follows the evaluator exactly or gives up (`None`): integer overflow,
-//! doubles that are not finite, dictionary literals (`xsd:int`, exponent forms),
+//! doubles that are not finite, dictionary literals other than doubles (`xsd:int`; doubles
+//! with an exponent are read from their dictionary key),
 //! dates compared with date-times or with and without a time zone. The caller then leaves the
 //! expression to the evaluator. The one difference is `SUM` and `AVG` over doubles (#62): the
 //! evaluator adds them in row order, rounding after each addition, while these are summed
@@ -192,7 +193,7 @@ pub(crate) fn compile<'k>(
 ) -> Option<ValueKernel<'k>> {
     use Expression as E;
     Some(match e {
-        E::Variable(v) => column(t, v),
+        E::Variable(v) => column(t, v, snapshot),
         E::Literal(l) => {
             let value = constant(l, snapshot)?;
             Box::new(move |_| Some(Ok(value)))
@@ -480,14 +481,30 @@ fn string_of<T>(snapshot: &Snapshot, id: TermId, f: impl Fn(&str) -> T) -> Optio
     }
 }
 
-fn column<'k>(t: &Table, v: &Variable) -> ValueKernel<'k> {
+/// The value of a stored term: [`of_id`], or an `xsd:double` of the dictionary, written in a
+/// form the id doesn't hold (`1.5e0`, `1E3`), read from its key as the evaluator parses it.
+/// Not finite (`INF`, `NaN`) or not valid: `None`.
+pub(crate) fn of_stored(snapshot: &Snapshot, id: TermId) -> Option<Value> {
+    if id.kind() != Kind::Typed {
+        return of_id(id);
+    }
+    let reader = snapshot.reader();
+    let (datatype, value) = reader.typed_value(id)?;
+    if datatype != xsd::DOUBLE.as_str() {
+        return None;
+    }
+    let v = f64::from(value.parse::<oxsdatatypes::Double>().ok()?);
+    v.is_finite().then_some(Value::Double(v))
+}
+
+fn column<'k>(t: &Table, v: &Variable, snapshot: &'k Snapshot) -> ValueKernel<'k> {
     match t.col(v) {
         Some(c) => Box::new(move |row| {
             let id = row[c];
             if id == TermId(0) {
                 return Some(Err(()));
             }
-            of_id(id).map(Ok)
+            of_stored(snapshot, id).map(Ok)
         }),
         None => Box::new(|_| Some(Err(()))),
     }
