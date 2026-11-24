@@ -27,6 +27,7 @@ use oxigraph::sparql::Variable;
 use spargebra::Query;
 use spargebra::algebra::{Expression, GraphPattern};
 use spargebra::term::{TermPattern, TriplePattern};
+use std::collections::HashMap;
 use tripletrail_store::Snapshot;
 use tripletrail_store::TermId;
 
@@ -193,8 +194,7 @@ impl Pass<'_> {
     /// pattern: its rows are found on ids, ordered on ids (the string ranks for IRIs and
     /// strings), and only the first `OFFSET + LIMIT` rows (distinct ones under `DISTINCT`)
     /// are read back, ordered again by the evaluator. `None` when `p` isn't that shape or
-    /// the values aren't all ordered on ids (blank nodes, other literals, or different
-    /// classes of literals in a column).
+    /// a value can't be decoded.
     fn top(&mut self, p: &GraphPattern) -> Option<GraphPattern> {
         use GraphPattern as G;
         let (keep, distinct, by, body) = shape(p)?;
@@ -301,8 +301,10 @@ fn shape(p: &GraphPattern) -> Option<Shape<'_>> {
 }
 
 /// The numbers of the first `keep` rows of `t` in the order `by` (the first row of each
-/// combination of the `distinct` variables only, when given), in that order. `None` when a
-/// column holds values not ordered on ids.
+/// combination of the `distinct` variables only, when given), in that order. A column whose
+/// values are of one class is ordered on ids; any other column (classes mixed, blank nodes,
+/// literals of other datatypes) is ordered as the evaluator orders terms (`cmp_terms`), its
+/// distinct values decoded and ranked once (#11). `None` when a value can't be decoded.
 pub(crate) fn first_rows(
     t: &Table,
     by: Vec<(&Variable, bool)>,
@@ -313,32 +315,30 @@ pub(crate) fn first_rows(
     use crate::idtree::Pick;
     use std::cmp::Ordering;
     let mut pick = Pick::new(snapshot);
-    let columns: Vec<(Option<usize>, bool)> = by.iter().map(|(v, d)| (t.col(v), *d)).collect();
-    // Every column's values must be of one class (IRIs before literals, so IRIs mix with one
-    // class of literals).
-    for &(c, _) in &columns {
-        let Some(c) = c else { continue };
-        let mut literal = None;
-        for r in 0..t.len() {
-            let id = t.row(r)[c];
-            if id == TermId(0) {
-                continue;
-            }
-            match sort_class(&pick, id)? {
-                0 => {}
-                k if literal.is_none_or(|l| l == k) => literal = Some(k),
-                _ => return None,
-            }
-        }
+    let mut columns: Vec<(Option<usize>, bool, Option<Ranks>)> = Vec::with_capacity(by.len());
+    for (v, descending) in &by {
+        let c = t.col(v);
+        let terms = match c {
+            Some(c) if !one_class(t, c, &pick) => Some(ranked(t, c, snapshot)?),
+            _ => None,
+        };
+        columns.push((c, *descending, terms));
     }
     let mut failed = false;
     let mut cmp = |a: &usize, b: &usize| -> Ordering {
-        for &(c, descending) in &columns {
-            let Some(c) = c else { continue };
+        for (c, descending, terms) in &columns {
+            let Some(c) = *c else { continue };
             let (x, y) = (t.row(*a)[c], t.row(*b)[c]);
-            match sort_order(&mut pick, x, y) {
+            let order = match terms {
+                Some(ranks) => {
+                    let rank = |id: TermId| ranks.get(&id).copied().unwrap_or(0);
+                    Some(rank(x).cmp(&rank(y)))
+                }
+                None => sort_order(&mut pick, x, y),
+            };
+            match order {
                 Some(Ordering::Equal) => {}
-                Some(o) => return if descending { o.reverse() } else { o },
+                Some(o) => return if *descending { o.reverse() } else { o },
                 None => {
                     failed = true;
                     return Ordering::Equal;
@@ -392,6 +392,63 @@ pub(crate) fn first_rows(
         }
     };
     (!failed).then_some(rows)
+}
+
+/// The rank of each id of a column in the evaluator's order of terms (unbound is 0, before
+/// all).
+type Ranks = HashMap<TermId, u32>;
+
+/// Whether the values of column `c` of `t` are of one [`sort_class`] (IRIs before literals,
+/// so IRIs mix with one class of literals): then they are ordered on ids.
+fn one_class(t: &Table, c: usize, pick: &crate::idtree::Pick) -> bool {
+    let mut literal = None;
+    for r in 0..t.len() {
+        let id = t.row(r)[c];
+        if id == TermId(0) {
+            continue;
+        }
+        match sort_class(pick, id) {
+            Some(0) => {}
+            Some(k) if literal.is_none_or(|l| l == k) => literal = Some(k),
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// The distinct values of column `c` of `t` ranked in the evaluator's order of terms
+/// (`cmp_terms`), each decoded once. `None` when one can't be decoded, or two are different
+/// terms the evaluator orders as equal.
+fn ranked(t: &Table, c: usize, snapshot: &Snapshot) -> Option<Ranks> {
+    let mut ids = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for r in 0..t.len() {
+        let id = t.row(r)[c];
+        if id != TermId(0) && seen.insert(id) {
+            ids.push(id);
+        }
+    }
+    drop(seen);
+    let mut terms = Vec::with_capacity(ids.len());
+    for id in ids {
+        terms.push((id, spareval::ExpressionTerm::from(snapshot.term(id).ok()?)));
+    }
+    terms.sort_by(|(_, a), (_, b)| spareval::cmp_terms(Some(a), Some(b)));
+    // Two different terms the evaluator orders as equal (`"…Z"` and `"…+00:00"`) come in the
+    // order its sort leaves them, which the ids can't tell: those are its to order.
+    if terms
+        .windows(2)
+        .any(|w| spareval::cmp_terms(Some(&w[0].1), Some(&w[1].1)).is_eq())
+    {
+        return None;
+    }
+    Some(
+        terms
+            .iter()
+            .zip(1..)
+            .map(|((id, _), rank)| (*id, rank))
+            .collect(),
+    )
 }
 
 /// The class of values `id` is sorted with: [`crate::idtree::Pick::order_class`], and the
