@@ -300,3 +300,37 @@ fn a_querys_operators_share_one_total() {
         }
     });
 }
+
+/// The text `GROUP_CONCAT` builds per group on ids (#11) counts against the limit too: all
+/// the groups together, where the table of ids they come from fits.
+#[test]
+fn group_concat_on_ids_keeps_to_the_limit() {
+    let pad = "x".repeat(100);
+    let d: String = (0..5000)
+        .map(|i| format!("<urn:s{i}> <urn:p> \"{pad} {i}\" ; <urn:k> {} .\n", i % 50))
+        .collect();
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, d.as_bytes()).unwrap();
+    let count = |e: &Engine, q: &str| -> Result<usize, String> {
+        let QueryResults::Solutions(s) = e.query(q).map_err(|e| e.to_string())? else {
+            panic!("not a SELECT")
+        };
+        let mut n = 0;
+        for row in s {
+            row.map_err(|e| e.to_string())?;
+            n += 1;
+        }
+        Ok(n)
+    };
+    let q = "SELECT ?k (GROUP_CONCAT(?o) AS ?g) { ?s <urn:p> ?o ; <urn:k> ?k } GROUP BY ?k";
+    for hints in ["", "#pragma tt.executor ids\n"] {
+        let q = format!("{hints}{q}");
+        let error = count(&engine.with_query_memory(256 << 10), &q).expect_err(&q);
+        assert!(error.contains("more memory than its limit"), "{q}: {error}");
+        assert_eq!(
+            count(&engine.with_query_memory(64 << 20), &q),
+            Ok(50),
+            "{q}"
+        );
+    }
+}
