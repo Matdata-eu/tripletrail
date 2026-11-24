@@ -308,7 +308,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   arguments as written). 133k orders under `--executor ids`: `TZ(?placedAt)` 53 instead of
   175 ms, `?placedAt + "P1D"^^xsd:dayTimeDuration` 67 instead of 275 ms, `?placedAt -
   "2024-01-01T00:00:00Z"^^xsd:dateTime` 75 instead of 236 ms, `?amount / ?qty` 115 instead of
-  368 ms. A string these kernels compute is
+  368 ms. A `FILTER` of such an expression, or a row of any filter the kernels give up on (a
+  comparison of date-times with and without a zone), is decided the same way, by the effective
+  boolean value the evaluator gives it (133k orders: `FILTER(?placedAt - "2024-01-01T00:00:00Z"^^xsd:dateTime
+  > "P30D"^^xsd:dayTimeDuration)` 55 instead of 121 ms, a count with `FILTER(?amount / ?qty > 10)`
+  10 instead of 126 ms). A string these kernels compute is
   also filtered on ids: `e = "text"` (false for an IRI, a blank node or a language-tagged string;
   a literal of another type is the evaluator's) and `STRSTARTS`, `STRENDS`, `CONTAINS` and
   `REGEX` of it with constant arguments (an error for anything but a string literal), each

@@ -2698,7 +2698,7 @@ fn date_time_extremes_on_ids_are_the_evaluators() {
 }
 
 /// Expressions the kernels don't compute themselves (`TZ`, date-time arithmetic, durations,
-/// `IN`, `LANGMATCHES`, …) are computed on ids with the evaluator's own code, so they give its
+/// `IN`, `LANGMATCHES`, …) are computed, and filtered on, on ids with the evaluator's own code, so they give its
 /// terms; what depends on more than the values (`NOW`, `RAND`, `BNODE`) is left to it.
 #[test]
 fn expressions_of_values_on_ids_are_the_evaluators() {
@@ -2767,6 +2767,8 @@ fn expressions_of_values_on_ids_are_the_evaluators() {
             format!(
                 "SELECT ?y (COUNT(*) AS ?n) WHERE {{ ?s ex:v ?v ; ex:w ?w BIND({e} AS ?y) }} GROUP BY ?y"
             ),
+            // As a filter, by its effective boolean value.
+            format!("SELECT ?s WHERE {{ ?s ex:v ?v ; ex:w ?w FILTER({e}) }}"),
         ] {
             let run = |executor: &str| {
                 rows(
@@ -2781,6 +2783,17 @@ fn expressions_of_values_on_ids_are_the_evaluators() {
                 .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
                 .unwrap();
             assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "on ids: {q}");
+        }
+        // In a disjunction, the same answers whoever computes them.
+        if on_ids {
+            let q = format!("SELECT ?s WHERE {{ ?s ex:v ?v ; ex:w ?w FILTER(!({e}) || ?v = ?w) }}");
+            let run = |executor: &str| {
+                rows(
+                    &engine,
+                    &format!("#pragma tt.executor {executor}\n{prefix} {q}"),
+                )
+            };
+            assert_eq!(run("ids"), run("spareval"), "{q}");
         }
     }
 }

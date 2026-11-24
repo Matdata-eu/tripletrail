@@ -1431,13 +1431,29 @@ impl Eval<'_> {
                 // Large tables on several cores (#185), the chunks' rows back in order. Each
                 // chunk builds its own kernel, so the terms it decodes (LANG, DATATYPE) are
                 // cached without a lock.
+                // A row the kernels give up on, or a filter they don't compute, is decided
+                // with the evaluator's own code when the filter depends on the values alone
+                // (`idstring::evaluated`).
+                let evaluated = crate::idstring::evaluated(expr);
                 let parts = tripletrail_store::par::chunks(t.len(), |range| {
-                    let kernel = self.kernel(expr, &t, range.clone())?;
+                    let kernel = self.kernel(expr, &t, range.clone());
+                    let other = if evaluated {
+                        crate::idstring::evaluator_condition(expr, &t, self.snapshot)
+                    } else {
+                        None
+                    };
+                    if kernel.is_none() && other.is_none() {
+                        return None;
+                    }
                     let mut part = empty_like(&t);
                     for r in range {
                         let row = t.row(r);
+                        let value = match kernel.as_ref().and_then(|k| k(row)) {
+                            Some(value) => value,
+                            None => other.as_ref()?(row)?,
+                        };
                         // An error filters the row out, as false does.
-                        if kernel(row)? == Some(true) {
+                        if value == Some(true) {
                             part.push(row);
                         }
                     }
@@ -2484,6 +2500,11 @@ fn has_exists(e: &Expression) -> bool {
 
 /// Whether [`Eval`] evaluates `FILTER(e)` on ids (it may still give up on the data).
 pub(crate) fn filter_covered(e: &Expression) -> bool {
+    covered(e) || crate::idstring::evaluated(e)
+}
+
+/// [`filter_covered`] by the kernels of ids themselves.
+fn covered(e: &Expression) -> bool {
     use Expression as E;
     let var = |a: &[E]| matches!(a, [E::Variable(_)]);
     let operand = |e: &E| matches!(e, E::Variable(_) | E::NamedNode(_) | E::Literal(_));
