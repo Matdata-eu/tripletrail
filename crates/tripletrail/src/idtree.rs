@@ -572,7 +572,7 @@ impl Eval<'_> {
         column: &mut Vec<TermId>,
     ) -> Option<bool> {
         let rows = t.len();
-        let kernel = crate::idvalue::compile_output(expression, &t, self.snapshot)?;
+        let kernel = crate::idvalue::compile_output(expression, t, self.snapshot)?;
         // Each value once: the same value (in the same form) gives the same id.
         let mut ids: HashMap<((u8, i128), crate::idvalue::Form), TermId> = HashMap::new();
         let mut unbound = false;
