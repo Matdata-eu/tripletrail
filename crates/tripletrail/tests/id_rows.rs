@@ -441,8 +441,8 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?x WHERE { ?s ex:n ?x } ORDER BY DESC(?x / 8) ?s LIMIT 7",
         true,
     ),
-    // `OPTIONAL { … FILTER(e) }`: on ids when the filter reads only what the right side
-    // always binds or the left side never does.
+    // `OPTIONAL { … FILTER(e) }` on ids: before the join when the filter reads only what the
+    // right side always binds or the left side never does, on the joined rows otherwise.
     (
         "SELECT ?s ?x WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x FILTER(?x > 50) } }",
         true,
@@ -457,11 +457,37 @@ const BINDS: &[(&str, bool)] = &[
     ),
     (
         "SELECT ?s ?x WHERE { ?s ex:d ?y OPTIONAL { ?s ex:n ?x FILTER(?x > ?y) } }",
-        false,
+        true,
     ),
     (
         "SELECT ?s ?o WHERE { ?s ex:n ?x OPTIONAL { ?s ex:p ?o OPTIONAL { ?s ex:d ?x } FILTER(BOUND(?x)) } }",
-        false,
+        true,
+    ),
+    // A left value that may be unbound, an error (a comparison with an unbound value), a filter
+    // with `EXISTS`, rows of which only some pass, and no shared variable.
+    (
+        "SELECT ?s ?x ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:d ?y } OPTIONAL { ?s ex:n ?x FILTER(!BOUND(?y) || ?x > ?y) } }",
+        true,
+    ),
+    (
+        "SELECT ?s ?x ?y WHERE { ?s ex:p ?o OPTIONAL { ?s ex:d ?y } OPTIONAL { ?s ex:n ?x FILTER(?x > ?y) } }",
+        true,
+    ),
+    (
+        "SELECT ?s ?x WHERE { ?s ex:d ?y OPTIONAL { ?s ex:n ?x FILTER(?x > ?y && EXISTS { ?s ex:p ?o }) } }",
+        true,
+    ),
+    (
+        "SELECT ?s ?x WHERE { ?s ex:d ?y OPTIONAL { ?t ex:n ?x FILTER(?x = ?y + 3) } }",
+        true,
+    ),
+    (
+        "SELECT (COUNT(*) AS ?n) (COUNT(?x) AS ?m) WHERE { ?s ex:d ?y OPTIONAL { ?s ex:n ?x FILTER(?x < ?y) } }",
+        true,
+    ),
+    (
+        "SELECT ?s ?x WHERE { ?s ex:d ?y OPTIONAL { ?s ex:n ?x FILTER(?x > ?y) } } ORDER BY DESC(?x) ?s LIMIT 9",
+        true,
     ),
     (
         "SELECT ?s ?x WHERE { ?s ex:p ?o OPTIONAL { ?s ex:n ?x FILTER(?x * 2 > 100) } } ORDER BY ?s LIMIT 20",

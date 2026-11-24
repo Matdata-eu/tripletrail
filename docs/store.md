@@ -80,7 +80,7 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   variable, at most 2^24 pairs are checked on ids, more go to the evaluator (#11; 133k
   orders: a `VALUES` with `UNDEF` 19 instead of 108 ms, a `MINUS` on a value an `OPTIONAL`
   gives 57 instead of 221 ms). Shapes whose result on ids isn't certain (`=` between
-  different literals) are evaluated as usual. An `OPTIONAL { … FILTER(e) }` is counted on ids, and under `--executor ids` answered on ids, when `e` reads only variables the right side always binds or the left side never binds, so the filter is the right side's own (#11); one that compares with a value from the left side goes to the evaluator. Filters on ids: `BOUND`, `!`,
+  different literals) are evaluated as usual. An `OPTIONAL { … FILTER(e) }` is counted on ids, and under `--executor ids` answered on ids, too (#11). When `e` reads only variables the right side always binds or the left side never binds, the filter is the right side's own and runs before the join. One that compares with a value from the left side runs on the joined rows, and a left row none of whose joined rows pass is kept alone, its right-side variables unbound (on 133k orders, `?o ex:qty ?q OPTIONAL { ?o ex:label ?l FILTER(?q > 50) }` 156 → 51 ms, its `COUNT(?l)` 110 → 20 ms). Filters on ids: `BOUND`, `!`,
   `&&`, `||` (with SPARQL's error rules), `sameTerm`, `=` and `!=` between variables, IRIs and
   literals (values of different literals are compared by the evaluator), `isIRI` /
   `isBlank` / `isLiteral` / `isNumeric`, `LANG(?v) = "x"`, `langMatches(LANG(?v), "x")` and
