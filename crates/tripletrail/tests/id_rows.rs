@@ -3133,3 +3133,60 @@ ex:c ex:f "1e2"^^xsd:double ; ex:l "z" ; ex:i "+9"^^xsd:integer ; ex:n "n3"@en ;
         );
     }
 }
+
+/// `IF` and `COALESCE` give back the stored term of the branch they pick, as Jena does, also
+/// when another branch is computed (#11): under both executors and the evaluator alone.
+#[test]
+fn if_and_coalesce_keep_the_text_of_the_branch_picked() {
+    let engine = Engine::new_tripletrail();
+    let data = r#"@prefix ex: <http://example.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+ex:a ex:f 28.0e0 ; ex:i 07 ; ex:ok true .
+ex:b ex:f 3.50E0 ; ex:i "+9"^^xsd:integer ; ex:ok false .
+ex:c ex:f "1e2"^^xsd:double ; ex:i 12 ; ex:ok true .
+"#;
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    let pattern = "?o ex:f ?f ; ex:i ?i ; ex:ok ?ok";
+    for (e, expected) in [
+        (
+            "IF(?ok, ?f, -?f)",
+            vec![
+                "\"1e2\"^^<http://www.w3.org/2001/XMLSchema#double>",
+                "\"28.0e0\"^^<http://www.w3.org/2001/XMLSchema#double>",
+                "\"-3.5\"^^<http://www.w3.org/2001/XMLSchema#double>",
+            ],
+        ),
+        (
+            "IF(?ok, ?i, ?i * 2)",
+            vec![
+                "\"07\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+                "\"12\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+                "\"18\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+            ],
+        ),
+        (
+            "COALESCE(?nope + 1, ?i)",
+            vec![
+                "\"07\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+                "\"+9\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+                "\"12\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+            ],
+        ),
+    ] {
+        let q = format!("SELECT ?x WHERE {{ {pattern} BIND({e} AS ?x) }}");
+        let mut expected: Vec<String> = expected.iter().map(|t| format!("?x={t}")).collect();
+        expected.sort();
+        for pragma in [
+            "#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n",
+            "#pragma tt.executor ids\n",
+            "",
+        ] {
+            assert_eq!(
+                rows(&engine, &format!("{pragma}{prefix} {q}")),
+                expected,
+                "{pragma}{q}"
+            );
+        }
+    }
+}

@@ -667,11 +667,28 @@ pub(crate) fn evaluator_kernel<'k>(
     Some(Box::new(move |row| Some(kernel(&tuple(row)?).ok_or(()))))
 }
 
-/// An `IF` or `COALESCE` whose branches are variables, constants or more of those, as the
-/// evaluator computes it (#11): the id of the term it gives back, so a number keeps the text it
-/// was written with (`28.0e0`, `07`); `Some(None)` unbound or an error. `None` for a row
-/// holding ids the query only knows as rows of a table.
+/// An `IF` or `COALESCE` as the evaluator computes a `BIND` of it (#11): the id of the term it
+/// gives back, so a branch that is a stored number keeps the text it was written with
+/// (`28.0e0`, `07`); `Some(None)` unbound or an error. `None` for a row holding ids the query
+/// only knows as rows of a table.
 pub(crate) type IdKernel<'k> = Box<dyn Fn(&[TermId]) -> Option<Option<TermId>> + 'k>;
+
+/// The variables an `IF` or `COALESCE` may give back as they are.
+fn branch_variables<'e>(e: &'e Expression, out: &mut Vec<&'e spargebra::term::Variable>) {
+    match e {
+        Expression::Variable(v) => out.push(v),
+        Expression::If(_, a, b) => {
+            branch_variables(a, out);
+            branch_variables(b, out);
+        }
+        Expression::Coalesce(list) => {
+            for x in list {
+                branch_variables(x, out);
+            }
+        }
+        _ => {}
+    }
+}
 
 /// The [`IdKernel`] of `e`, when `e` is such an `IF` or `COALESCE`.
 pub(crate) fn id_kernel<'k>(
@@ -683,7 +700,26 @@ pub(crate) fn id_kernel<'k>(
         return None;
     }
     let (variables, tuple) = evaluated_inputs(e, t)?;
-    let kernel = spareval::internal_kernel(snapshot, e, &variables)?;
+    if let Some(kernel) = spareval::internal_kernel(snapshot, e, &variables) {
+        return Some(Box::new(move |row| Some(kernel(&tuple(row)?))));
+    }
+    // A branch computed: the branch picked, a variable as written (#11). Only when a branch
+    // that is a variable holds a term whose text may not be canonical (a double or decimal
+    // as loaded, another typed literal); else the kernels' value is that term.
+    let mut names = Vec::new();
+    branch_variables(e, &mut names);
+    let written = names.iter().filter_map(|v| t.col(v)).any(|c| {
+        (0..t.len()).any(|r| {
+            matches!(
+                t.row(r)[c].kind(),
+                Kind::Typed | Kind::Double | Kind::Decimal | Kind::Ephemeral
+            )
+        })
+    });
+    if !written {
+        return None;
+    }
+    let kernel = spareval::bound_kernel(snapshot, e, &variables)?;
     Some(Box::new(move |row| Some(kernel(&tuple(row)?))))
 }
 

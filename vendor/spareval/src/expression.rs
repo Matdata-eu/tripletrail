@@ -1640,6 +1640,46 @@ pub(crate) fn build_written_evaluator<'a, C: ExpressionEvaluatorContext<'a>>(
     build_expression_evaluator(expression, context)
 }
 
+/// tripletrail: the evaluator of a `BIND` value: an `IF` or `COALESCE` gives back the term
+/// of the branch it picks as [`build_written_evaluator`] reads it, so a stored number keeps the
+/// text it was written with (`28.0e0`, `07`), as in Jena, where the evaluator computed it
+/// as a value (`"28"^^xsd:double`). Other expressions as [`build_written_evaluator`].
+pub(crate) fn build_bound_evaluator<'a, C: ExpressionEvaluatorContext<'a>>(
+    expression: &Expression,
+    context: &mut C,
+) -> Result<ExpressionEvaluator<'a, C::Tuple, ExpressionTerm>, ExpressionEvaluationError<C::Error>>
+{
+    match expression {
+        Expression::If(a, b, c) => {
+            let a = build_expression_evaluator(a, context)?;
+            let b = build_bound_evaluator(b, context)?;
+            let c = build_bound_evaluator(c, context)?;
+            Ok(Rc::new(move |tuple| {
+                if a(tuple)?.effective_boolean_value()? {
+                    b(tuple)
+                } else {
+                    c(tuple)
+                }
+            }))
+        }
+        Expression::Coalesce(l) => {
+            let l = l
+                .iter()
+                .map(|e| build_bound_evaluator(e, context))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Rc::new(move |tuple| {
+                for e in &l {
+                    if let Some(result) = e(tuple) {
+                        return Some(result);
+                    }
+                }
+                None
+            }))
+        }
+        _ => build_written_evaluator(expression, context),
+    }
+}
+
 pub fn try_build_internal_expression_evaluator<'a, C: ExpressionEvaluatorContext<'a>>(
     expression: &Expression,
     context: &mut C,

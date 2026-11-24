@@ -101,6 +101,15 @@ pub trait QueryableDataset<'a>: Sized + 'a {
         self.internalize_term(term.into())
     }
 
+    /// tripletrail: the term as written (see `ExpressionTerm::from_literal_as_written`). A
+    /// dataset that knows a term's text is canonical may read it as a value instead.
+    fn externalize_written_term(&self, term: Self::InternalTerm) -> Result<ExpressionTerm, Self::Error> {
+        Ok(match self.externalize_term(term)? {
+            Term::Literal(literal) => ExpressionTerm::from_literal_as_written(literal),
+            term => term.into(),
+        })
+    }
+
     /// Computes the term [Effective boolean value](https://www.w3.org/TR/sparql11-query/#ebv)
     fn internal_term_effective_boolean_value(
         &self,

@@ -381,6 +381,27 @@ or `table`, is left out: the command lists it, with the reason, on standard erro
 of the Turtle. `@include <RDFS>` is not read; `--rdfs` on the server or `tripletrail entail` gives
 the RDFS inferences.
 
+### Numbers as written
+
+Jena keeps a number's text as it was loaded, and so does TripleTrail: `IF` and `COALESCE` give
+back the term of the branch they pick, so `28.0e0` stays `28.0e0` and `07` stays `07`, even when
+the other branch is computed:
+
+<!-- test: query -->
+```sparql
+SELECT ?x WHERE {
+  VALUES ?speed { 28.0e0 07 }
+  BIND(IF(?speed > 10, ?speed, ?speed * 2) AS ?x)
+}
+```
+
+<!-- test: output unordered -->
+```text
+x
+28.0e0
+14
+```
+
 ## Without a server
 
 Jena's command-line tools have counterparts that work on files, or on a dataset folder while

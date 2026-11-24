@@ -3,8 +3,8 @@
 
 use crate::dataset::{ExpressionTerm, QueryableDataset};
 use crate::expression::{
-    CustomFunctionRegistry, ExpressionEvaluatorContext, build_expression_evaluator,
-    try_build_internal_expression_evaluator,
+    CustomFunctionRegistry, ExpressionEvaluatorContext, build_bound_evaluator,
+    build_expression_evaluator, try_build_internal_expression_evaluator,
 };
 use oxiri::Iri;
 use oxrdf::{Literal, NamedNode, Term, Variable};
@@ -78,12 +78,7 @@ impl<'a, D: QueryableDataset<'a>> ExpressionEvaluatorContext<'a> for Context<'a,
         &mut self,
     ) -> impl Fn(D::InternalTerm) -> Option<ExpressionTerm> + 'a {
         let dataset = self.dataset;
-        move |t| {
-            Some(match dataset.externalize_term(t).ok()? {
-                Term::Literal(literal) => ExpressionTerm::from_literal_as_written(literal),
-                term => term.into(),
-            })
-        }
+        move |t| dataset.externalize_written_term(t).ok()
     }
 
     fn now(&mut self) -> DateTime {
@@ -127,6 +122,22 @@ pub fn internal_kernel<'a, D: QueryableDataset<'a>>(
         try_build_internal_expression_evaluator(&expression, &mut Context { dataset, variables })
             .ok()??;
     Some(move |tuple: &Vec<Option<D::InternalTerm>>| eval(tuple))
+}
+
+/// tripletrail (#11): `expression` as the evaluator computes a `BIND` of it when
+/// [`internal_kernel`] can't ([`crate::expression::build_bound_evaluator`]: an `IF` or
+/// `COALESCE` gives back the branch it picks as written), as the internal term the evaluator
+/// stores. `None` an error or unbound.
+pub fn bound_kernel<'a, D: QueryableDataset<'a>>(
+    dataset: &'a D,
+    expression: &spargebra::algebra::Expression,
+    variables: &[Variable],
+) -> Option<impl Fn(&Vec<Option<D::InternalTerm>>) -> Option<D::InternalTerm> + 'a> {
+    let expression = sparopt::algebra::Expression::from_sparql(expression);
+    let eval = build_bound_evaluator(&expression, &mut Context { dataset, variables }).ok()?;
+    Some(move |tuple: &Vec<Option<D::InternalTerm>>| {
+        dataset.internalize_expression_term(eval(tuple)?).ok()
+    })
 }
 
 /// tripletrail (#11): the effective boolean value of `expression` ([`expression_kernel`]), as

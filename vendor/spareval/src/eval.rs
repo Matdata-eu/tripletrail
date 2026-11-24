@@ -327,6 +327,15 @@ impl<'a, D: QueryableDataset<'a>> EvalDataset<'a, D> {
             .map_err(|e| QueryEvaluationError::Dataset(Box::new(e)))
     }
 
+    fn externalize_written_term(
+        &self,
+        term: D::InternalTerm,
+    ) -> Result<ExpressionTerm, QueryEvaluationError> {
+        self.dataset
+            .externalize_written_term(term)
+            .map_err(|e| QueryEvaluationError::Dataset(Box::new(e)))
+    }
+
     fn internalize_expression_term(
         &self,
         term: ExpressionTerm,
@@ -1808,8 +1817,9 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                     }));
                 }
 
+                // tripletrail: a branch of an `IF` or `COALESCE` gives back its term as written.
                 let expression =
-                    self.expression_evaluator(expression, encoded_variables, stat_children)?;
+                    self.bound_expression_evaluator(expression, encoded_variables, stat_children)?;
                 let dataset = self.dataset.clone();
                 Rc::new(move |from| {
                     let expression = Rc::clone(&expression);
@@ -2425,6 +2435,27 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
         )?)
     }
 
+    /// tripletrail: the evaluator of a `BIND` value
+    /// ([`crate::expression::build_bound_evaluator`]).
+    pub(crate) fn bound_expression_evaluator(
+        &self,
+        expression: &Expression,
+        encoded_variables: &mut Vec<Variable>,
+        stat_children: &mut Vec<Rc<EvalNodeWithStats>>,
+    ) -> Result<
+        ExpressionEvaluator<'a, InternalTuple<D::InternalTerm>, ExpressionTerm>,
+        QueryEvaluationError,
+    > {
+        Ok(crate::expression::build_bound_evaluator(
+            expression,
+            &mut ExpressionContext {
+                evaluator: self,
+                encoded_variables,
+                stat_children,
+            },
+        )?)
+    }
+
     /// tripletrail: as [`Self::expression_evaluator`], but a variable gives the literal as
     /// written (see `ExpressionTerm::from_literal_as_written`).
     pub(crate) fn written_expression_evaluator(
@@ -2587,12 +2618,7 @@ impl<'a, D: QueryableDataset<'a>> ExpressionEvaluatorContext<'a>
     ) -> impl Fn(Self::Term) -> Option<ExpressionTerm> + 'a {
         // tripletrail: see `ExpressionTerm::from_literal_as_written`.
         let dataset = self.evaluator.dataset.clone();
-        move |t| {
-            Some(match dataset.externalize_term(t).ok()? {
-                Term::Literal(literal) => ExpressionTerm::from_literal_as_written(literal),
-                term => term.into(),
-            })
-        }
+        move |t| dataset.externalize_written_term(t).ok()
     }
 
     fn now(&mut self) -> DateTime {
