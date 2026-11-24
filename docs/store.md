@@ -264,7 +264,10 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   and length), `STRBEFORE` and `STRAFTER` of
   columns, constants and such numbers are computed the same way (`idstring`), once per
   distinct value of the one or two columns they read, from 8,192 distinct values in chunks
-  on the query threads, whose new strings are then given their ids under one lock. A term a
+  on the query threads, whose new strings are then given their ids under one lock. When nine
+  in ten of the first 65,536 rows are distinct pairs (`STR(?s)` of every subject), every row
+  is computed without indexing its pair, so a column of new strings costs no index entry a
+  row (on 10 million rows, about 400 MB less). A term a
   writer commits while the query runs is not stored for the query's view, which holds no
   quad with it, so the query gives it one id made up for it (133k orders, `STR(?o)` of every order
   227 → 120 ms, as the evaluator's 115), with the evaluator's rules: `STR` of an

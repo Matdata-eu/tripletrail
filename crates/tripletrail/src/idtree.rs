@@ -181,6 +181,10 @@ impl std::hash::Hasher for PairHasher {
     }
 }
 
+/// The rows whose pairs of ids a string column indexes before it decides whether they
+/// repeat enough (one in ten) to compute each pair once.
+const PAIR_TRIAL: usize = 65_536;
+
 type PairHash = std::hash::BuildHasherDefault<PairHasher>;
 
 /// Rows of ids, one column per variable.
@@ -509,14 +513,18 @@ impl Eval<'_> {
         // From 8,192 strings to compute on several cores (a string costs more than a
         // number), each chunk with its own kernel, its terms then given their ids under
         // one lock.
-        let repeats = cols.len() <= 2;
-        // The rows to compute, and for each row of `t` its place among them.
-        let (todo, at): (Vec<usize>, Option<Vec<u32>>) = if repeats {
+        // The rows to compute, and for each row of `t` its place among them. When the first
+        // `PAIR_TRIAL` rows hardly repeat a pair (`STR(?s)` of every row), every row is
+        // computed, without an index entry per row.
+        let index_pairs = || {
             let mut index: HashMap<(TermId, TermId), u32, PairHash> = HashMap::default();
             let mut todo = Vec::new();
             let mut at = Vec::with_capacity(rows);
             for r in 0..rows {
                 if r % 65_536 == 0 && (self.cancelled)() {
+                    return Some(None);
+                }
+                if r == PAIR_TRIAL && index.len() * 10 > r * 9 {
                     return None;
                 }
                 let i = *index.entry(key(t.row(r))?).or_insert_with(|| {
@@ -525,9 +533,14 @@ impl Eval<'_> {
                 });
                 at.push(i);
             }
-            (todo, Some(at))
-        } else {
-            ((0..rows).collect(), None)
+            Some(Some((todo, Some(at))))
+        };
+        let pairs = if cols.len() <= 2 { index_pairs() } else { None };
+        let (todo, at): (Vec<usize>, Option<Vec<u32>>) = match pairs {
+            Some(Some(pairs)) => pairs,
+            // Cancelled.
+            Some(None) => return None,
+            None => ((0..rows).collect(), None),
         };
         let parts = tripletrail_store::par::chunks_sized(todo.len(), 8_192, 2_048, |range| {
             let kernel = compile(e, t)?;

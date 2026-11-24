@@ -2784,3 +2784,40 @@ fn expressions_of_values_on_ids_are_the_evaluators() {
         }
     }
 }
+
+/// Strings computed for more rows than the trial of the pair index (65,536): inputs that
+/// hardly repeat are computed row by row without the index, inputs that repeat once per pair,
+/// and both give the evaluator's terms.
+#[test]
+fn strings_past_the_pair_trial_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::new();
+    for i in 0..70_000 {
+        data.push_str(&format!(
+            "<http://example.org/s{i}> <http://example.org/name> \"name {}\" .\n",
+            i % 7_000
+        ));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for q in [
+        "SELECT (COUNT(DISTINCT ?u) AS ?c) WHERE { ?s ex:name ?m BIND(STR(?s) AS ?u) }",
+        "SELECT (COUNT(DISTINCT ?u) AS ?c) WHERE { ?s ex:name ?m BIND(CONCAT(STR(?s), ?m) AS ?u) }",
+        "SELECT (COUNT(DISTINCT ?u) AS ?c) WHERE { ?s ex:name ?m BIND(UCASE(?m) AS ?u) }",
+        "SELECT ?u WHERE { ?s ex:name ?m BIND(STR(?s) AS ?u) FILTER(STRENDS(?u, \"99\")) }",
+    ] {
+        let ids = rows(&engine, &format!("#pragma tt.executor ids\n{prefix} {q}"));
+        assert_eq!(
+            ids,
+            rows(
+                &engine,
+                &format!("#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n{prefix} {q}")
+            ),
+            "{q}"
+        );
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+    }
+}
