@@ -1757,13 +1757,30 @@ impl Eval<'_> {
     }
     /// The rows of `t` with (`keep`) or without a solution of `p` compatible with them.
     fn exists(&self, t: &Table, p: &GraphPattern, keep: bool) -> Option<Table> {
-        // Substituting a row's values into a basic graph pattern is a join with it.
-        let GraphPattern::Bgp { .. } = p else {
+        // Substituting a row's values into a basic graph pattern is a join with it. So it is
+        // for `FILTER`s and nested `EXISTS` inside (#11), when everything they read that the
+        // row binds is bound by the pattern itself: substituted or joined, they then see the
+        // same values. A filter reading a value only the row gives is left to the evaluator.
+        // Each filter sees only the rows of its own group, so the check is per filter (#208).
+        if !filters_see_their_own(t, p) {
             return None;
-        };
-        let inner = self.right(t, p)?;
+        }
+        let inner = self.exists_rows(t, p)?;
         let keys = shared(t, &inner)?;
         semi(t, &inner, &keys, keep, self.cancelled)
+    }
+
+    /// The rows of an `EXISTS` pattern ([`exists_shape`]), its triples looked up from the
+    /// values `t` gives them.
+    fn exists_rows(&self, t: &Table, p: &GraphPattern) -> Option<Table> {
+        match p {
+            GraphPattern::Bgp { .. } => self.right(t, p),
+            GraphPattern::Filter { expr, inner } => {
+                let inner = self.exists_rows(t, inner)?;
+                self.filter(expr, inner)
+            }
+            _ => self.eval(p),
+        }
     }
 }
 
@@ -2197,6 +2214,112 @@ fn computed(e: &Expression) -> bool {
     )
 }
 
+/// The patterns of an `EXISTS` evaluated on ids: basic graph patterns, their joins, and
+/// `FILTER`s over them (#11).
+fn exists_shape(p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::Bgp { patterns } => patterns.iter().all(|t| {
+            !matches!(t.subject, TermPattern::Triple(_))
+                && !matches!(t.object, TermPattern::Triple(_))
+        }),
+        GraphPattern::Join { left, right } => exists_shape(left) && exists_shape(right),
+        GraphPattern::Filter { expr, inner } => filter_covered(expr) && exists_shape(inner),
+        _ => false,
+    }
+}
+
+/// Whether every `FILTER` of an `EXISTS` pattern ([`exists_shape`]) reads, of the variables
+/// of `t`, only those its own group certainly binds: evaluated on ids a filter sees its group's
+/// rows, substituted it would see the row's values for the others.
+fn filters_see_their_own(t: &Table, p: &GraphPattern) -> bool {
+    match p {
+        GraphPattern::Join { left, right } => {
+            filters_see_their_own(t, left) && filters_see_their_own(t, right)
+        }
+        GraphPattern::Filter { expr, inner } => {
+            let bound = crate::plan::certain(inner);
+            let mut read = std::collections::HashSet::new();
+            expression_reads(expr, &mut read);
+            !read
+                .iter()
+                .any(|v| t.vars.iter().any(|c| c.as_str() == v) && !bound.contains(v))
+                && filters_see_their_own(t, inner)
+        }
+        _ => true,
+    }
+}
+
+/// The variables a filter reads, also every variable of the patterns of `EXISTS` inside it.
+fn expression_reads(e: &Expression, out: &mut std::collections::HashSet<String>) {
+    fn expression(e: &Expression, out: &mut std::collections::HashSet<String>) {
+        match e {
+            Expression::Variable(v) | Expression::Bound(v) => {
+                out.insert(v.as_str().to_owned());
+            }
+            Expression::NamedNode(_) | Expression::Literal(_) => {}
+            Expression::Exists(p) => everything(p, out),
+            Expression::FunctionCall(_, args) | Expression::Coalesce(args) => {
+                args.iter().for_each(|a| expression(a, out));
+            }
+            Expression::In(a, list) => {
+                expression(a, out);
+                list.iter().for_each(|l| expression(l, out));
+            }
+            Expression::Or(a, b)
+            | Expression::And(a, b)
+            | Expression::Equal(a, b)
+            | Expression::SameTerm(a, b)
+            | Expression::Greater(a, b)
+            | Expression::GreaterOrEqual(a, b)
+            | Expression::Less(a, b)
+            | Expression::LessOrEqual(a, b)
+            | Expression::Add(a, b)
+            | Expression::Subtract(a, b)
+            | Expression::Multiply(a, b)
+            | Expression::Divide(a, b) => {
+                expression(a, out);
+                expression(b, out);
+            }
+            Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+                expression(a, out);
+            }
+            Expression::If(a, b, c) => {
+                expression(a, out);
+                expression(b, out);
+                expression(c, out);
+            }
+        }
+    }
+    // Every variable of a pattern inside an `EXISTS`: the row's values reach all of them.
+    fn everything(p: &GraphPattern, out: &mut std::collections::HashSet<String>) {
+        match p {
+            GraphPattern::Bgp { patterns } => {
+                for t in patterns {
+                    for v in [&t.subject, &t.object] {
+                        if let TermPattern::Variable(v) = v {
+                            out.insert(v.as_str().to_owned());
+                        }
+                    }
+                    if let NamedNodePattern::Variable(v) = &t.predicate {
+                        out.insert(v.as_str().to_owned());
+                    }
+                }
+            }
+            GraphPattern::Join { left, right } => {
+                everything(left, out);
+                everything(right, out);
+            }
+            GraphPattern::Filter { expr, inner } => {
+                expression(expr, out);
+                everything(inner, out);
+            }
+            // Not an `EXISTS` shape: its filter is not covered, and nothing here is reached.
+            _ => {}
+        }
+    }
+    expression(e, out);
+}
+
 fn has_exists(e: &Expression) -> bool {
     match e {
         Expression::Exists(_) => true,
@@ -2212,7 +2335,7 @@ pub(crate) fn filter_covered(e: &Expression) -> bool {
     let var = |a: &[E]| matches!(a, [E::Variable(_)]);
     let operand = |e: &E| matches!(e, E::Variable(_) | E::NamedNode(_) | E::Literal(_));
     match e {
-        E::Exists(p) => matches!(**p, GraphPattern::Bgp { .. }),
+        E::Exists(p) => exists_shape(p),
         E::Not(e) => filter_covered(e),
         E::And(a, b) => filter_covered(a) && filter_covered(b),
         // An EXISTS is a filter of its own, not a value inside `||`.
