@@ -43,8 +43,12 @@ fn count(e: &Engine) -> String {
     row.get("n").unwrap().to_string()
 }
 
+/// The evaluator's plan looks the class up per row. (Under `--executor ids` the whole query
+/// runs on term ids, with the same count: no evaluator plan to check.)
 fn assert_lookup(e: &Engine) {
-    let plan = e.explain(QUERY).unwrap();
+    let plan = e
+        .explain(&format!("#pragma tt.executor spareval\n{QUERY}"))
+        .unwrap();
     assert!(plan.contains("Lateral"), "{plan}");
     assert!(!plan.contains("keys = )"), "{plan}");
 }
