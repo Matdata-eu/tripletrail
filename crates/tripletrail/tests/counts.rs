@@ -271,8 +271,8 @@ fn tree_counts_match_the_rows() {
             "?s a ?c OPTIONAL { ?s ex:feat ?f FILTER(?f != ex:f1) }",
             true,
         ),
-        // One that reads a variable of the left side: the evaluator decides.
-        ("?s a ?c OPTIONAL { ?s ex:feat ?f FILTER(?f != ?c) }", false),
+        // One that reads a variable of the left side: on the joined rows (#11).
+        ("?s a ?c OPTIONAL { ?s ex:feat ?f FILTER(?f != ?c) }", true),
     ];
     let aggregates = [
         "(COUNT(*) AS ?n)",

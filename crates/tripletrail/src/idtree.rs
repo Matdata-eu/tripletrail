@@ -245,20 +245,25 @@ impl Eval<'_> {
                 let l = self.eval(left)?;
                 let r = self.right(&l, right)?;
                 let mut names = std::collections::HashSet::new();
-                crate::plan::expression_variables(e, &mut names)?;
-                let own = names.iter().all(|n| {
-                    let certain = r
-                        .vars
-                        .iter()
-                        .position(|v| v.as_str() == n)
-                        .is_some_and(|c| !r.maybe[c]);
-                    certain || !l.vars.iter().any(|v| v.as_str() == n)
-                });
-                if !own {
-                    return None;
+                // Not listed (an `EXISTS` inside): on the joined rows.
+                let listed = crate::plan::expression_variables(e, &mut names).is_some();
+                let own = listed
+                    && names.iter().all(|n| {
+                        let certain = r
+                            .vars
+                            .iter()
+                            .position(|v| v.as_str() == n)
+                            .is_some_and(|c| !r.maybe[c]);
+                        certain || !l.vars.iter().any(|v| v.as_str() == n)
+                    });
+                if own {
+                    let r = self.filter(e, r)?;
+                    left_join(&l, &r, self.cancelled)?
+                } else {
+                    // The filter reads values of the left row too: it is on the joined rows,
+                    // and a left row none of whose joined rows pass is kept alone.
+                    self.left_join_filtered(&l, &r, e)?
                 }
-                let r = self.filter(e, r)?;
-                left_join(&l, &r, self.cancelled)?
             }
             GraphPattern::Minus { left, right } => {
                 let l = self.eval(left)?;
@@ -1816,6 +1821,64 @@ impl Eval<'_> {
 }
 
 impl<'a> Eval<'a> {
+    /// `OPTIONAL { r FILTER(e) }` after `l` where `e` reads values of `l` too (#11): `e` on the
+    /// rows of `l` joined with `r`, then each row of `l` with its joined rows that pass, or
+    /// alone (the columns of `r` unbound) when none does.
+    fn left_join_filtered(&self, l: &Table, r: &Table, e: &Expression) -> Option<Table> {
+        // `l` with its row numbers (from 1) in a column of its own, which `e` cannot read.
+        let width = l.width();
+        let mut numbered = Table {
+            vars: l.vars.clone(),
+            ids: Vec::with_capacity(l.len() * (width + 1)),
+            maybe: l.maybe.clone(),
+            ones: l.len(),
+        };
+        numbered.vars.push(Variable::new_unchecked(" row"));
+        numbered.maybe.push(false);
+        for i in 0..l.len() {
+            numbered.ids.extend_from_slice(l.row(i));
+            numbered.ids.push(TermId(i as u64 + 1));
+        }
+        let joined = self.filter(e, join(&numbered, r, self.cancelled)?)?;
+        // The joined rows come in the order of the rows of `l`, as `left_join` gives them.
+        let mut vars = l.vars.clone();
+        let mut maybe = l.maybe.clone();
+        for v in &joined.vars[width + 1..] {
+            vars.push(v.clone());
+            maybe.push(true);
+        }
+        let mut out = Table {
+            vars,
+            ids: Vec::new(),
+            maybe,
+            ones: 0,
+        };
+        let extra = joined.width() - width - 1;
+        let mut next = 0;
+        for i in 0..l.len() {
+            if i % 4096 == 0 && (self.cancelled)() {
+                return None;
+            }
+            let number = TermId(i as u64 + 1);
+            let mut matched = false;
+            while next < joined.len() && joined.row(next)[width] == number {
+                let row = joined.row(next);
+                out.ids.extend_from_slice(&row[..width]);
+                out.ids.extend_from_slice(&row[width + 1..]);
+                out.ones += 1;
+                matched = true;
+                next += 1;
+            }
+            if !matched {
+                out.ids.extend_from_slice(l.row(i));
+                out.ids.extend(std::iter::repeat_n(UNBOUND, extra));
+                out.ones += 1;
+            }
+        }
+        // Not in the order of `l` after all: give up rather than lose rows.
+        (next == joined.len()).then_some(out)
+    }
+
     /// A variable of `t` or a constant, as a row's id (`None`: unbound).
     fn operand(&self, e: &Expression, t: &Table) -> Option<Operand> {
         Some(match e {

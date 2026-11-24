@@ -1668,9 +1668,9 @@ impl Pass<'_> {
                         };
                         Value::literal(self.snapshot, value)
                     }
-                    // The strings of the group's rows in their order, as the evaluator joins
-                    // them: a simple literal. Any other value (unbound, a number, an IRI) makes
-                    // the evaluator's an error: left to it.
+                    // The strings of the group's rows in order of their text, whatever the
+                    // plan (SPARQL leaves the order open): a simple literal. Any other value
+                    // (unbound, a number, an IRI) makes the evaluator's an error: left to it.
                     (Agg::GroupConcat(v, distinct, separator), Some(t)) => {
                         let c = t.col(v)?;
                         // Each distinct term decoded once, with how often it comes.
