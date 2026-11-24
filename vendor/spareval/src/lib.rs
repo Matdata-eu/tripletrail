@@ -15,19 +15,19 @@ mod update;
 
 #[cfg(feature = "sparql-12")]
 pub use crate::dataset::ExpressionTriple;
-pub use crate::dataset::{decimal_divide, decimal_lexical, decimal_literal, decimal_multiply};
-pub use crate::expression::cast;
-pub use crate::kernel::{condition_kernel, expression_kernel};
 pub use crate::dataset::{ExpressionTerm, InternalQuad, QueryableDataset};
+pub use crate::dataset::{decimal_divide, decimal_lexical, decimal_literal, decimal_multiply};
 pub use crate::error::QueryEvaluationError;
 pub use crate::eval::{
-    CancellationToken, cmp_terms, cmp_values_as_jena, custom_function_call_cancelled, set_build_memory,
-    set_lookup_joins,
+    CancellationToken, cmp_terms, cmp_values_as_jena, custom_function_call_cancelled,
+    set_build_memory, set_lookup_joins,
 };
 use crate::eval::{EvalNodeWithStats, SimpleEvaluator, Timer};
+pub use crate::expression::cast;
 use crate::expression::{
     CustomFunctionRegistry, ExpressionEvaluatorContext, build_expression_evaluator,
 };
+pub use crate::kernel::{condition_kernel, expression_kernel, internal_kernel};
 pub use crate::model::{QueryResults, QuerySolution, QuerySolutionIter, QueryTripleIter};
 use crate::service::ServiceHandlerRegistry;
 pub use crate::service::{DefaultServiceHandler, ServiceHandler};

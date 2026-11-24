@@ -1449,7 +1449,11 @@ pub fn build_expression_evaluator<'a, C: ExpressionEvaluatorContext<'a>>(
 
                 match function_name.as_ref() {
                     // tripletrail: the casts the id executor computes too (`cast`).
-                    xsd::STRING | xsd::BOOLEAN | xsd::FLOAT | xsd::INTEGER | xsd::DECIMAL
+                    xsd::STRING
+                    | xsd::BOOLEAN
+                    | xsd::FLOAT
+                    | xsd::INTEGER
+                    | xsd::DECIMAL
                     | xsd::DATE_TIME => {
                         let name = function_name.clone();
                         cast_fn!(|t: ExpressionTerm| cast_value(name.as_ref(), t))
@@ -2053,11 +2057,17 @@ pub fn order_cmp_literals(a: &ExpressionTerm, b: &ExpressionTerm) -> Option<Orde
             implicit_utc!(DateTime, x, y)
         }
         #[cfg(feature = "sep-0002")]
-        (ExpressionTerm::DateLiteral(x), ExpressionTerm::DateLiteral(y)) => implicit_utc!(Date, x, y),
+        (ExpressionTerm::DateLiteral(x), ExpressionTerm::DateLiteral(y)) => {
+            implicit_utc!(Date, x, y)
+        }
         #[cfg(feature = "sep-0002")]
-        (ExpressionTerm::TimeLiteral(x), ExpressionTerm::TimeLiteral(y)) => implicit_utc!(Time, x, y),
+        (ExpressionTerm::TimeLiteral(x), ExpressionTerm::TimeLiteral(y)) => {
+            implicit_utc!(Time, x, y)
+        }
         #[cfg(feature = "calendar-ext")]
-        (ExpressionTerm::GYearLiteral(x), ExpressionTerm::GYearLiteral(y)) => implicit_utc!(oxsdatatypes::GYear, x, y),
+        (ExpressionTerm::GYearLiteral(x), ExpressionTerm::GYearLiteral(y)) => {
+            implicit_utc!(oxsdatatypes::GYear, x, y)
+        }
         #[cfg(feature = "calendar-ext")]
         (ExpressionTerm::GYearMonthLiteral(x), ExpressionTerm::GYearMonthLiteral(y)) => {
             implicit_utc!(oxsdatatypes::GYearMonth, x, y)
@@ -2071,7 +2081,9 @@ pub fn order_cmp_literals(a: &ExpressionTerm, b: &ExpressionTerm) -> Option<Orde
             implicit_utc!(oxsdatatypes::GMonthDay, x, y)
         }
         #[cfg(feature = "calendar-ext")]
-        (ExpressionTerm::GDayLiteral(x), ExpressionTerm::GDayLiteral(y)) => implicit_utc!(oxsdatatypes::GDay, x, y),
+        (ExpressionTerm::GDayLiteral(x), ExpressionTerm::GDayLiteral(y)) => {
+            implicit_utc!(oxsdatatypes::GDay, x, y)
+        }
         (x, y) => match (nan(x), nan(y)) {
             (Some(true), Some(true)) => Some(Ordering::Equal),
             (Some(true), Some(false)) => Some(Ordering::Greater),
@@ -2598,7 +2610,10 @@ mod numeric_cast_tests {
         assert_eq!(double_to_integer(f64::INFINITY), None);
         assert_eq!(double_to_integer(1e300), None);
         assert_eq!(double_to_decimal(0.1).unwrap().to_string(), "0.1");
-        assert_eq!(double_to_decimal(526_216.596).unwrap().to_string(), "526216.596");
+        assert_eq!(
+            double_to_decimal(526_216.596).unwrap().to_string(),
+            "526216.596"
+        );
         assert_eq!(float_to_decimal(0.1).unwrap().to_string(), "0.1");
         assert_eq!(double_to_decimal(f64::NAN), None);
     }

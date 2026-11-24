@@ -26,8 +26,21 @@ use crate::idtree::Table;
 /// the ids don't decide it.
 pub(crate) type TermKernel<'k> = Box<dyn Fn(&[TermId]) -> Option<Result<Term, ()>> + 'k>;
 
-/// Whether `e` is a `STR`, `CONCAT` or `IRI` the kernels may compute, by its form alone.
+/// Whether `e` is a `STR`, `CONCAT` or `IRI` the kernels may compute, by its form alone: one
+/// of their own forms, or an `IF` or `COALESCE` of the values alone that the evaluator's own
+/// code computes ([`evaluated`]; an `IF` on a language, #11).
 pub(crate) fn computable(e: &Expression) -> bool {
+    own(e) || (branches(e) && evaluated(e) && !crate::direct::number_computable(e))
+}
+
+/// An `IF` or `COALESCE`: when the term kernels don't decide a part of one themselves, the
+/// evaluator's own code computes the whole of it.
+fn branches(e: &Expression) -> bool {
+    matches!(e, Expression::If(..) | Expression::Coalesce(_))
+}
+
+/// Whether `e` is one of the forms the term kernels compute themselves ([`compile_own`]).
+fn own(e: &Expression) -> bool {
     use Function as F;
     let arg = |e: &Expression| {
         matches!(
@@ -164,12 +177,22 @@ fn cast(f: NamedNodeRef<'_>) -> bool {
 }
 
 /// `e` compiled to a kernel over the rows of `t`, if [`computable`] and every part of it is
-/// decided on ids.
+/// decided on ids: one of the term kernels' own forms, else, for an `IF` or `COALESCE` with a
+/// part they don't decide (a condition on a language), the evaluator's own code.
 pub(crate) fn compile<'k>(
     e: &Expression,
     t: &Table,
     snapshot: &'k Snapshot,
 ) -> Option<TermKernel<'k>> {
+    compile_own(e, t, snapshot).or_else(|| {
+        branches(e)
+            .then(|| evaluator_kernel(e, t, snapshot))
+            .flatten()
+    })
+}
+
+/// `e` compiled by the term kernels' own forms, `None` when a part isn't decided on ids.
+fn compile_own<'k>(e: &Expression, t: &Table, snapshot: &'k Snapshot) -> Option<TermKernel<'k>> {
     use Function as F;
     Some(match e {
         Expression::Variable(v) => {
@@ -642,6 +665,26 @@ pub(crate) fn evaluator_kernel<'k>(
     let (variables, tuple) = evaluated_inputs(e, t)?;
     let kernel = spareval::expression_kernel(snapshot, e, &variables)?;
     Some(Box::new(move |row| Some(kernel(&tuple(row)?).ok_or(()))))
+}
+
+/// An `IF` or `COALESCE` whose branches are variables, constants or more of those, as the
+/// evaluator computes it (#11): the id of the term it gives back, so a number keeps the text it
+/// was written with (`28.0e0`, `07`); `Some(None)` unbound or an error. `None` for a row
+/// holding ids the query only knows as rows of a table.
+pub(crate) type IdKernel<'k> = Box<dyn Fn(&[TermId]) -> Option<Option<TermId>> + 'k>;
+
+/// The [`IdKernel`] of `e`, when `e` is such an `IF` or `COALESCE`.
+pub(crate) fn id_kernel<'k>(
+    e: &Expression,
+    t: &Table,
+    snapshot: &'k Snapshot,
+) -> Option<IdKernel<'k>> {
+    if !branches(e) {
+        return None;
+    }
+    let (variables, tuple) = evaluated_inputs(e, t)?;
+    let kernel = spareval::internal_kernel(snapshot, e, &variables)?;
+    Some(Box::new(move |row| Some(kernel(&tuple(row)?))))
 }
 
 /// The effective boolean value of `e` ([`evaluated`]) with the evaluator's own code, as a

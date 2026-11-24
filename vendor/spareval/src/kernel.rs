@@ -4,6 +4,7 @@
 use crate::dataset::{ExpressionTerm, QueryableDataset};
 use crate::expression::{
     CustomFunctionRegistry, ExpressionEvaluatorContext, build_expression_evaluator,
+    try_build_internal_expression_evaluator,
 };
 use oxiri::Iri;
 use oxrdf::{Literal, NamedNode, Term, Variable};
@@ -110,6 +111,22 @@ pub fn expression_kernel<'a, D: QueryableDataset<'a>>(
 ) -> Option<impl Fn(&Vec<Option<D::InternalTerm>>) -> Option<Term> + 'a> {
     let eval = build(dataset, expression, variables)?;
     Some(move |tuple: &Vec<Option<D::InternalTerm>>| eval(tuple).map(Term::from))
+}
+
+/// tripletrail (#11): `expression` as the evaluator computes a `BIND` of it when it can give
+/// back a term it holds (a variable, a constant, and `IF` or `COALESCE` of those): the
+/// internal term itself, so a number keeps the text it was written with. `None` when the
+/// evaluator computes it as a value instead ([`expression_kernel`]).
+pub fn internal_kernel<'a, D: QueryableDataset<'a>>(
+    dataset: &'a D,
+    expression: &spargebra::algebra::Expression,
+    variables: &[Variable],
+) -> Option<impl Fn(&Vec<Option<D::InternalTerm>>) -> Option<D::InternalTerm> + 'a> {
+    let expression = sparopt::algebra::Expression::from_sparql(expression);
+    let eval =
+        try_build_internal_expression_evaluator(&expression, &mut Context { dataset, variables })
+            .ok()??;
+    Some(move |tuple: &Vec<Option<D::InternalTerm>>| eval(tuple))
 }
 
 /// tripletrail (#11): the effective boolean value of `expression` ([`expression_kernel`]), as

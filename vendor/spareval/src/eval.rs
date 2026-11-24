@@ -236,9 +236,9 @@ impl<'a, D: QueryableDataset<'a>> EvalDataset<'a, D> {
                                 match first {
                                     Some(Ok(f)) if f.graph_name != quad.graph_name => return None,
                                     Some(Err(e)) => {
-                                        return Some(Err(QueryEvaluationError::Dataset(
-                                            Box::new(e),
-                                        )));
+                                        return Some(Err(QueryEvaluationError::Dataset(Box::new(
+                                            e,
+                                        ))));
                                     }
                                     _ => {}
                                 }
@@ -1364,7 +1364,13 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                             // Cartesian product
                             let token = self.dataset.cancellation_token.clone();
                             if !lookup_build.is_empty() {
-                                return Ok(lookup_probe_join(build, probe, Vec::new(), lookup_build, token));
+                                return Ok(lookup_probe_join(
+                                    build,
+                                    probe,
+                                    Vec::new(),
+                                    lookup_build,
+                                    token,
+                                ));
                             }
                             Rc::new(move |from| {
                                 let mut guard = BuildGuard::new(build(from.clone()), &token);
@@ -1379,14 +1385,17 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                                     && !built_values.is_empty()
                                     && built_values.iter().all(|t| binds_any(t, &lookup))
                                 {
-                                    return held(meter, LookupJoinIterator {
-                                        built: built_values.into_iter(),
-                                        lookup: Rc::clone(&probe),
-                                        current: Box::new(empty()),
-                                        buffered_results: errors,
-                                        token: token.clone(),
-                                        done: false,
-                                    });
+                                    return held(
+                                        meter,
+                                        LookupJoinIterator {
+                                            built: built_values.into_iter(),
+                                            lookup: Rc::clone(&probe),
+                                            current: Box::new(empty()),
+                                            buffered_results: errors,
+                                            token: token.clone(),
+                                            done: false,
+                                        },
+                                    );
                                 }
                                 if built_values.is_empty() && errors.is_empty() {
                                     // We don't bother to execute the other side
@@ -1397,16 +1406,19 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                                     // We know it's empty and can discard errors
                                     return Box::new(empty());
                                 }
-                                held(meter, CartesianProductJoinIterator {
-                                    probe_iter,
-                                    built: built_values,
-                                    buffered_results: errors,
-                                    current: None,
-                                    pos: 0,
-                                    token: token.clone(),
-                                    made: 0,
-                                    done: false,
-                                })
+                                held(
+                                    meter,
+                                    CartesianProductJoinIterator {
+                                        probe_iter,
+                                        built: built_values,
+                                        buffered_results: errors,
+                                        current: None,
+                                        pos: 0,
+                                        token: token.clone(),
+                                        made: 0,
+                                        done: false,
+                                    },
+                                )
                             })
                         } else {
                             // Real hash join
@@ -1416,7 +1428,13 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                                 .collect::<Vec<_>>();
                             let token = self.dataset.cancellation_token.clone();
                             if !lookup_build.is_empty() {
-                                return Ok(lookup_probe_join(build, probe, keys, lookup_build, token));
+                                return Ok(lookup_probe_join(
+                                    build,
+                                    probe,
+                                    keys,
+                                    lookup_build,
+                                    token,
+                                ));
                             }
                             Rc::new(move |from| {
                                 let mut built_values = InternalTupleSet::new(keys.clone());
@@ -1435,14 +1453,17 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                                         >= WEAK_KEY_ROWS * built_values.distinct_keys()
                                     && built_values.all_bind_any(&lookup)
                                 {
-                                    return held(meter, LookupJoinIterator {
-                                        built: built_values.into_tuples().into_iter(),
-                                        lookup: Rc::clone(&probe),
-                                        current: Box::new(empty()),
-                                        buffered_results: errors,
-                                        token: token.clone(),
-                                        done: false,
-                                    });
+                                    return held(
+                                        meter,
+                                        LookupJoinIterator {
+                                            built: built_values.into_tuples().into_iter(),
+                                            lookup: Rc::clone(&probe),
+                                            current: Box::new(empty()),
+                                            buffered_results: errors,
+                                            token: token.clone(),
+                                            done: false,
+                                        },
+                                    );
                                 }
                                 if built_values.is_empty() && errors.is_empty() {
                                     // We don't bother to execute the other side
@@ -1453,16 +1474,19 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                                     // We know it's empty and can discard errors
                                     return Box::new(empty());
                                 }
-                                held(meter, HashJoinIterator {
-                                    probe_iter,
-                                    built: built_values,
-                                    buffered_results: errors,
-                                    token: token.clone(),
-                                    done: false,
-                                    current: None,
-                                    pos: 0,
-                                    made: 0,
-                                })
+                                held(
+                                    meter,
+                                    HashJoinIterator {
+                                        probe_iter,
+                                        built: built_values,
+                                        buffered_results: errors,
+                                        token: token.clone(),
+                                        done: false,
+                                        current: None,
+                                        pos: 0,
+                                        made: 0,
+                                    },
+                                )
                             })
                         }
                     }
@@ -1544,19 +1568,22 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                                     return left(from);
                                 }
                                 let (_, meter) = guard.into_parts();
-                                held(meter, left(from).filter(move |left_tuple| {
-                                    if let Ok(left_tuple) = left_tuple {
-                                        !right.iter().any(|right_tuple| {
-                                            are_compatible_and_not_disjointed_except(
-                                                left_tuple,
-                                                right_tuple,
-                                                graph_variable,
-                                            )
-                                        })
-                                    } else {
-                                        true
-                                    }
-                                }))
+                                held(
+                                    meter,
+                                    left(from).filter(move |left_tuple| {
+                                        if let Ok(left_tuple) = left_tuple {
+                                            !right.iter().any(|right_tuple| {
+                                                are_compatible_and_not_disjointed_except(
+                                                    left_tuple,
+                                                    right_tuple,
+                                                    graph_variable,
+                                                )
+                                            })
+                                        } else {
+                                            true
+                                        }
+                                    }),
+                                )
                             })
                         } else {
                             let keys = keys
@@ -1574,19 +1601,24 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                                     return left(from);
                                 }
                                 let (_, meter) = guard.into_parts();
-                                held(meter, left(from).filter(move |left_tuple| {
-                                    if let Ok(left_tuple) = left_tuple {
-                                        !right_values.get(left_tuple).iter().any(|right_tuple| {
-                                            are_compatible_and_not_disjointed_except(
-                                                left_tuple,
-                                                right_tuple,
-                                                graph_variable,
+                                held(
+                                    meter,
+                                    left(from).filter(move |left_tuple| {
+                                        if let Ok(left_tuple) = left_tuple {
+                                            !right_values.get(left_tuple).iter().any(
+                                                |right_tuple| {
+                                                    are_compatible_and_not_disjointed_except(
+                                                        left_tuple,
+                                                        right_tuple,
+                                                        graph_variable,
+                                                    )
+                                                },
                                             )
-                                        })
-                                    } else {
-                                        true
-                                    }
-                                }))
+                                        } else {
+                                            true
+                                        }
+                                    }),
+                                )
                             })
                         }
                     }
@@ -1611,8 +1643,7 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                 let lookup_evaluator = if lookup.is_empty() {
                     None
                 } else {
-                    let filtered =
-                        GraphPattern::filter(right.as_ref().clone(), expression.clone());
+                    let filtered = GraphPattern::filter(right.as_ref().clone(), expression.clone());
                     let (evaluator, stats) =
                         self.graph_pattern_evaluator(&filtered, encoded_variables);
                     stat_children.push(stats);
@@ -1669,12 +1700,15 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                             if right_values.is_empty() && errors.is_empty() {
                                 return left(from);
                             }
-                            held(meter, HashLeftJoinIterator {
-                                left_iter: left(from),
-                                right: right_values,
-                                buffered_results: errors,
-                                expression: Rc::clone(&expression),
-                            })
+                            held(
+                                meter,
+                                HashLeftJoinIterator {
+                                    left_iter: left(from),
+                                    right: right_values,
+                                    buffered_results: errors,
+                                    expression: Rc::clone(&expression),
+                                },
+                            )
                         })
                     }
                 }
@@ -1695,15 +1729,17 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                 Rc::new(move |from| {
                     let expression = Rc::clone(&expression);
                     let token = token.clone();
-                    Box::new(child(from).filter_map(move |tuple| match tuple {
-                        Ok(tuple) => match expression(&tuple) {
-                            Some(true) => Some(Ok(tuple)),
-                            Some(false) => None,
-                            None => token
-                                .is_cancelled()
-                                .then_some(Err(QueryEvaluationError::Cancelled)),
-                        },
-                        Err(e) => Some(Err(e)),
+                    Box::new(child(from).filter_map(move |tuple| {
+                        match tuple {
+                            Ok(tuple) => match expression(&tuple) {
+                                Some(true) => Some(Ok(tuple)),
+                                Some(false) => None,
+                                None => token
+                                    .is_cancelled()
+                                    .then_some(Err(QueryEvaluationError::Cancelled)),
+                            },
+                            Err(e) => Some(Err(e)),
+                        }
                     }))
                 })
             }
@@ -1818,28 +1854,31 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                     })
                     .collect::<Result<Vec<_>, QueryEvaluationError>>()?;
                 let token = self.dataset.cancellation_token.clone();
-                let compare = move |a: &InternalTuple<D::InternalTerm>,
-                                    b: &InternalTuple<D::InternalTerm>| {
-                    for comp in &by {
-                        match comp {
-                            ComparatorFunction::Asc(expression) => {
-                                match cmp_terms(expression(a).as_ref(), expression(b).as_ref()) {
-                                    Ordering::Greater => return Ordering::Greater,
-                                    Ordering::Less => return Ordering::Less,
-                                    Ordering::Equal => (),
+                let compare =
+                    move |a: &InternalTuple<D::InternalTerm>,
+                          b: &InternalTuple<D::InternalTerm>| {
+                        for comp in &by {
+                            match comp {
+                                ComparatorFunction::Asc(expression) => {
+                                    match cmp_terms(expression(a).as_ref(), expression(b).as_ref())
+                                    {
+                                        Ordering::Greater => return Ordering::Greater,
+                                        Ordering::Less => return Ordering::Less,
+                                        Ordering::Equal => (),
+                                    }
                                 }
-                            }
-                            ComparatorFunction::Desc(expression) => {
-                                match cmp_terms(expression(a).as_ref(), expression(b).as_ref()) {
-                                    Ordering::Greater => return Ordering::Less,
-                                    Ordering::Less => return Ordering::Greater,
-                                    Ordering::Equal => (),
+                                ComparatorFunction::Desc(expression) => {
+                                    match cmp_terms(expression(a).as_ref(), expression(b).as_ref())
+                                    {
+                                        Ordering::Greater => return Ordering::Less,
+                                        Ordering::Less => return Ordering::Greater,
+                                        Ordering::Equal => (),
+                                    }
                                 }
                             }
                         }
-                    }
-                    Ordering::Equal
-                };
+                        Ordering::Equal
+                    };
                 let compare = Rc::new(compare);
                 if let Some(k) = top {
                     // tripletrail (#874): only the first `k` rows are read, so only `k` are
@@ -1849,18 +1888,18 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                         Box::new(top_k(child(from), k, &token, |a, b| compare(a, b)).into_iter())
                     })
                 } else {
-                Rc::new(move |from| {
-                    // tripletrail (#189): the rows held for sorting count against the query's
-                    // memory limit.
-                    let mut guard = BuildGuard::new(child(from), &token);
-                    let mut values = (&mut guard).collect::<Vec<_>>();
-                    if let Some(stop) = guard.stop {
-                        return Box::new(once(Err(stop)));
-                    }
-                    let (errors, meter) = guard.into_parts();
-                    values.sort_unstable_by(|a, b| compare(a, b));
-                    held(meter, errors.into_iter().chain(values.into_iter().map(Ok)))
-                })
+                    Rc::new(move |from| {
+                        // tripletrail (#189): the rows held for sorting count against the query's
+                        // memory limit.
+                        let mut guard = BuildGuard::new(child(from), &token);
+                        let mut values = (&mut guard).collect::<Vec<_>>();
+                        if let Some(stop) = guard.stop {
+                            return Box::new(once(Err(stop)));
+                        }
+                        let (errors, meter) = guard.into_parts();
+                        values.sort_unstable_by(|a, b| compare(a, b));
+                        held(meter, errors.into_iter().chain(values.into_iter().map(Ok)))
+                    })
                 }
             }
             GraphPattern::Distinct { inner } => {
@@ -2027,7 +2066,9 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                                     stop = Some(error);
                                     break;
                                 }
-                                e.insert(accumulator_builders.iter().map(|c| c()).collect::<Vec<_>>())
+                                e.insert(
+                                    accumulator_builders.iter().map(|c| c()).collect::<Vec<_>>(),
+                                )
                             }
                         };
                         // tripletrail (#874): and so do the values an aggregate keeps.
@@ -3120,7 +3161,8 @@ pub fn cmp_values_as_jena(a: &ExpressionTerm, b: &ExpressionTerm) -> Ordering {
     }
     // The terms as written: simple strings, then language-tagged strings by tag, then the
     // other literals by lexical form and datatype.
-    let (Term::Literal(a), Term::Literal(b)) = (Term::from(a.clone()), Term::from(b.clone())) else {
+    let (Term::Literal(a), Term::Literal(b)) = (Term::from(a.clone()), Term::from(b.clone()))
+    else {
         return Ordering::Equal;
     };
     let rank = |l: &Literal| match (l.language(), l.datatype() == xsd::STRING) {
@@ -3198,7 +3240,10 @@ fn cmp_number_keys((x, ex): (f64, Option<Decimal>), (y, ey): (f64, Option<Decima
         (true, true) => Ordering::Equal,
         (true, false) => Ordering::Greater,
         (false, true) => Ordering::Less,
-        (false, false) => x.partial_cmp(&y).unwrap_or(Ordering::Equal).then_with(|| ex.cmp(&ey)),
+        (false, false) => x
+            .partial_cmp(&y)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| ex.cmp(&ey)),
     }
 }
 
@@ -3882,16 +3927,16 @@ impl<'a, D: QueryableDataset<'a>> PathEvaluator<'a, D> {
                 self.eval_from_in_graph(a, start, graph_name)
                     .chain(self.eval_from_in_graph(b, start, graph_name)),
             )),
-            PropertyPath::ZeroOrMore(p) => {
-                self.zero_length_or(start, graph_name, || {
-                    let eval = self.clone();
-                    let p = Rc::clone(p);
-                    let graph_name2 = graph_name.cloned();
-                    transitive_closure(self.dataset.cancellation_token.clone(), Some(Ok(start.clone())), move |e| {
-                        eval.eval_from_in_graph(&p, &e, graph_name2.as_ref())
-                    })
-                })
-            }
+            PropertyPath::ZeroOrMore(p) => self.zero_length_or(start, graph_name, || {
+                let eval = self.clone();
+                let p = Rc::clone(p);
+                let graph_name2 = graph_name.cloned();
+                transitive_closure(
+                    self.dataset.cancellation_token.clone(),
+                    Some(Ok(start.clone())),
+                    move |e| eval.eval_from_in_graph(&p, &e, graph_name2.as_ref()),
+                )
+            }),
             PropertyPath::OneOrMore(p) => {
                 let eval = self.clone();
                 let p = Rc::clone(p);
@@ -3902,14 +3947,11 @@ impl<'a, D: QueryableDataset<'a>> PathEvaluator<'a, D> {
                     move |e| eval.eval_from_in_graph(&p, &e, graph_name2.as_ref()),
                 ))
             }
-            PropertyPath::ZeroOrOne(p) => {
-                self.zero_length_or(start, graph_name, || {
-                    hash_deduplicate(
-                        once(Ok(start.clone()))
-                            .chain(self.eval_from_in_graph(p, start, graph_name)),
-                    )
-                })
-            }
+            PropertyPath::ZeroOrOne(p) => self.zero_length_or(start, graph_name, || {
+                hash_deduplicate(
+                    once(Ok(start.clone())).chain(self.eval_from_in_graph(p, start, graph_name)),
+                )
+            }),
             PropertyPath::Bounded(p, min, max) => {
                 let (min, max) = (*min, *max);
                 let eval = self.clone();
@@ -3991,9 +4033,11 @@ impl<'a, D: QueryableDataset<'a>> PathEvaluator<'a, D> {
                     let eval = eval.clone();
                     let p = Rc::clone(&p);
                     let graph_name2 = graph_name.clone();
-                    transitive_closure(eval.dataset.cancellation_token.clone(), Some(Ok(start2.clone())), move |e| {
-                        eval.eval_from_in_graph(&p, &e, graph_name2.as_ref())
-                    })
+                    transitive_closure(
+                        eval.dataset.cancellation_token.clone(),
+                        Some(Ok(start2.clone())),
+                        move |e| eval.eval_from_in_graph(&p, &e, graph_name2.as_ref()),
+                    )
                     .map(move |e| Ok((e?, graph_name.clone())))
                 })
             }
@@ -4079,16 +4123,16 @@ impl<'a, D: QueryableDataset<'a>> PathEvaluator<'a, D> {
                 self.eval_to_in_graph(a, end, graph_name)
                     .chain(self.eval_to_in_graph(b, end, graph_name)),
             )),
-            PropertyPath::ZeroOrMore(p) => {
-                self.zero_length_or(end, graph_name, || {
-                    let eval = self.clone();
-                    let p = Rc::clone(p);
-                    let graph_name2 = graph_name.cloned();
-                    transitive_closure(self.dataset.cancellation_token.clone(), Some(Ok(end.clone())), move |e| {
-                        eval.eval_to_in_graph(&p, &e, graph_name2.as_ref())
-                    })
-                })
-            }
+            PropertyPath::ZeroOrMore(p) => self.zero_length_or(end, graph_name, || {
+                let eval = self.clone();
+                let p = Rc::clone(p);
+                let graph_name2 = graph_name.cloned();
+                transitive_closure(
+                    self.dataset.cancellation_token.clone(),
+                    Some(Ok(end.clone())),
+                    move |e| eval.eval_to_in_graph(&p, &e, graph_name2.as_ref()),
+                )
+            }),
             PropertyPath::OneOrMore(p) => {
                 let eval = self.clone();
                 let p = Rc::clone(p);
@@ -4185,9 +4229,11 @@ impl<'a, D: QueryableDataset<'a>> PathEvaluator<'a, D> {
                     let eval = eval.clone();
                     let p = Rc::clone(&p);
                     let graph_name2 = graph_name.clone();
-                    transitive_closure(eval.dataset.cancellation_token.clone(), Some(Ok(end2.clone())), move |e| {
-                        eval.eval_to_in_graph(&p, &e, graph_name2.as_ref())
-                    })
+                    transitive_closure(
+                        eval.dataset.cancellation_token.clone(),
+                        Some(Ok(end2.clone())),
+                        move |e| eval.eval_to_in_graph(&p, &e, graph_name2.as_ref()),
+                    )
                     .map(move |e| Ok((e?, graph_name.clone())))
                 })
             }
@@ -4312,15 +4358,19 @@ impl<'a, D: QueryableDataset<'a>> PathEvaluator<'a, D> {
             )),
             PropertyPath::Bounded(p, min, max) => {
                 let whole = Rc::new(PropertyPath::Bounded(Rc::clone(p), *min, *max));
-                let starts: Box<dyn Iterator<Item = Result<D::InternalTerm, QueryEvaluationError>>> =
-                    if *min == 0 {
-                        Box::new(
-                            self.get_subject_or_object_identity_pairs_in_graph(graph_name)
-                                .map(|r| r.map(|(s, _)| s)),
-                        )
-                    } else {
-                        Box::new(self.eval_open_in_graph(p, graph_name).map(|r| r.map(|(s, _)| s)))
-                    };
+                let starts: Box<
+                    dyn Iterator<Item = Result<D::InternalTerm, QueryEvaluationError>>,
+                > = if *min == 0 {
+                    Box::new(
+                        self.get_subject_or_object_identity_pairs_in_graph(graph_name)
+                            .map(|r| r.map(|(s, _)| s)),
+                    )
+                } else {
+                    Box::new(
+                        self.eval_open_in_graph(p, graph_name)
+                            .map(|r| r.map(|(s, _)| s)),
+                    )
+                };
                 let eval = self.clone();
                 let graph_name2 = graph_name.cloned();
                 Box::new(hash_deduplicate(starts).flat_map_ok(move |start| {
@@ -4418,11 +4468,11 @@ impl<'a, D: QueryableDataset<'a>> PathEvaluator<'a, D> {
                 let whole = Rc::new(PropertyPath::Bounded(Rc::clone(p), *min, *max));
                 let starts: Box<
                     dyn Iterator<
-                            Item = Result<
-                                (D::InternalTerm, Option<D::InternalTerm>),
-                                QueryEvaluationError,
-                            >,
+                        Item = Result<
+                            (D::InternalTerm, Option<D::InternalTerm>),
+                            QueryEvaluationError,
                         >,
+                    >,
                 > = if *min == 0 {
                     Box::new(
                         self.get_subject_or_object_identity_pairs_in_dataset()
@@ -4435,10 +4485,12 @@ impl<'a, D: QueryableDataset<'a>> PathEvaluator<'a, D> {
                     )
                 };
                 let eval = self.clone();
-                Box::new(hash_deduplicate(starts).flat_map_ok(move |(start, graph_name)| {
-                    eval.eval_from_in_graph(&whole, &start, graph_name.as_ref())
-                        .map(move |end| Ok((start.clone(), end?, graph_name.clone())))
-                }))
+                Box::new(
+                    hash_deduplicate(starts).flat_map_ok(move |(start, graph_name)| {
+                        eval.eval_from_in_graph(&whole, &start, graph_name.as_ref())
+                            .map(move |end| Ok((start.clone(), end?, graph_name.clone())))
+                    }),
+                )
             }
             PropertyPath::NegatedPropertySet(ps) => {
                 let ps = Rc::clone(ps);
@@ -5107,7 +5159,10 @@ impl<'a, D: QueryableDataset<'a>> Iterator for DescribeIterator<'a, D> {
 /// The terms `next` reaches from `start`, each once. tripletrail (#874): the set of the terms
 /// reached counts against the query's memory limit, and the timeout is checked every 1,024
 /// terms; past either, only that error.
-fn transitive_closure<T: Clone + Eq + Hash, NI: Iterator<Item = Result<T, QueryEvaluationError>>>(
+fn transitive_closure<
+    T: Clone + Eq + Hash,
+    NI: Iterator<Item = Result<T, QueryEvaluationError>>,
+>(
     token: CancellationToken,
     start: impl IntoIterator<Item = Result<T, QueryEvaluationError>>,
     mut next: impl FnMut(T) -> NI,
@@ -5148,8 +5203,8 @@ fn transitive_closure<T: Clone + Eq + Hash, NI: Iterator<Item = Result<T, QueryE
                     }
                 }
                 Err(
-                    error @ (QueryEvaluationError::Cancelled
-                    | QueryEvaluationError::MemoryLimit(_)),
+                    error
+                    @ (QueryEvaluationError::Cancelled | QueryEvaluationError::MemoryLimit(_)),
                 ) => {
                     stop = Some(error);
                     break 'walk;
@@ -5554,7 +5609,7 @@ fn lookup_probe_join<'a, T: Clone + Eq + Hash + 'a>(
             variables: variables.clone(),
             looked_up: 0,
             fallback: None,
-                                    fallback_meter: None,
+            fallback_meter: None,
             current: Box::new(empty()),
             buffered_results: Vec::new(),
             token: token.clone(),
@@ -5956,8 +6011,8 @@ impl<I: Iterator<Item = Result<InternalTuple<T>, QueryEvaluationError>>, T> Iter
                 }
                 // A timeout or the memory limit further down ends this side too.
                 Err(
-                    error @ (QueryEvaluationError::Cancelled
-                    | QueryEvaluationError::MemoryLimit(_)),
+                    error
+                    @ (QueryEvaluationError::Cancelled | QueryEvaluationError::MemoryLimit(_)),
                 ) => {
                     self.stop = Some(error);
                     return None;
@@ -6443,54 +6498,248 @@ pub(crate) fn with_custom_function_call<R>(
     f()
 }
 
-
 #[cfg(test)]
 /// tripletrail (#148): `cmp_terms` is a total order (or `ORDER BY`'s sort panics), over
 /// every triple of a zoo of terms: all kinds of literals with bad lexical forms, NaN, INF, dates
 /// with and without timezones, durations of months and of days, IRIs, blank nodes, unbound.
 mod order_is_total {
     use super::*;
-    use oxrdf::{Literal, NamedNode, BlankNode};
+    use oxrdf::{BlankNode, Literal, NamedNode};
     #[test]
     fn cmp_terms_is_a_total_order() {
         let x = "http://www.w3.org/2001/XMLSchema#";
         let mut zoo: Vec<Term> = Vec::new();
         for (v, dts) in [
-            (&["0", "1", "-1", "2", "10", "01", "+1", "9223372036854775807", "-9223372036854775808", "99999999999999999999999", "9007199254740992", "9007199254740993", "-50699387048463032", "-50699387048463031", "abc", ""][..], &["integer", "int", "long", "short", "byte", "nonNegativeInteger", "unsignedInt"][..]),
-            (&["0.0", "-0.0", "1.0", "1.50", "2.5", "10", "1", "1e3", "x", "123456789012345678901234567890.5", "0.1", "0.100000000000000001", "0.100000000000000002", "9007199254740992.5"][..], &["decimal"][..]),
-            (&["0", "-0", "0.0", "1", "1.0", "1.0E0", "2.5", "NaN", "INF", "-INF", "1e308", "1e-320", "10", "abc", "0.1", "9007199254740992", "-50699387048463032"][..], &["double", "float"][..]),
+            (
+                &[
+                    "0",
+                    "1",
+                    "-1",
+                    "2",
+                    "10",
+                    "01",
+                    "+1",
+                    "9223372036854775807",
+                    "-9223372036854775808",
+                    "99999999999999999999999",
+                    "9007199254740992",
+                    "9007199254740993",
+                    "-50699387048463032",
+                    "-50699387048463031",
+                    "abc",
+                    "",
+                ][..],
+                &[
+                    "integer",
+                    "int",
+                    "long",
+                    "short",
+                    "byte",
+                    "nonNegativeInteger",
+                    "unsignedInt",
+                ][..],
+            ),
+            (
+                &[
+                    "0.0",
+                    "-0.0",
+                    "1.0",
+                    "1.50",
+                    "2.5",
+                    "10",
+                    "1",
+                    "1e3",
+                    "x",
+                    "123456789012345678901234567890.5",
+                    "0.1",
+                    "0.100000000000000001",
+                    "0.100000000000000002",
+                    "9007199254740992.5",
+                ][..],
+                &["decimal"][..],
+            ),
+            (
+                &[
+                    "0",
+                    "-0",
+                    "0.0",
+                    "1",
+                    "1.0",
+                    "1.0E0",
+                    "2.5",
+                    "NaN",
+                    "INF",
+                    "-INF",
+                    "1e308",
+                    "1e-320",
+                    "10",
+                    "abc",
+                    "0.1",
+                    "9007199254740992",
+                    "-50699387048463032",
+                ][..],
+                &["double", "float"][..],
+            ),
             (&["true", "false", "1", "0", "x"][..], &["boolean"][..]),
-            (&["2024-01-05T10:00:00Z", "2024-01-05T10:00:00", "2024-01-05T12:00:00+02:00", "2024-01-05T23:00:00-14:00", "2024-01-06T00:00:00+14:00", "2024-01-05T10:00:00.5", "bad"][..], &["dateTime", "dateTimeStamp"][..]),
-            (&["2024-01-05", "2024-01-05Z", "2024-01-05+14:00", "2024-01-04-14:00", "2023-12-31", "bad"][..], &["date"][..]),
-            (&["10:00:00", "10:00:00Z", "12:00:00+02:00", "23:59:59-14:00", "00:00:00+14:00"][..], &["time"][..]),
-            (&["P1M", "P30D", "P29D", "P27D", "P31D", "P1Y", "P365D", "P366D", "P12M", "PT24H", "P1D", "PT0S", "-P1M", "P1M1D", "P28D", "P1Y1D", "P13M"][..], &["duration", "yearMonthDuration", "dayTimeDuration"][..]),
-            (&["2024", "2023", "2024Z", "2024+14:00", "2024-14:00"][..], &["gYear"][..]),
-            (&["2024-01", "2024-02Z", "2024-01+14:00"][..], &["gYearMonth"][..]),
-            (&["--01-05", "--01-05Z", "---05", "---05Z", "--01", "--01Z"][..], &["gMonthDay", "gDay", "gMonth"][..]),
-            (&["a", "1", "1z", "10", "2", "", "NaN", "true", "2024-01-05"][..], &["string", "anyURI", "hexBinary", "token"][..]),
+            (
+                &[
+                    "2024-01-05T10:00:00Z",
+                    "2024-01-05T10:00:00",
+                    "2024-01-05T12:00:00+02:00",
+                    "2024-01-05T23:00:00-14:00",
+                    "2024-01-06T00:00:00+14:00",
+                    "2024-01-05T10:00:00.5",
+                    "bad",
+                ][..],
+                &["dateTime", "dateTimeStamp"][..],
+            ),
+            (
+                &[
+                    "2024-01-05",
+                    "2024-01-05Z",
+                    "2024-01-05+14:00",
+                    "2024-01-04-14:00",
+                    "2023-12-31",
+                    "bad",
+                ][..],
+                &["date"][..],
+            ),
+            (
+                &[
+                    "10:00:00",
+                    "10:00:00Z",
+                    "12:00:00+02:00",
+                    "23:59:59-14:00",
+                    "00:00:00+14:00",
+                ][..],
+                &["time"][..],
+            ),
+            (
+                &[
+                    "P1M", "P30D", "P29D", "P27D", "P31D", "P1Y", "P365D", "P366D", "P12M",
+                    "PT24H", "P1D", "PT0S", "-P1M", "P1M1D", "P28D", "P1Y1D", "P13M",
+                ][..],
+                &["duration", "yearMonthDuration", "dayTimeDuration"][..],
+            ),
+            (
+                &["2024", "2023", "2024Z", "2024+14:00", "2024-14:00"][..],
+                &["gYear"][..],
+            ),
+            (
+                &["2024-01", "2024-02Z", "2024-01+14:00"][..],
+                &["gYearMonth"][..],
+            ),
+            (
+                &["--01-05", "--01-05Z", "---05", "---05Z", "--01", "--01Z"][..],
+                &["gMonthDay", "gDay", "gMonth"][..],
+            ),
+            (
+                &["a", "1", "1z", "10", "2", "", "NaN", "true", "2024-01-05"][..],
+                &["string", "anyURI", "hexBinary", "token"][..],
+            ),
         ] {
-            for v in v { for d in dts { zoo.push(Literal::new_typed_literal(*v, NamedNode::new_unchecked(format!("{x}{d}"))).into()); } }
+            for v in v {
+                for d in dts {
+                    zoo.push(
+                        Literal::new_typed_literal(*v, NamedNode::new_unchecked(format!("{x}{d}")))
+                            .into(),
+                    );
+                }
+            }
         }
         for v in ["a", "b", "1", "10", "2", "", "1z"] {
             zoo.push(Literal::new_simple_literal(v).into());
-            for l in ["en", "fr", "en-gb", "de"] { zoo.push(Literal::new_language_tagged_literal_unchecked(v, l).into()); }
-            zoo.push(Literal::new_typed_literal(v, NamedNode::new_unchecked("http://example.org/dt")).into());
-            zoo.push(Literal::new_typed_literal(v, NamedNode::new_unchecked("http://example.org/dt2")).into());
+            for l in ["en", "fr", "en-gb", "de"] {
+                zoo.push(Literal::new_language_tagged_literal_unchecked(v, l).into());
+            }
+            zoo.push(
+                Literal::new_typed_literal(v, NamedNode::new_unchecked("http://example.org/dt"))
+                    .into(),
+            );
+            zoo.push(
+                Literal::new_typed_literal(v, NamedNode::new_unchecked("http://example.org/dt2"))
+                    .into(),
+            );
             zoo.push(NamedNode::new_unchecked(format!("http://e/{v}")).into());
             zoo.push(BlankNode::new_unchecked(format!("b{}", v.len())).into());
         }
-        let e: Vec<Option<ExpressionTerm>> = std::iter::once(None).chain(zoo.iter().cloned().map(|t| Some(ExpressionTerm::from(t)))).collect();
+        let e: Vec<Option<ExpressionTerm>> = std::iter::once(None)
+            .chain(zoo.iter().cloned().map(|t| Some(ExpressionTerm::from(t))))
+            .collect();
         let n = e.len();
-        let c: Vec<Vec<Ordering>> = e.iter().map(|a| e.iter().map(|b| cmp_terms(a.as_ref(), b.as_ref())).collect()).collect();
-        let show = |i: usize| if i == 0 { "UNBOUND".to_owned() } else { zoo[i - 1].to_string() };
+        let c: Vec<Vec<Ordering>> = e
+            .iter()
+            .map(|a| {
+                e.iter()
+                    .map(|b| cmp_terms(a.as_ref(), b.as_ref()))
+                    .collect()
+            })
+            .collect();
+        let show = |i: usize| {
+            if i == 0 {
+                "UNBOUND".to_owned()
+            } else {
+                zoo[i - 1].to_string()
+            }
+        };
         let (mut anti, mut trans, mut eqtrans) = (0, 0, 0);
-        for i in 0..n { for j in 0..n {
-            if c[i][j] != c[j][i].reverse() { anti += 1; if anti <= 5 { eprintln!("ANTISYM {} {} {:?} {:?}", show(i), show(j), c[i][j], c[j][i]); } }
-        } }
-        for i in 0..n { for j in 0..n { if c[i][j] == Ordering::Greater { continue; } for k in 0..n {
-            if c[i][j] == Ordering::Less && c[j][k] == Ordering::Less && c[i][k] != Ordering::Less { trans += 1; if trans <= 12 { eprintln!("CYCLE {} < {} < {} but first vs third {:?}", show(i), show(j), show(k), c[i][k]); } }
-            if c[i][j] == Ordering::Equal && c[j][k] != c[i][k] { eqtrans += 1; if eqtrans <= 12 { eprintln!("EQ {} == {} but vs {}: {:?} and {:?}", show(i), show(j), show(k), c[i][k], c[j][k]); } }
-        } } }
-        assert_eq!((anti, trans, eqtrans), (0, 0, 0), "{n} terms: antisymmetry, cycles, equal ones ordered differently");
+        for i in 0..n {
+            for j in 0..n {
+                if c[i][j] != c[j][i].reverse() {
+                    anti += 1;
+                    if anti <= 5 {
+                        eprintln!(
+                            "ANTISYM {} {} {:?} {:?}",
+                            show(i),
+                            show(j),
+                            c[i][j],
+                            c[j][i]
+                        );
+                    }
+                }
+            }
+        }
+        for i in 0..n {
+            for j in 0..n {
+                if c[i][j] == Ordering::Greater {
+                    continue;
+                }
+                for k in 0..n {
+                    if c[i][j] == Ordering::Less
+                        && c[j][k] == Ordering::Less
+                        && c[i][k] != Ordering::Less
+                    {
+                        trans += 1;
+                        if trans <= 12 {
+                            eprintln!(
+                                "CYCLE {} < {} < {} but first vs third {:?}",
+                                show(i),
+                                show(j),
+                                show(k),
+                                c[i][k]
+                            );
+                        }
+                    }
+                    if c[i][j] == Ordering::Equal && c[j][k] != c[i][k] {
+                        eqtrans += 1;
+                        if eqtrans <= 12 {
+                            eprintln!(
+                                "EQ {} == {} but vs {}: {:?} and {:?}",
+                                show(i),
+                                show(j),
+                                show(k),
+                                c[i][k],
+                                c[j][k]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            (anti, trans, eqtrans),
+            (0, 0, 0),
+            "{n} terms: antisymmetry, cycles, equal ones ordered differently"
+        );
     }
 }
