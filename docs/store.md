@@ -256,7 +256,10 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   `STR(ex:)`, compiled once), `UCASE`, `LCASE`, `STRLEN`, `SUBSTR` (with an integer start
   and length), `STRBEFORE` and `STRAFTER` of
   columns, constants and such numbers are computed the same way (`idstring`), once per
-  distinct value of the one or two columns they read, with the evaluator's rules: `STR` of an
+  distinct value of the one or two columns they read (a table where nearly every row is new
+  drops that memo after 2,048 rows), from 8,192 rows in chunks on the query threads, whose
+  new strings are then given their ids under one lock (133k orders, `STR(?o)` of every order
+  227 → 120 ms, as the evaluator's 115), with the evaluator's rules: `STR` of an
   IRI or a literal is a simple literal of its text, `CONCAT` keeps a language every part
   shares, `REPLACE`, `UCASE`, `LCASE` and `SUBSTR` keep the language (and direction) of their
   text, `STRBEFORE` and `STRAFTER` too when they find the second string (a language the first

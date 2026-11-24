@@ -2496,3 +2496,53 @@ fn exists_with_filters_on_ids_are_the_evaluators() {
         assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "on ids: {p}");
     }
 }
+
+/// Strings computed per row in chunks on several cores (#11): the same string from two chunks
+/// is one term, so `DISTINCT`, counts and joins on it are the evaluator's, with a new string
+/// per row (`STR(?s)`, whose memo is dropped) and with few distinct ones.
+#[test]
+fn strings_computed_in_chunks_are_one_term_each() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::new();
+    for i in 0..20_000 {
+        data.push_str(&format!(
+            "<http://example.org/s{i}> <http://example.org/n> {} .\n",
+            i % 300
+        ));
+        data.push_str(&format!(
+            "<http://example.org/s{i}> <http://example.org/name> \"name {}\" .\n",
+            i % 7_000
+        ));
+    }
+    for i in 0..300 {
+        data.push_str(&format!(
+            "<http://example.org/k{i}> <http://example.org/key> \"v{i}\" .\n"
+        ));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for q in [
+        "SELECT ?s ?u WHERE { ?s ex:n ?x BIND(STR(?s) AS ?u) }",
+        "SELECT ?s ?u WHERE { ?s ex:name ?m BIND(UCASE(?m) AS ?u) }",
+        "SELECT DISTINCT ?u WHERE { ?s ex:name ?m BIND(CONCAT(?m, \"!\") AS ?u) }",
+        "SELECT DISTINCT ?u WHERE { ?s ex:n ?x BIND(CONCAT(\"v\", STR(?x)) AS ?u) }",
+        "SELECT (COUNT(DISTINCT ?u) AS ?c) WHERE { ?s ex:name ?m BIND(LCASE(?m) AS ?u) }",
+        "SELECT ?u (COUNT(*) AS ?c) WHERE { ?s ex:name ?m BIND(STRAFTER(?m, \" \") AS ?u) } GROUP BY ?u",
+        "SELECT ?s ?k WHERE { ?s ex:n ?x BIND(CONCAT(\"v\", STR(?x)) AS ?u) ?k ex:key ?u }",
+    ] {
+        let ids = rows(&engine, &format!("#pragma tt.executor ids\n{prefix} {q}"));
+        assert!(!ids.is_empty(), "{q}");
+        assert_eq!(
+            ids,
+            rows(
+                &engine,
+                &format!("#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n{prefix} {q}")
+            ),
+            "{q}"
+        );
+    }
+    let plan = engine
+        .explain(&format!("#pragma tt.executor ids\n{prefix} SELECT * WHERE {{ ?s ex:name ?m BIND(UCASE(?m) AS ?u) }}"))
+        .unwrap();
+    assert!(plan.contains(r#""executor":"ids""#), "{plan}");
+}

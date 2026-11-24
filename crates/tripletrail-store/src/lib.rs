@@ -2982,6 +2982,23 @@ fn quad_ids(dict: &Dictionary, quad: QuadRef<'_>) -> Option<[u64; 4]> {
     ])
 }
 
+/// Terms on their way to their ids ([`Snapshot::prepare_ids`]).
+#[derive(Default)]
+pub struct PreparedIds {
+    ids: Vec<Prepared>,
+    /// The keys of the terms that are not inline, one after another.
+    keys: Vec<u8>,
+}
+
+enum Prepared {
+    Id(TermId),
+    /// A key, ending at `end` in the keys, with its stored id when the dictionary had it.
+    Key {
+        end: usize,
+        stored: Option<TermId>,
+    },
+}
+
 /// Terms a query made up (constants not in the store, computed values), numbered per view.
 struct Ephemeral {
     /// The dictionary keys of the terms, one after another.
@@ -3055,7 +3072,8 @@ thread_local! {
 pub struct Snapshot {
     inner: Arc<Inner>,
     quads: QuadIndex,
-    ephemeral: Arc<Mutex<Ephemeral>>,
+    /// Read under a shared lock, so the query threads decode its terms side by side.
+    ephemeral: Arc<RwLock<Ephemeral>>,
     /// Whether "any graph" scans read the default graph too, which a query whose default
     /// graph is the union of all graphs needs (see [`Snapshot::with_all_graphs`]).
     all_graphs: bool,
@@ -3795,7 +3813,7 @@ impl Snapshot {
         match id.kind() {
             Kind::Ephemeral => self
                 .ephemeral
-                .lock_unpoisoned()
+                .read_unpoisoned()
                 .term(id.payload())
                 .ok_or_else(|| StoreError::Corrupt(format!("unknown term {id:?}"))),
             _ if id.is_dictionary() => {
@@ -4180,6 +4198,61 @@ impl Snapshot {
         self.internal_id(term)
     }
 
+    /// The first half of [`Snapshot::id_of`] for each of `terms`, which the query threads
+    /// take side by side: inline and stored ids, and the keys of the others. The ids are then
+    /// [`Snapshot::finish_ids`] (#11).
+    pub fn prepare_ids(&self, terms: impl IntoIterator<Item = Term>) -> PreparedIds {
+        let mut out = PreparedIds::default();
+        let dict = self.inner.dict.read_unpoisoned();
+        KEY.with_borrow_mut(|key| {
+            for term in terms {
+                if !self.tables.is_empty()
+                    && let Term::NamedNode(n) = &term
+                    && let Some(id) = table::column(&self.tables, n.as_str())
+                {
+                    out.ids.push(Prepared::Id(id));
+                    continue;
+                }
+                let kind = match dict::encode(term.as_ref(), key) {
+                    Encoded::Inline(id) => {
+                        out.ids.push(Prepared::Id(id));
+                        continue;
+                    }
+                    Encoded::Key(kind) => kind,
+                };
+                out.keys.extend_from_slice(key);
+                out.ids.push(Prepared::Key {
+                    end: out.keys.len(),
+                    stored: dict.get(key).map(|o| TermId::new(kind, u64::from(o))),
+                });
+            }
+        });
+        out
+    }
+
+    /// The ids of [`Snapshot::prepare_ids`]: a term made up for this view keeps its id (as
+    /// in `internal_id`), one the dictionary holds is its stored id, any other is made up.
+    pub fn finish_ids(&self, prepared: PreparedIds) -> Vec<TermId> {
+        let mut ephemeral = self.ephemeral.write_unpoisoned();
+        let mut start = 0;
+        prepared
+            .ids
+            .into_iter()
+            .map(|p| match p {
+                Prepared::Id(id) => id,
+                Prepared::Key { end, stored } => {
+                    let key = &prepared.keys[start..end];
+                    start = end;
+                    match (ephemeral.get(key), stored) {
+                        (Some(i), _) => TermId::new(Kind::Ephemeral, i),
+                        (None, Some(id)) => id,
+                        (None, None) => TermId::new(Kind::Ephemeral, ephemeral.get_or_insert(key)),
+                    }
+                }
+            })
+            .collect()
+    }
+
     /// The id of `term`: its stored id, or one made up for this view.
     fn internal_id(&self, term: Term) -> TermId {
         if !self.tables.is_empty()
@@ -4196,13 +4269,13 @@ impl Snapshot {
             // A term made up for this view keeps its id even once the dictionary has it: an
             // update writes the quads of its first rows (#382), or another writer commits,
             // while this view is still evaluating, and one term must have one id in it.
-            if let Some(i) = self.ephemeral.lock_unpoisoned().get(key) {
+            if let Some(i) = self.ephemeral.read_unpoisoned().get(key) {
                 return TermId::new(Kind::Ephemeral, i);
             }
             if let Some(o) = self.inner.dict.read_unpoisoned().get(key) {
                 return TermId::new(kind, u64::from(o));
             }
-            let i = self.ephemeral.lock_unpoisoned().get_or_insert(key);
+            let i = self.ephemeral.write_unpoisoned().get_or_insert(key);
             TermId::new(Kind::Ephemeral, i)
         })
     }
