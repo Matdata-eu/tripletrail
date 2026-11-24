@@ -2572,3 +2572,97 @@ fn strings_computed_in_chunks_are_one_term_each() {
         .unwrap();
     assert!(plan.contains(r#""executor":"ids""#), "{plan}");
 }
+
+/// `MIN` and `MAX` of date-times on term ids (#11), by instant, as the evaluator gives them;
+/// values it doesn't order by instant alone (with and without a time zone, dates with
+/// date-times, other terms) and ties at one instant written differently are left to it.
+#[test]
+fn date_time_extremes_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    for i in 0..3_000 {
+        let (month, day, hour) = (1 + i % 12, 1 + i % 28, i % 24);
+        data.push_str(&format!(
+            "ex:s{i} ex:k ex:k{} ; ex:at \"2024-{month:02}-{day:02}T{hour:02}:{:02}:{:02}.{:03}Z\"^^xsd:dateTime ; \
+             ex:local \"2023-{month:02}-{day:02}T{hour:02}:00:00\"^^xsd:dateTime ; \
+             ex:zoned \"2024-{month:02}-{day:02}T{hour:02}:00:00{}\"^^xsd:dateTime ; \
+             ex:day \"2022-{month:02}-{day:02}\"^^xsd:date .\n",
+            i % 30,
+            i % 60,
+            i % 59,
+            i % 1000,
+            ["+02:00", "-05:30", "Z"][i % 3],
+        ));
+    }
+    // One group mixes in a value without a time zone, one a date, one a string, and one two
+    // writings of the same instant.
+    data.push_str("ex:x1 ex:k ex:k1 ; ex:at \"2024-01-01T00:00:00\"^^xsd:dateTime .\n");
+    data.push_str("ex:x2 ex:k ex:k2 ; ex:at \"2024-01-01\"^^xsd:date .\n");
+    data.push_str("ex:x3 ex:k ex:k3 ; ex:at \"soon\" .\n");
+    data.push_str("ex:x4 ex:k ex:k4 ; ex:zoned \"2030-01-01T00:00:00Z\"^^xsd:dateTime .\n");
+    data.push_str("ex:x5 ex:k ex:k4 ; ex:zoned \"2030-01-01T01:00:00+01:00\"^^xsd:dateTime .\n");
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for (q, on_ids) in [
+        (
+            "SELECT (MIN(?d) AS ?a) (MAX(?d) AS ?b) WHERE { ?s ex:k ex:k5 ; ex:at ?d }",
+            true,
+        ),
+        (
+            "SELECT (MIN(?d) AS ?a) (MAX(?d) AS ?b) WHERE { ?s ex:local ?d }",
+            true,
+        ),
+        (
+            "SELECT (MIN(?d) AS ?a) (MAX(?d) AS ?b) WHERE { ?s ex:day ?d }",
+            true,
+        ),
+        (
+            "SELECT (MIN(?d) AS ?a) (MAX(?d) AS ?b) WHERE { ?s ex:k ex:k7 ; ex:zoned ?d }",
+            true,
+        ),
+        (
+            "SELECT ?k (MIN(?d) AS ?a) (MAX(?d) AS ?b) WHERE { ?s ex:k ?k ; ex:local ?d } GROUP BY ?k",
+            true,
+        ),
+        (
+            "SELECT ?k (MAX(?d) AS ?b) (COUNT(*) AS ?n) WHERE { ?s ex:k ?k ; ex:zoned ?d FILTER(?k != ex:k4) } GROUP BY ?k",
+            true,
+        ),
+        (
+            "SELECT ?k (MIN(?d) AS ?a) WHERE { ?s ex:k ?k ; ex:at ?d } GROUP BY ?k",
+            false,
+        ),
+        (
+            "SELECT ?k (MAX(?d) AS ?b) WHERE { ?s ex:k ?k ; ex:zoned ?d } GROUP BY ?k",
+            false,
+        ),
+        (
+            "SELECT (MAX(?d) AS ?b) WHERE { { ?s ex:local ?d } UNION { ?s ex:zoned ?d } }",
+            false,
+        ),
+        (
+            "SELECT (MIN(?d) AS ?a) WHERE { { ?s ex:day ?d } UNION { ?s ex:local ?d } }",
+            false,
+        ),
+    ] {
+        let ids = rows(&engine, &format!("#pragma tt.executor ids\n{prefix} {q}"));
+        assert!(!ids.is_empty(), "{q}");
+        for hints in [
+            "#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n",
+            "#pragma tt.executor spareval\n",
+            "",
+        ] {
+            assert_eq!(
+                ids,
+                rows(&engine, &format!("{hints}{prefix} {q}")),
+                "{hints}{q}"
+            );
+        }
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "on ids: {q}");
+    }
+}
