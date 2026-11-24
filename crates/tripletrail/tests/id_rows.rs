@@ -1946,7 +1946,7 @@ fn distinct_sums_on_ids_are_the_evaluators() {
     }
     engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
     let prefix = "PREFIX ex: <http://example.org/>";
-    // A non-canonical `"01"` or `1.0e0` is not an inline number: the evaluator sums those.
+    // A non-canonical `"01"` or `1.0e0` is not an inline number: read from the dictionary (#11).
     for (q, on_ids) in [
         (
             "SELECT ?g (SUM(DISTINCT ?n) AS ?s) WHERE { ?i ex:g ?g ; ex:n ?n } GROUP BY ?g",
@@ -1966,11 +1966,11 @@ fn distinct_sums_on_ids_are_the_evaluators() {
         ),
         (
             "SELECT ?g (SUM(DISTINCT ?m) AS ?s) (AVG(DISTINCT ?m) AS ?a) WHERE { ?i ex:g ?g ; ex:m ?m } GROUP BY ?g",
-            false,
+            true,
         ),
         (
             "SELECT (SUM(DISTINCT ?m) AS ?s) (AVG(DISTINCT ?m) AS ?a) (COUNT(DISTINCT ?m) AS ?c) WHERE { ?i ex:m ?m }",
-            false,
+            true,
         ),
         (
             "SELECT ?g (SUM(DISTINCT ?k) AS ?s) (AVG(DISTINCT ?k) AS ?a) WHERE { ?i ex:g ?g ; ex:k ?k } GROUP BY ?g",
@@ -3294,6 +3294,110 @@ fn doubles_with_exponents_on_ids_are_the_evaluators() {
         "SELECT (SUM(?d) AS ?s) WHERE { ?o ex:d ?d }",
         "SELECT (SUM(?e) AS ?s) WHERE { ?o ex:e ?e }",
         "SELECT ?o WHERE { ?o ex:d|ex:e ?d FILTER(?d > 1) }",
+    ] {
+        let run = |pragma: &str| rows(&engine, &format!("{pragma}{prefix} {q}"));
+        assert_eq!(
+            run("#pragma tt.executor ids\n"),
+            run("#pragma tt.executor spareval\n"),
+            "{q}"
+        );
+    }
+}
+
+/// Integers and decimals the id doesn't hold (`"+7"`, `"007"`, `".5"`, `"5"^^xsd:int`,
+/// `xsd:long` and the other types derived from `xsd:integer`) are read from their dictionary
+/// key on ids (#11), as the evaluator parses them: their sums, averages, arithmetic, casts and
+/// comparisons are the evaluator's.
+#[test]
+fn integers_and_decimals_of_the_dictionary_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let types = [
+        "integer",
+        "int",
+        "long",
+        "short",
+        "byte",
+        "unsignedInt",
+        "nonNegativeInteger",
+        "positiveInteger",
+    ];
+    let mut data = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    for i in 0..1500 {
+        let n = (i * 37) % 500;
+        let int = match i % 4 {
+            0 => format!("\"+{n}\""),
+            1 => format!("\"0{n}\""),
+            _ => format!("\"{n}\""),
+        };
+        let dec = match i % 3 {
+            0 => format!("\"+{}.{}\"", n / 10, i % 10),
+            1 => format!("\".{}\"", n),
+            _ => format!("\"{}.\"", n),
+        };
+        data.push_str(&format!(
+            "ex:o{i} ex:by ex:c{} ; ex:i {int}^^xsd:{} ; ex:d {dec}^^xsd:decimal ; ex:q {} .\n",
+            i % 53,
+            types[i % types.len()],
+            i % 9,
+        ));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    let on_ids = [
+        "SELECT ?c (SUM(?i) AS ?s) (AVG(?i) AS ?a) WHERE { ?o ex:by ?c ; ex:i ?i } GROUP BY ?c",
+        "SELECT ?c (SUM(?d) AS ?s) (AVG(?d) AS ?a) WHERE { ?o ex:by ?c ; ex:d ?d } GROUP BY ?c",
+        "SELECT ?c (SUM(DISTINCT ?i) AS ?s) (SUM(DISTINCT ?d) AS ?t) WHERE { ?o ex:by ?c ; ex:i ?i ; ex:d ?d } GROUP BY ?c",
+        "SELECT ?c (SUM(?i * ?q + ?d) AS ?s) WHERE { ?o ex:by ?c ; ex:i ?i ; ex:d ?d ; ex:q ?q } GROUP BY ?c ORDER BY DESC(?s) ?c LIMIT 10",
+        "SELECT (COUNT(*) AS ?n) WHERE { ?o ex:i ?i ; ex:d ?d FILTER(?i > ?d * 2) }",
+        "SELECT ?o ?t WHERE { ?o ex:i ?i ; ex:d ?d BIND(?i + ?d AS ?t) FILTER(?t < 40) }",
+    ];
+    let maybe = [
+        "SELECT ?o ?x ?y WHERE { ?o ex:i ?i ; ex:d ?d BIND(xsd:decimal(?i) AS ?x) BIND(xsd:integer(?d) AS ?y) FILTER(?i < 30) }",
+        "SELECT ?o (STR(?i * 1) AS ?s) (ABS(?d) AS ?a) (ROUND(?d) AS ?r) WHERE { ?o ex:i ?i ; ex:d ?d FILTER(?i < 20) }",
+        "SELECT ?o WHERE { ?o ex:i ?i ; ex:d ?d } ORDER BY ?i ?d ?o LIMIT 25",
+        "SELECT ?c (MIN(?i) AS ?m) (MAX(?d) AS ?x) WHERE { ?o ex:by ?c ; ex:i ?i ; ex:d ?d } GROUP BY ?c",
+        "SELECT ?o WHERE { ?o ex:i ?i FILTER(?i = 7) }",
+    ];
+    for (q, must) in on_ids
+        .iter()
+        .map(|q| (q, true))
+        .chain(maybe.iter().map(|q| (q, false)))
+    {
+        let run = |pragma: &str| {
+            let q = format!("{pragma}{prefix} {q}");
+            if q.contains("ORDER BY") {
+                ordered(&engine, &q)
+            } else {
+                rows(&engine, &q)
+            }
+        };
+        let evaluator = run("#pragma tt.executor spareval\n");
+        assert_eq!(run("#pragma tt.executor ids\n"), evaluator, "{q}");
+        assert_eq!(run(""), evaluator, "{q}");
+        if must {
+            let plan = engine
+                .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+                .unwrap();
+            assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+        }
+    }
+    // Not valid or out of the evaluator's range: its answers.
+    engine
+        .load(
+            RdfFormat::Turtle,
+            "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+             ex:p0 ex:j \"abc\"^^xsd:int . ex:p1 ex:j \"99999999999999999999\"^^xsd:integer .\n\
+             ex:p2 ex:j \"3\"^^xsd:long . ex:p3 ex:j \"1.5\"^^xsd:float .\n\
+             ex:p4 ex:k \"0.1234567890123456789\"^^xsd:decimal . ex:p5 ex:k \"+2\"^^xsd:decimal .\n"
+                .as_bytes(),
+        )
+        .unwrap();
+    for q in [
+        "SELECT (SUM(?j) AS ?s) WHERE { ?o ex:j ?j }",
+        "SELECT (SUM(?k) AS ?s) WHERE { ?o ex:k ?k }",
+        "SELECT ?o WHERE { ?o ex:j|ex:k ?v FILTER(?v > 1) }",
     ] {
         let run = |pragma: &str| rows(&engine, &format!("{pragma}{prefix} {q}"));
         assert_eq!(

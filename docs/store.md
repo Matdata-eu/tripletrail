@@ -140,7 +140,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   apart, and their total is rounded to a double before it is added, which can cost a last
   digit against the exact sum of all of them. Doubles the id doesn't hold (more than 16 digits, or an
   exponent form such as `1.5E2`, Turtle's short form) are read from their dictionary key, so
-  they are summed the same way, and filters and `BIND` compute with them on ids too (#11). An
+  they are summed the same way, and filters and `BIND` compute with them on ids too (#11). So
+  are integers and decimals the id doesn't hold: `"+7"`, `"007"`, `".5"`, and `xsd:int`,
+  `xsd:long` and the other types derived from `xsd:integer`, which the evaluator reads as
+  integers. A cast of such a stored term (`xsd:decimal(?v)`) keeps its text, so it is left to
+  the evaluator. An
   `INF`, a `NaN` or a double that is not valid leaves the group to the evaluator, which sums in
   row order. The evaluator, and Fuseki, round after each addition in row order, so the last
   digit can differ: ten times `0.1` sums to `1` here and to `0.9999999999999999` there. An
