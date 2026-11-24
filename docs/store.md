@@ -138,9 +138,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   double. The doubles are summed exactly and rounded once at the end, so the sum doesn't
   depend on the order of the rows; the integers and decimals of the group are summed exactly
   apart, and their total is rounded to a double before it is added, which can cost a last
-  digit against the exact sum of all of them. A group with a double that is not inline (more
-  than 16 digits, or an exponent form such as `1.5E2`) is summed by the evaluator in row
-  order, so the same query can round differently on other data. The evaluator, and Fuseki, round after each addition in row order, so the last
+  digit against the exact sum of all of them. Doubles the id doesn't hold (more than 16 digits, or an
+  exponent form such as `1.5E2`, Turtle's short form) are read from their dictionary key, so
+  they are summed the same way, and filters and `BIND` compute with them on ids too (#11). An
+  `INF`, a `NaN` or a double that is not valid leaves the group to the evaluator, which sums in
+  row order. The evaluator, and Fuseki, round after each addition in row order, so the last
   digit can differ: ten times `0.1` sums to `1` here and to `0.9999999999999999` there. An
   `AVG` of integers and decimals only is the evaluator's decimal division of the exact sum by
   the count (`spareval::decimal_divide`, Jena's: exact, else 24 fraction digits; #11; 133k

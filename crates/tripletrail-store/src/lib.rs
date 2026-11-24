@@ -3300,6 +3300,23 @@ impl SnapshotReader<'_> {
         std::str::from_utf8(value).ok()
     }
 
+    /// The datatype IRI and the lexical form of a typed literal of the dictionary
+    /// ([`Kind::Typed`]), read from its key: the term is not decoded. `None` for any other id.
+    pub fn typed_value(&self, id: TermId) -> Option<(&str, &str)> {
+        if id.kind() != Kind::Typed || !id.is_dictionary() {
+            return None;
+        }
+        let o = id.payload();
+        if o == 0 || o as usize > self.dict.len() {
+            return None;
+        }
+        let key = self.dict.raw_key(o as u32);
+        let zero = key.get(1..)?.iter().position(|&b| b == 0)?;
+        let datatype = std::str::from_utf8(&key[1..=zero]).ok()?;
+        let value = std::str::from_utf8(&key[zero + 2..]).ok()?;
+        Some((datatype, value))
+    }
+
     /// The id of a term stored in this store, if any.
     pub fn term_id(&self, term: TermRef<'_>) -> Option<TermId> {
         READER_KEY.with_borrow_mut(|key| match dict::encode(term, key) {

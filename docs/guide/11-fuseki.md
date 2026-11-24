@@ -707,8 +707,9 @@ A few things differ on purpose:
   comparisons and arithmetic go by value.
 - Without a property, `text:query` searches every indexed label property, not only
   `rdfs:label`, and scores are BM25 scores, not Lucene's.
-- `SUM` and `AVG` of stored `xsd:double` values are computed exactly and rounded once, so
-  they don't depend on the order of the rows. Fuseki rounds after each addition, so its last
+- `SUM` and `AVG` of stored `xsd:double` values, however they are written (`"0.1"^^xsd:double`
+  or Turtle's short form `1.0E-1`), are computed exactly and rounded once, so they don't
+  depend on the order of the rows. Fuseki rounds after each addition, so its last
   digit can differ: ten payments of `0.1` sum to `0.9999999999999999` there, and to `1` here.
 
 <!-- test: file payments.ttl -->
@@ -718,8 +719,8 @@ A few things differ on purpose:
 ex:p0 ex:amount "0.1"^^xsd:double . ex:p1 ex:amount "0.1"^^xsd:double .
 ex:p2 ex:amount "0.1"^^xsd:double . ex:p3 ex:amount "0.1"^^xsd:double .
 ex:p4 ex:amount "0.1"^^xsd:double . ex:p5 ex:amount "0.1"^^xsd:double .
-ex:p6 ex:amount "0.1"^^xsd:double . ex:p7 ex:amount "0.1"^^xsd:double .
-ex:p8 ex:amount "0.1"^^xsd:double . ex:p9 ex:amount "0.1"^^xsd:double .
+ex:p6 ex:amount 1.0E-1 . ex:p7 ex:amount 1.0E-1 .
+ex:p8 ex:amount 1.0E-1 . ex:p9 ex:amount 1.0E-1 .
 ```
 
 <!-- test: run -->
