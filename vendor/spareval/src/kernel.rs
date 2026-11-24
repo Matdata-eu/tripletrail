@@ -108,7 +108,37 @@ pub fn expression_kernel<'a, D: QueryableDataset<'a>>(
     expression: &spargebra::algebra::Expression,
     variables: &[Variable],
 ) -> Option<impl Fn(&Vec<Option<D::InternalTerm>>) -> Option<Term> + 'a> {
-    let expression = sparopt::algebra::Expression::from_sparql(expression);
-    let eval = build_expression_evaluator(&expression, &mut Context { dataset, variables }).ok()?;
+    let eval = build(dataset, expression, variables)?;
     Some(move |tuple: &Vec<Option<D::InternalTerm>>| eval(tuple).map(Term::from))
+}
+
+/// tripletrail (#11): the effective boolean value of `expression` ([`expression_kernel`]), as
+/// a `FILTER` reads it (`None` an error). A variable is read as the evaluator reads it, from
+/// its term.
+pub fn condition_kernel<'a, D: QueryableDataset<'a>>(
+    dataset: &'a D,
+    expression: &spargebra::algebra::Expression,
+    variables: &[Variable],
+) -> Option<Box<dyn Fn(&Vec<Option<D::InternalTerm>>) -> Option<bool> + 'a>> {
+    if let spargebra::algebra::Expression::Variable(v) = expression {
+        let i = variables.iter().position(|x| x == v);
+        return Some(Box::new(move |tuple: &Vec<Option<D::InternalTerm>>| {
+            let t = tuple.get(i?)?.clone()?;
+            dataset.internal_term_effective_boolean_value(t).ok()?
+        }));
+    }
+    let eval = build(dataset, expression, variables)?;
+    Some(Box::new(move |tuple: &Vec<Option<D::InternalTerm>>| {
+        eval(tuple)?.effective_boolean_value()
+    }))
+}
+
+fn build<'a, D: QueryableDataset<'a>>(
+    dataset: &'a D,
+    expression: &spargebra::algebra::Expression,
+    variables: &[Variable],
+) -> Option<crate::expression::ExpressionEvaluator<'a, Vec<Option<D::InternalTerm>>, ExpressionTerm>>
+{
+    let expression = sparopt::algebra::Expression::from_sparql(expression);
+    build_expression_evaluator(&expression, &mut Context { dataset, variables }).ok()
 }

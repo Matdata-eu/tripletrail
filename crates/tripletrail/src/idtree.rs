@@ -1444,13 +1444,29 @@ impl Eval<'_> {
                 // Large tables on several cores (#185), the chunks' rows back in order. Each
                 // chunk builds its own kernel, so the terms it decodes (LANG, DATATYPE) are
                 // cached without a lock.
+                // A row the kernels give up on, or a filter they don't compute, is decided
+                // with the evaluator's own code when the filter depends on the values alone
+                // (`idstring::evaluated`).
+                let evaluated = crate::idstring::evaluated(expr);
                 let parts = tripletrail_store::par::chunks(t.len(), |range| {
-                    let kernel = self.kernel(expr, &t, range.clone())?;
+                    let kernel = self.kernel(expr, &t, range.clone());
+                    let other = if evaluated {
+                        crate::idstring::evaluator_condition(expr, &t, self.snapshot)
+                    } else {
+                        None
+                    };
+                    if kernel.is_none() && other.is_none() {
+                        return None;
+                    }
                     let mut part = empty_like(&t);
                     for r in range {
                         let row = t.row(r);
+                        let value = match kernel.as_ref().and_then(|k| k(row)) {
+                            Some(value) => value,
+                            None => other.as_ref()?(row)?,
+                        };
                         // An error filters the row out, as false does.
-                        if kernel(row)? == Some(true) {
+                        if value == Some(true) {
                             part.push(row);
                         }
                     }
@@ -1593,8 +1609,9 @@ impl Eval<'_> {
                     return self.computed_string_equal(e, text, t);
                 }
                 let (a, b) = (self.operand(a, t)?, self.operand(b, t)?);
+                let decoded = Decoded::new(self.snapshot);
                 Box::new(move |row| match (a.get(row), b.get(row)) {
-                    (Some(x), Some(y)) => equal_ids(x, y),
+                    (Some(x), Some(y)) => equal_ids(x, y, &decoded),
                     _ => Some(None),
                 })
             }
@@ -1638,12 +1655,15 @@ impl Eval<'_> {
                     others(Kind::Integer),
                     others(Kind::Boolean),
                 );
+                let decoded = Decoded::new(self.snapshot);
                 Box::new(move |row| {
                     let Some(x) = c.map(|c| row[c]).filter(|id| *id != UNBOUND) else {
                         return Some(None);
                     };
+                    // An item of the same id: equal, unless the term is NaN, which equals
+                    // nothing (and then no other item either).
                     if set.contains_key(&mix(x)) {
-                        return Some(Some(true));
+                        return Some(Some(reflexive(x, &decoded)?));
                     }
                     // A term only this query knows (a `BIND` constant the store doesn't hold,
                     // `2.5e0`) may equal an item by value: the evaluator decides.
@@ -1663,7 +1683,7 @@ impl Eval<'_> {
                     // `a = b || a = c`: true wins over an error, an error over false.
                     let mut error = false;
                     for &y in rest {
-                        match equal_ids(x, y)? {
+                        match equal_ids(x, y, &decoded)? {
                             Some(true) => return Some(Some(true)),
                             Some(false) => {}
                             None => error = true,
@@ -2181,15 +2201,20 @@ impl<'a> Decoded<'a> {
         }
     }
 
-    /// The literal of a dictionary id (`None`: it can't be decoded).
-    fn literal(&self, id: TermId) -> Option<oxigraph::model::Literal> {
+    /// The term of an id (`None`: it can't be decoded).
+    fn term(&self, id: TermId) -> Option<oxigraph::model::Term> {
         let mut terms = self.terms.borrow_mut();
         let term = match terms.entry(id) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => e.insert(self.snapshot.term(id).ok()?),
         };
-        match term {
-            oxigraph::model::Term::Literal(l) => Some(l.clone()),
+        Some(term.clone())
+    }
+
+    /// The literal of a dictionary id (`None`: it can't be decoded).
+    fn literal(&self, id: TermId) -> Option<oxigraph::model::Literal> {
+        match self.term(id)? {
+            oxigraph::model::Term::Literal(l) => Some(l),
             _ => None,
         }
     }
@@ -2278,9 +2303,15 @@ pub(crate) fn is_numeric_datatype(d: oxigraph::model::NamedNodeRef<'_>) -> bool 
 /// Literals of these kinds are equal values only when their ids are equal.
 /// `x = y` on two bound ids: `Some(Some(b))` a value, `Some(None)` an error, `None` when the
 /// ids don't decide it.
-fn equal_ids(x: TermId, y: TermId) -> Option<Option<bool>> {
+fn equal_ids(x: TermId, y: TermId, decoded: &Decoded) -> Option<Option<bool>> {
+    // An IRI the store doesn't hold equals no term it holds; two of them, the ids don't tell
+    // apart. (Its id is no kind of term: never read as one.)
+    if x == ABSENT || y == ABSENT {
+        return (x != y).then_some(Some(false));
+    }
+    // The same term: equal, unless it is NaN.
     if x == y {
-        return Some(Some(true));
+        return Some(Some(reflexive(x, decoded)?));
     }
     // Two different triple terms are equal when their parts are, and a literal part compares
     // by value (`<<( :a :b 1 )>> = <<( :a :b 1.0 )>>`): the ids don't decide it.
@@ -2301,6 +2332,34 @@ fn equal_ids(x: TermId, y: TermId) -> Option<Option<bool>> {
             Some(crate::idvalue::compare(x, y)?.map(|o| o.is_eq()))
         }
         _ => Some(Some(false)),
+    }
+}
+
+/// Whether a term equals itself under `=`: every term but a `NaN` double or float, which
+/// equals nothing, itself included. `None` for a triple term, whose parts may hold one: the
+/// ids don't decide it.
+fn reflexive(id: TermId, decoded: &Decoded) -> Option<bool> {
+    use oxigraph::model::vocab::xsd;
+    match id.kind() {
+        Kind::Double => Some(!matches!(
+            id.numeric()?,
+            tripletrail_store::Numeric::Double(d) if d.is_nan()
+        )),
+        Kind::Triple => None,
+        // A literal in the dictionary or one only this query knows: a float or double in
+        // any form the store keeps.
+        Kind::Typed | Kind::Ephemeral => Some(match decoded.term(id)? {
+            oxigraph::model::Term::Literal(l) if l.datatype() == xsd::FLOAT => !l
+                .value()
+                .parse::<oxsdatatypes::Float>()
+                .is_ok_and(|f| f.is_nan()),
+            oxigraph::model::Term::Literal(l) if l.datatype() == xsd::DOUBLE => !l
+                .value()
+                .parse::<oxsdatatypes::Double>()
+                .is_ok_and(|f| f.is_nan()),
+            _ => true,
+        }),
+        _ => Some(true),
     }
 }
 
@@ -2497,6 +2556,11 @@ fn has_exists(e: &Expression) -> bool {
 
 /// Whether [`Eval`] evaluates `FILTER(e)` on ids (it may still give up on the data).
 pub(crate) fn filter_covered(e: &Expression) -> bool {
+    covered(e) || crate::idstring::evaluated(e)
+}
+
+/// [`filter_covered`] by the kernels of ids themselves.
+fn covered(e: &Expression) -> bool {
     use Expression as E;
     let var = |a: &[E]| matches!(a, [E::Variable(_)]);
     let operand = |e: &E| matches!(e, E::Variable(_) | E::NamedNode(_) | E::Literal(_));
