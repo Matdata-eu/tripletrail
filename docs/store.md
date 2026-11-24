@@ -73,7 +73,13 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   without building SPARQL solutions (#167): a basic graph pattern is joined in the store
   (merge, hash or index nested-loop joins, `Snapshot::count_ids`), and joins, `OPTIONAL`,
   `MINUS`, `UNION`, `FILTER (NOT) EXISTS`, transitive paths and filters over them run on tables of ids (`crates/tripletrail/src/idtree.rs`). A small left side passes its values to the right
-  side, which then looks them up instead of scanning (`Snapshot::join_ids_from`). A shared
+  side, which then looks them up instead of scanning (`Snapshot::join_ids_from`). The
+  pattern of an `EXISTS` may hold `FILTER`s and nested `EXISTS` too, when every value they
+  read that the row binds is also bound by the pattern itself: the evaluator substitutes the
+  row's values, which then gives the same rows as the join. A filter reading a value only the
+  row gives (`EXISTS { ?s ex:label ?l FILTER(?w = "x") }`) is left to the evaluator (#11;
+  133k orders, a count with `EXISTS { ?o ex:label ?l FILTER(?l = "item 5") }` 141 → 8 ms,
+  a `NOT EXISTS` over a join with `STRSTARTS` 343 → 31 ms). A shared
   variable that may be unbound on a side (`VALUES` with `UNDEF`, a value an `OPTIONAL` may not
   give) joins as SPARQL says: rows pair up where it is equal or unbound on one side, the hash
   on the variables both sides always bind and the rest checked per pair; with no such

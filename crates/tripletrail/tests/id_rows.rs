@@ -2309,3 +2309,88 @@ fn optional_paths_on_ids_are_the_evaluators() {
         assert_eq!(rows(&graphs, &format!("{prefix} {q}")), expected, "{q}");
     }
 }
+
+/// `FILTER (NOT) EXISTS` with `FILTER`s and nested `EXISTS` inside (#11): on ids when every
+/// value they read that the row gives is bound by the pattern itself, with the answers of the
+/// evaluator alone (which substitutes the row's values into the pattern).
+const EXISTS_FILTERS: &[(&str, bool)] = &[
+    (
+        "?s ex:p ?o FILTER EXISTS { ?o ex:q ?v FILTER(?v = \"v3\") }",
+        true,
+    ),
+    (
+        "?s ex:p ?o FILTER NOT EXISTS { ?o ex:q ?v FILTER(?v = \"v3\" || ?v = \"v4\") }",
+        true,
+    ),
+    (
+        "?s ex:p ?o FILTER EXISTS { ?o ex:q ?v FILTER(STRSTARTS(?v, \"v1\")) }",
+        true,
+    ),
+    (
+        "?s a ?c FILTER NOT EXISTS { ?s ex:label ?l FILTER(LANG(?l) = \"en\") }",
+        true,
+    ),
+    (
+        "?s ex:p ?o FILTER EXISTS { ?s ex:p ?o2 . ?o2 ex:q ?v FILTER EXISTS { ?o2 ex:q \"v2\" } }",
+        true,
+    ),
+    (
+        "?s ex:p ?o FILTER NOT EXISTS { ?s ex:label ?l FILTER NOT EXISTS { ?s ex:r ?b } }",
+        true,
+    ),
+    // The nested pattern reads `?o`, which only the row binds: substituted, not joined.
+    (
+        "?s ex:p ?o FILTER EXISTS { ?s ex:label ?l FILTER EXISTS { ?o ex:q ?v } }",
+        false,
+    ),
+    (
+        "?s ex:p ?o FILTER EXISTS { ?o ex:q ?v FILTER NOT EXISTS { ?s ex:r ?b } }",
+        false,
+    ),
+    // A filter on a value of the row alone.
+    (
+        "?s ex:p ?o . ?o ex:q ?w FILTER EXISTS { ?s ex:label ?l FILTER(?w = \"v3\") }",
+        false,
+    ),
+    (
+        "?s ex:p ?o FILTER EXISTS { ?s ex:label ?l FILTER(BOUND(?o)) }",
+        false,
+    ),
+    // Not an `EXISTS` shape on ids.
+    (
+        "?s ex:p ?o FILTER EXISTS { ?o ex:q ?v OPTIONAL { ?s ex:r ?b } FILTER(!BOUND(?b)) }",
+        false,
+    ),
+];
+
+#[test]
+fn exists_with_filters_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, data().as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for &(p, on_ids) in EXISTS_FILTERS {
+        for q in [
+            format!("SELECT * WHERE {{ {p} }}"),
+            format!("SELECT (COUNT(*) AS ?n) WHERE {{ {p} }}"),
+        ] {
+            let ids = rows(&engine, &format!("#pragma tt.executor ids\n{prefix} {q}"));
+            for hints in [
+                "#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n",
+                "#pragma tt.executor spareval\n",
+                "",
+            ] {
+                assert_eq!(
+                    ids,
+                    rows(&engine, &format!("{hints}{prefix} {q}")),
+                    "{hints}{q}"
+                );
+            }
+        }
+        let plan = engine
+            .explain(&format!(
+                "#pragma tt.executor ids\n{prefix} SELECT * WHERE {{ {p} }}"
+            ))
+            .unwrap();
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "on ids: {p}");
+    }
+}
