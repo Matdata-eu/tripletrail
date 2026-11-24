@@ -27,7 +27,7 @@ pub use crate::expression::cast;
 use crate::expression::{
     CustomFunctionRegistry, ExpressionEvaluatorContext, build_expression_evaluator,
 };
-pub use crate::kernel::{condition_kernel, expression_kernel, internal_kernel};
+pub use crate::kernel::{bound_kernel, condition_kernel, expression_kernel, internal_kernel};
 pub use crate::model::{QueryResults, QuerySolution, QuerySolutionIter, QueryTripleIter};
 use crate::service::ServiceHandlerRegistry;
 pub use crate::service::{DefaultServiceHandler, ServiceHandler};

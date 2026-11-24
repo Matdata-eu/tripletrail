@@ -3780,7 +3780,9 @@ part; a `POST` without `?graph` adds to the default graph, as on Fuseki, where t
 would create a new graph. `NOW()` is the server's local time with its offset
 (`2026-11-12T00:41:35.123+01:00`), as Jena gives it, not UTC: a rule that takes today's date
 from `SUBSTR(STR(NOW()), 1, 10)` sees the same day as on Fuseki. Run the server with `TZ` set
-to change it. `MIN` and `MAX` order values as Jena's `NodeValue.compareAlways` does (#517):
+to change it. `IF` and `COALESCE` give back the term of the branch they pick as it is stored, as
+Jena does: a loaded `28.0e0` or `07` keeps its text, also when another branch is computed
+(it used to come back as `"28"^^xsd:double` then). `MIN` and `MAX` order values as Jena's `NodeValue.compareAlways` does (#517):
 by kind first (IRIs, plain strings, language-tagged strings by tag, numbers, booleans, dates
 and times, durations, other datatypes last), then by value, and equal values by their text, so
 `MAX` of `3.0`, `3` and `3.0e0` is `3.0e0` and a plain string is below every number. `ORDER BY`

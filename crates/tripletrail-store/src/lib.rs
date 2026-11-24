@@ -4496,6 +4496,19 @@ impl<'a> QueryableDataset<'a> for Snapshot {
         self.term(term)
     }
 
+    /// An integer, a boolean, a string or an IRI in the id is written canonically: its value.
+    fn externalize_written_term(&self, term: TermId) -> Result<ExpressionTerm, StoreError> {
+        match term.kind() {
+            Kind::Integer | Kind::Boolean | Kind::String | Kind::LangString | Kind::Iri => {
+                self.externalize_expression_term(term)
+            }
+            _ => Ok(match self.externalize_term(term)? {
+                Term::Literal(literal) => ExpressionTerm::from_literal_as_written(literal),
+                term => term.into(),
+            }),
+        }
+    }
+
     fn externalize_expression_term(&self, term: TermId) -> Result<ExpressionTerm, StoreError> {
         match term.kind() {
             Kind::Integer => Ok(ExpressionTerm::IntegerLiteral(term.as_integer().into())),
