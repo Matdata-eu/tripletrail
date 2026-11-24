@@ -2797,3 +2797,59 @@ fn expressions_of_values_on_ids_are_the_evaluators() {
         }
     }
 }
+
+/// `NaN` equals nothing, itself included, under `=`, `!=` and `IN`, on ids as in the
+/// evaluator: two ids of the same `NaN` term are not equal (double inline, float in the
+/// dictionary, and a `NaN` made by the query).
+#[test]
+fn nan_equals_nothing_on_ids() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from(
+        "@prefix ex: <http://example.org/> . @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    let values = [
+        "\"NaN\"^^xsd:double",
+        "\"NaN\"^^xsd:float",
+        "\"1.5\"^^xsd:float",
+        "\"INF\"^^xsd:double",
+        "\"2\"^^xsd:double",
+        "2",
+        "\"x\"^^ex:dt",
+        "\"x\"",
+        "ex:i",
+    ];
+    for (i, m) in values.iter().enumerate() {
+        for (j, x) in values.iter().enumerate() {
+            data.push_str(&format!("ex:o{i}_{j} ex:mix {m} ; ex:opt {x} .\n"));
+        }
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    for q in [
+        "SELECT ?o WHERE { ?o ex:mix ?m ; ex:opt ?x FILTER(?m = ?x) }",
+        "SELECT ?o WHERE { ?o ex:mix ?m ; ex:opt ?x FILTER(?m != ?x) }",
+        "SELECT ?o WHERE { ?o ex:mix ?m ; ex:opt ?x FILTER(!(?m = ?x)) }",
+        "SELECT ?o WHERE { ?o ex:mix ?m FILTER(?m IN (\"NaN\"^^xsd:double, \"NaN\"^^xsd:float, 2)) }",
+        "SELECT ?o WHERE { ?o ex:mix ?m FILTER(?m NOT IN (\"NaN\"^^xsd:double, \"NaN\"^^xsd:float)) }",
+        "SELECT ?o WHERE { ?o ex:mix ?m FILTER(?m = \"NaN\"^^xsd:double) }",
+        "SELECT ?o ?x WHERE { ?o ex:mix ?m OPTIONAL { ?o ex:opt ?x FILTER(?m = ?x) } }",
+        "SELECT ?o WHERE { ?o ex:mix ?m BIND(?m * 0e0 / 0e0 AS ?n) FILTER(?n = ?n) }",
+        "SELECT ?o WHERE { ?o ex:mix ?m ; ex:opt ?x FILTER(sameTerm(?m, ?x)) }",
+    ] {
+        let evaluator = rows(
+            &engine,
+            &format!("#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n{prefix} {q}"),
+        );
+        for pragma in [
+            "#pragma tt.executor ids\n",
+            "#pragma tt.executor spareval\n",
+            "",
+        ] {
+            assert_eq!(
+                rows(&engine, &format!("{pragma}{prefix} {q}")),
+                evaluator,
+                "{pragma}{q}"
+            );
+        }
+    }
+}
