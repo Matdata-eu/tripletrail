@@ -299,6 +299,10 @@ pub const MAX_UNION_COPIES: usize = 4_000_000;
 
 struct Inner {
     dict: RwLock<Dictionary>,
+    /// The dictionary's number of keys as its last writer left it, set before that writer
+    /// releases its lock ([`Inner::dict_write`]), so a view reads it under the quads' lock
+    /// without taking the dictionary's (#11).
+    dict_len: std::sync::atomic::AtomicUsize,
     quads: RwLock<QuadIndex>,
     /// Geometry literals parsed so far, by ordinal (`None`: not valid). Parsed on first use, so
     /// loads don't pay for geometries no query looks at.
@@ -497,6 +501,7 @@ impl Store {
         mapped: bool,
     ) -> Self {
         Self::with_inner(Inner {
+            dict_len: std::sync::atomic::AtomicUsize::new(dict.len()),
             dict: RwLock::new(dict),
             quads: RwLock::new(quads),
             geometries: geoms::Geometries::with_saved(saved),
@@ -537,7 +542,7 @@ impl Store {
             .render_wkt
             .store(render_wkt, std::sync::atomic::Ordering::Relaxed);
         // A store marked so before checkpoints said whether they hold compact keys.
-        store.inner.dict.write_unpoisoned().note_compact(render_wkt);
+        store.inner.dict_write().note_compact(render_wkt);
         store.replay(log)?;
         store.verify_in_background(checkpoint);
         store.merge_in_background(&store.inner.writer.lock_unpoisoned());
@@ -559,7 +564,7 @@ impl Store {
             .render_wkt
             .store(render_wkt, std::sync::atomic::Ordering::Relaxed);
         // A store marked so before checkpoints said whether they hold compact keys.
-        store.inner.dict.write_unpoisoned().note_compact(render_wkt);
+        store.inner.dict_write().note_compact(render_wkt);
         store.replay(log)?;
         let Store { inner, _open } = store;
         // Its writer is none already.
@@ -907,6 +912,13 @@ impl Store {
                 self.inner
                     .generation
                     .load(std::sync::atomic::Ordering::SeqCst),
+            ),
+            // Read under the quads' lock too: a writer adds its terms (and publishes the
+            // count) before its quads, so every id of these quads is below it.
+            stored: Some(
+                self.inner
+                    .dict_len
+                    .load(std::sync::atomic::Ordering::Acquire),
             ),
             quads: quads.clone(),
             ephemeral: Arc::default(),
@@ -1480,7 +1492,7 @@ impl Store {
         let (produced, ids) = std::thread::scope(|scope| {
             let worker = scope.spawn(move || {
                 for batch in rx.into_iter().flatten() {
-                    let mut dict = self.inner.dict.write_unpoisoned();
+                    let mut dict = self.inner.dict_write();
                     let mut start = 0;
                     let mut id = |t: &BatchTerm| match *t {
                         BatchTerm::Id(id) => id,
@@ -1522,7 +1534,7 @@ impl Store {
             for &q in &ids {
                 sorter.push(q);
             }
-            map_dict_tail(&mut self.inner.dict.write_unpoisoned(), sorter.spill());
+            map_dict_tail(&mut self.inner.dict_write(), sorter.spill());
         }
         sorter
     }
@@ -1555,7 +1567,7 @@ impl Store {
                 })
                 .collect()
         });
-        let mut dict = self.inner.dict.write_unpoisoned();
+        let mut dict = self.inner.dict_write();
         for quad in slotted.into_iter().flatten() {
             ids.push(quad.map(|slot| match slot {
                 Slot::Id(id) => id,
@@ -2140,7 +2152,7 @@ impl Store {
         // stay in the page cache or leave it (#218). The writer lock keeps it unchanged.
         match disk.mapped() {
             Ok((pieces, segments)) => {
-                let mut dict = self.inner.dict.write_unpoisoned();
+                let mut dict = self.inner.dict_write();
                 dict.replace_saved(pieces);
                 dict.note_compact(self.render_wkt());
                 self.inner.quads.write_unpoisoned().use_saved(segments);
@@ -2396,7 +2408,7 @@ impl<'a> Interner<'a> {
     }
 
     fn quad(&mut self, q: QuadRef<'_>) -> [u64; 4] {
-        let mut dict = self.store.inner.dict.write_unpoisoned();
+        let mut dict = self.store.inner.dict_write();
         let s = self.term(&mut dict, q.subject.into());
         let p = self.term(&mut dict, q.predicate.into());
         let o = self.term(&mut dict, q.object);
@@ -2724,7 +2736,7 @@ impl<'a> Transaction<'a> {
             .is_some_and(|(g, r)| g.as_ref() == into && r == regime);
         let g = {
             let store = self.store();
-            let mut dict = store.inner.dict.write_unpoisoned();
+            let mut dict = store.inner.dict_write();
             // The RDFS terms too, even if no quad holds them yet: a term the store lacks gets
             // no id and the rules skip it, so a kept entailment that first meets rdf:type in
             // a write would miss what the earlier data implies with it.
@@ -2907,6 +2919,7 @@ impl<'a> Transaction<'a> {
             tables: table::pending(),
             rows: None,
             generation: None,
+            stored: None,
         }
     }
 
@@ -2928,6 +2941,7 @@ impl<'a> Transaction<'a> {
             tables: table::pending(),
             rows: None,
             generation: None,
+            stored: None,
         }
     }
 }
@@ -3067,6 +3081,41 @@ thread_local! {
     static KEY: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// The dictionary under its write lock; its number of keys is published when it is let go.
+struct DictWrite<'a> {
+    guard: std::sync::RwLockWriteGuard<'a, Dictionary>,
+    len: &'a std::sync::atomic::AtomicUsize,
+}
+
+impl std::ops::Deref for DictWrite<'_> {
+    type Target = Dictionary;
+    fn deref(&self) -> &Dictionary {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for DictWrite<'_> {
+    fn deref_mut(&mut self) -> &mut Dictionary {
+        &mut self.guard
+    }
+}
+
+impl Drop for DictWrite<'_> {
+    fn drop(&mut self) {
+        self.len
+            .store(self.guard.len(), std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl Inner {
+    fn dict_write(&self) -> DictWrite<'_> {
+        DictWrite {
+            guard: self.dict.write_unpoisoned(),
+            len: &self.dict_len,
+        }
+    }
+}
+
 /// A read-only, consistent view of a [`Store`]. Cheap to clone.
 #[derive(Clone)]
 pub struct Snapshot {
@@ -3086,6 +3135,10 @@ pub struct Snapshot {
     /// The store's [`Store::generation`] when the view was taken; `None` for a transaction's
     /// view, which holds writes not committed yet.
     generation: Option<u64>,
+    /// The dictionary's keys when the view was taken (`None` for a transaction's view): a
+    /// term a later writer adds is not stored for this view, whose quads don't hold it, so
+    /// the terms made up for its queries get one id each however the writes interleave.
+    stored: Option<usize>,
 }
 
 /// Up to how many graphs a merged default graph is read graph by graph (see [`GraphMerge`]);
@@ -3251,7 +3304,11 @@ impl SnapshotReader<'_> {
     pub fn term_id(&self, term: TermRef<'_>) -> Option<TermId> {
         READER_KEY.with_borrow_mut(|key| match dict::encode(term, key) {
             Encoded::Inline(id) => Some(id),
-            Encoded::Key(kind) => self.dict.get(key).map(|o| TermId::new(kind, u64::from(o))),
+            Encoded::Key(kind) => self
+                .dict
+                .get(key)
+                .filter(|&o| self.snapshot.holds(o))
+                .map(|o| TermId::new(kind, u64::from(o))),
         })
     }
 
@@ -3770,6 +3827,7 @@ impl Snapshot {
             return Some(id);
         }
         term_id(&self.inner.dict.read_unpoisoned(), term)
+            .filter(|id| !id.is_dictionary() || self.holds(id.payload() as u32))
     }
 
     /// For each language-tagged, typed or geometry literal of the dictionary among `ids`,
@@ -4223,7 +4281,10 @@ impl Snapshot {
                 out.keys.extend_from_slice(key);
                 out.ids.push(Prepared::Key {
                     end: out.keys.len(),
-                    stored: dict.get(key).map(|o| TermId::new(kind, u64::from(o))),
+                    stored: dict
+                        .get(key)
+                        .filter(|&o| self.holds(o))
+                        .map(|o| TermId::new(kind, u64::from(o))),
                 });
             }
         });
@@ -4253,6 +4314,12 @@ impl Snapshot {
             .collect()
     }
 
+    /// Whether the dictionary key `o` is a term this view stores: one a writer added after
+    /// the view was taken is made up for it instead, whichever thread asks first.
+    fn holds(&self, o: u32) -> bool {
+        self.stored.is_none_or(|n| o as usize <= n)
+    }
+
     /// The id of `term`: its stored id, or one made up for this view.
     fn internal_id(&self, term: Term) -> TermId {
         if !self.tables.is_empty()
@@ -4272,7 +4339,13 @@ impl Snapshot {
             if let Some(i) = self.ephemeral.read_unpoisoned().get(key) {
                 return TermId::new(Kind::Ephemeral, i);
             }
-            if let Some(o) = self.inner.dict.read_unpoisoned().get(key) {
+            if let Some(o) = self
+                .inner
+                .dict
+                .read_unpoisoned()
+                .get(key)
+                .filter(|&o| self.holds(o))
+            {
                 return TermId::new(kind, u64::from(o));
             }
             let i = self.ephemeral.write_unpoisoned().get_or_insert(key);

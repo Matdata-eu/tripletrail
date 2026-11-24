@@ -163,9 +163,25 @@ const LEVEL_COST: f64 = 64.0;
 /// The id of an unbound value: 0 is the default graph, never a subject, predicate or object.
 const UNBOUND: TermId = TermId(0);
 
-/// The rows after which a `BIND`'s memo of computed strings is dropped when nearly every row
-/// was new to it.
-const MEMO_TRIAL: usize = 2048;
+/// A hasher for pairs of ids, for the distinct inputs of a `BIND`.
+#[derive(Default)]
+struct PairHasher(u64);
+
+impl std::hash::Hasher for PairHasher {
+    fn finish(&self) -> u64 {
+        self.0 ^ (self.0 >> 29)
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+type PairHash = std::hash::BuildHasherDefault<PairHasher>;
 
 /// Rows of ids, one column per variable.
 pub(crate) struct Table {
@@ -443,57 +459,64 @@ impl Eval<'_> {
                     [a, b] => Some((row[a], row[b])),
                     _ => None,
                 };
-                // From 8,192 rows on several cores (a string costs more than a number), each
-                // chunk with its own kernel and memo, its terms then given their ids under one
-                // lock. A memo that hardly ever finds a pair (a new string per row, `STR(?s)`)
-                // is dropped after its first rows.
+                // Each distinct pair computed once (the pairs met first, then their strings).
+                // From 8,192 strings to compute on several cores (a string costs more than a
+                // number), each chunk with its own kernel, its terms then given their ids under
+                // one lock.
                 let t = &t;
-                let parts = tripletrail_store::par::chunks_sized(rows, 8_192, 2_048, |range| {
-                    let kernel = crate::idstring::compile(e, t, self.snapshot)?;
-                    let mut memo: Option<HashMap<(TermId, TermId), u32>> = Some(HashMap::new());
-                    let mut terms = Vec::new();
-                    // Each row's term in `terms`, or `u32::MAX` for an error.
-                    let mut at = Vec::with_capacity(range.len());
-                    for (n, r) in range.enumerate() {
-                        if n % 4096 == 0 && (self.cancelled)() {
+                let repeats = cols.len() <= 2;
+                // The rows to compute, and for each row of `t` its place among them.
+                let (todo, at): (Vec<usize>, Option<Vec<u32>>) = if repeats {
+                    let mut index: HashMap<(TermId, TermId), u32, PairHash> = HashMap::default();
+                    let mut todo = Vec::new();
+                    let mut at = Vec::with_capacity(rows);
+                    for r in 0..rows {
+                        if r % 65_536 == 0 && (self.cancelled)() {
                             return None;
                         }
-                        if n == MEMO_TRIAL && memo.as_ref().is_some_and(|m| m.len() * 10 > n * 9) {
-                            memo = None;
-                        }
-                        let row = t.row(r);
-                        let k = key(row);
-                        let i = match k.and_then(|k| memo.as_ref()?.get(&k)) {
-                            Some(&i) => i,
-                            None => {
-                                let i = match kernel(row)? {
-                                    Ok(term) => {
-                                        terms.push(term);
-                                        u32::try_from(terms.len() - 1).ok()?
-                                    }
-                                    Err(()) => u32::MAX,
-                                };
-                                if let (Some(k), Some(memo)) = (k, memo.as_mut()) {
-                                    memo.insert(k, i);
-                                }
-                                i
-                            }
-                        };
+                        let i = *index.entry(key(t.row(r))?).or_insert_with(|| {
+                            todo.push(r);
+                            (todo.len() - 1) as u32
+                        });
                         at.push(i);
                     }
-                    Some((self.snapshot.prepare_ids(terms), at))
-                });
-                let mut unbound = false;
+                    (todo, Some(at))
+                } else {
+                    ((0..rows).collect(), None)
+                };
+                let parts =
+                    tripletrail_store::par::chunks_sized(todo.len(), 8_192, 2_048, |range| {
+                        let kernel = crate::idstring::compile(e, t, self.snapshot)?;
+                        let mut terms = Vec::new();
+                        // Whether each row's term is in `terms` (false: an error).
+                        let mut made = Vec::with_capacity(range.len());
+                        for (n, &r) in todo[range].iter().enumerate() {
+                            if n % 4096 == 0 && (self.cancelled)() {
+                                return None;
+                            }
+                            match kernel(t.row(r))? {
+                                Ok(term) => {
+                                    terms.push(term);
+                                    made.push(true);
+                                }
+                                Err(()) => made.push(false),
+                            }
+                        }
+                        Some((self.snapshot.prepare_ids(terms), made))
+                    });
+                let mut computed = Vec::with_capacity(todo.len());
                 for part in parts {
-                    let (terms, at) = part?;
-                    let ids = self.snapshot.finish_ids(terms);
-                    for i in at {
-                        let id = ids.get(i as usize).copied().unwrap_or(TermId(0));
-                        unbound |= id == TermId(0);
-                        column.push(id);
+                    let (terms, made) = part?;
+                    let mut ids = self.snapshot.finish_ids(terms).into_iter();
+                    for m in made {
+                        computed.push(if m { ids.next()? } else { TermId(0) });
                     }
                 }
-                unbound
+                match at {
+                    Some(at) => column.extend(at.iter().map(|&i| computed[i as usize])),
+                    None => column.extend(computed),
+                }
+                column.contains(&TermId(0))
             }
             _ => {
                 let kernel = crate::idvalue::compile_output(expression, &t, self.snapshot)?;
