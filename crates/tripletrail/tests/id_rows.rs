@@ -1050,12 +1050,34 @@ const BINDS: &[(&str, bool)] = &[
         "SELECT ?s ?g WHERE { ?s ex:n ?x BIND(STRDT(CONCAT(\"POINT(\", STR(?x), \" 1)\"), <http://www.opengis.net/ont/geosparql#wktLiteral>) AS ?w) ?g ex:wkt ?w }",
         true,
     ),
-    // Left to the evaluator: an order on a computed value, values the ids don't decide, a
-    // string function the kernels don't have, an overflow.
+    // An order on a computed number: on ids when its ids are inline (#11); a double made up
+    // for the query, or a string, leaves the order to the evaluator.
     (
         "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x * 2 AS ?y) } ORDER BY DESC(?y) ?s LIMIT 9",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x - 50 AS ?y) FILTER(?y > -10) } ORDER BY ?y ?s",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:d ?x BIND(?x * 2 AS ?y) } ORDER BY ?y ?s OFFSET 3 LIMIT 9",
+        true,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:f ?x BIND(ABS(?x) AS ?y) } ORDER BY DESC(?y) ?s LIMIT 9",
         false,
     ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x / 7 AS ?y) } ORDER BY ?y ?s LIMIT 9",
+        false,
+    ),
+    (
+        "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(STR(?x) AS ?y) } ORDER BY ?y ?s LIMIT 9",
+        false,
+    ),
+    // Left to the evaluator: values the ids don't decide, a string function the kernels
+    // don't have, an overflow.
     (
         "SELECT ?s ?y WHERE { ?s ex:n ?x BIND(?x * 2 AS ?y) FILTER(BOUND(?y)) }",
         false,
