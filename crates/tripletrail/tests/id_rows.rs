@@ -3408,6 +3408,77 @@ fn integers_and_decimals_of_the_dictionary_on_ids_are_the_evaluators() {
     }
 }
 
+/// An `ORDER BY` of integers or decimals the store keeps in its dictionary (`xsd:int`,
+/// `xsd:long`, `"+7"`, `".5"`) orders them by value on ids (#11), as the evaluator does; equal
+/// values written differently and mixes of integers and decimals keep the evaluator's order.
+#[test]
+fn orders_of_integers_and_decimals_of_the_dictionary_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    for i in 0..1200_i64 {
+        let n = (i * 7919) % 100_000 - 50_000;
+        data.push_str(&format!(
+            "ex:o{i} ex:i \"{n}\"^^xsd:{} ; ex:d \"{}.{}\"^^xsd:decimal ; ex:m {} .\n",
+            ["int", "long", "integer"][(i % 3) as usize],
+            if n >= 0 {
+                format!("+{n}")
+            } else {
+                n.to_string()
+            },
+            i % 10,
+            if i % 2 == 0 {
+                format!("\"{n}\"^^xsd:int")
+            } else {
+                format!("{n}.5")
+            },
+        ));
+    }
+    // One value written twice: "+7" and "7".
+    data.push_str("ex:p0 ex:e \"+7\"^^xsd:integer . ex:p1 ex:e 7 . ex:p2 ex:e \"9\"^^xsd:int .\n");
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for (q, on_ids) in [
+        (
+            "SELECT ?o ?i WHERE { ?o ex:i ?i } ORDER BY DESC(?i) LIMIT 10",
+            true,
+        ),
+        (
+            "SELECT ?o WHERE { ?o ex:i ?i } ORDER BY ?i OFFSET 100 LIMIT 20",
+            true,
+        ),
+        (
+            "SELECT ?o ?d WHERE { ?o ex:d ?d } ORDER BY ?d LIMIT 15",
+            true,
+        ),
+        (
+            "SELECT ?o WHERE { ?o ex:d ?d } ORDER BY DESC(?d) ?o LIMIT 15",
+            true,
+        ),
+        (
+            "SELECT ?o ?m WHERE { ?o ex:m ?m } ORDER BY ?m LIMIT 15",
+            false,
+        ),
+        (
+            "SELECT ?o ?e WHERE { ?o ex:e ?e } ORDER BY ?e LIMIT 3",
+            false,
+        ),
+    ] {
+        let run = |pragma: &str| ordered(&engine, &format!("{pragma}{prefix} {q}"));
+        let evaluator = run("#pragma tt.executor spareval\n");
+        assert!(!evaluator.is_empty(), "{q}");
+        assert_eq!(run("#pragma tt.executor ids\n"), evaluator, "{q}");
+        assert_eq!(run(""), evaluator, "{q}");
+        if on_ids {
+            let plan = engine
+                .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+                .unwrap();
+            assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
+        }
+    }
+}
+
 /// `SAMPLE` gives a stored term as it is in the data, as Jena does (`"-92"^^xsd:int`, `"2.50"`,
 /// `1.5e0`), under every executor, the evaluator without the id rewrites included (#11).
 #[test]
