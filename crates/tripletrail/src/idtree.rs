@@ -163,6 +163,10 @@ const LEVEL_COST: f64 = 64.0;
 /// The id of an unbound value: 0 is the default graph, never a subject, predicate or object.
 const UNBOUND: TermId = TermId(0);
 
+/// The rows after which a `BIND`'s memo of computed strings is dropped when nearly every row
+/// was new to it.
+const MEMO_TRIAL: usize = 2048;
+
 /// Rows of ids, one column per variable.
 pub(crate) struct Table {
     pub(crate) vars: Vec<Variable>,
@@ -423,7 +427,8 @@ impl Eval<'_> {
             // Strings and IRIs (`STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT`, `REPLACE`): a term a
             // row, given its id.
             e if crate::idstring::computable(e) => {
-                let kernel = crate::idstring::compile(e, &t, self.snapshot)?;
+                // Gives up here, before any chunk, when the kernels can't compute it.
+                let _ = crate::idstring::compile(e, &t, self.snapshot)?;
                 // The value depends only on the columns the expression reads: with one or
                 // two, each distinct pair of ids is computed once.
                 let mut names = std::collections::HashSet::new();
@@ -438,29 +443,55 @@ impl Eval<'_> {
                     [a, b] => Some((row[a], row[b])),
                     _ => None,
                 };
-                let mut memo: HashMap<(TermId, TermId), TermId> = HashMap::new();
-                let mut unbound = false;
-                for r in 0..rows {
-                    if r % 4096 == 0 && (self.cancelled)() {
-                        return None;
-                    }
-                    let row = t.row(r);
-                    let k = key(row);
-                    let id = match k.and_then(|k| memo.get(&k)) {
-                        Some(id) => *id,
-                        None => {
-                            let id = match kernel(row)? {
-                                Ok(term) => self.snapshot.id_of(term),
-                                Err(()) => TermId(0),
-                            };
-                            if let Some(k) = k {
-                                memo.insert(k, id);
-                            }
-                            id
+                // From 8,192 rows on several cores (a string costs more than a number), each
+                // chunk with its own kernel and memo, its terms then given their ids under one
+                // lock. A memo that hardly ever finds a pair (a new string per row, `STR(?s)`)
+                // is dropped after its first rows.
+                let t = &t;
+                let parts = tripletrail_store::par::chunks_sized(rows, 8_192, 2_048, |range| {
+                    let kernel = crate::idstring::compile(e, t, self.snapshot)?;
+                    let mut memo: Option<HashMap<(TermId, TermId), u32>> = Some(HashMap::new());
+                    let mut terms = Vec::new();
+                    // Each row's term in `terms`, or `u32::MAX` for an error.
+                    let mut at = Vec::with_capacity(range.len());
+                    for (n, r) in range.enumerate() {
+                        if n % 4096 == 0 && (self.cancelled)() {
+                            return None;
                         }
-                    };
-                    unbound |= id == TermId(0);
-                    column.push(id);
+                        if n == MEMO_TRIAL && memo.as_ref().is_some_and(|m| m.len() * 10 > n * 9) {
+                            memo = None;
+                        }
+                        let row = t.row(r);
+                        let k = key(row);
+                        let i = match k.and_then(|k| memo.as_ref()?.get(&k)) {
+                            Some(&i) => i,
+                            None => {
+                                let i = match kernel(row)? {
+                                    Ok(term) => {
+                                        terms.push(term);
+                                        u32::try_from(terms.len() - 1).ok()?
+                                    }
+                                    Err(()) => u32::MAX,
+                                };
+                                if let (Some(k), Some(memo)) = (k, memo.as_mut()) {
+                                    memo.insert(k, i);
+                                }
+                                i
+                            }
+                        };
+                        at.push(i);
+                    }
+                    Some((self.snapshot.prepare_ids(terms), at))
+                });
+                let mut unbound = false;
+                for part in parts {
+                    let (terms, at) = part?;
+                    let ids = self.snapshot.finish_ids(terms);
+                    for i in at {
+                        let id = ids.get(i as usize).copied().unwrap_or(TermId(0));
+                        unbound |= id == TermId(0);
+                        column.push(id);
+                    }
                 }
                 unbound
             }
