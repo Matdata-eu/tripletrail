@@ -667,6 +667,26 @@ pub(crate) fn evaluator_kernel<'k>(
     Some(Box::new(move |row| Some(kernel(&tuple(row)?).ok_or(()))))
 }
 
+/// An `IF` or `COALESCE` whose branches are variables, constants or more of those, as the
+/// evaluator computes it (#11): the id of the term it gives back, so a number keeps the text it
+/// was written with (`28.0e0`, `07`); `Some(None)` unbound or an error. `None` for a row
+/// holding ids the query only knows as rows of a table.
+pub(crate) type IdKernel<'k> = Box<dyn Fn(&[TermId]) -> Option<Option<TermId>> + 'k>;
+
+/// The [`IdKernel`] of `e`, when `e` is such an `IF` or `COALESCE`.
+pub(crate) fn id_kernel<'k>(
+    e: &Expression,
+    t: &Table,
+    snapshot: &'k Snapshot,
+) -> Option<IdKernel<'k>> {
+    if !branches(e) {
+        return None;
+    }
+    let (variables, tuple) = evaluated_inputs(e, t)?;
+    let kernel = spareval::internal_kernel(snapshot, e, &variables)?;
+    Some(Box::new(move |row| Some(kernel(&tuple(row)?))))
+}
+
 /// The effective boolean value of `e` ([`evaluated`]) with the evaluator's own code, as a
 /// `FILTER` reads it: `Some(None)` an error, `None` when the ids don't decide it.
 pub(crate) fn evaluator_condition<'k>(

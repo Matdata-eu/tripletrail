@@ -3000,3 +3000,60 @@ fn if_and_coalesce_of_any_values_are_the_evaluators() {
         assert!(plan.contains(r#""executor":"ids""#), "not on ids: {q}");
     }
 }
+
+/// An `IF` or `COALESCE` whose branches are variables and constants gives back the term it
+/// holds on ids, as the evaluator does (#11): a stored number keeps the text it was written
+/// with (`28.0e0`, `07`, `"+9"^^xsd:integer`), in a `BIND`, a `SELECT` expression and a
+/// `GROUP BY` key.
+#[test]
+fn if_and_coalesce_give_back_numbers_as_written() {
+    let engine = Engine::new_tripletrail();
+    let data = r#"@prefix ex: <http://example.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+ex:a ex:f 28.0e0 ; ex:l "x"@en ; ex:i 7 ; ex:n "n3"@en ; ex:m 4.50 .
+ex:b ex:f 3.50E0 ; ex:l "y"@nl ; ex:i 07 ; ex:n "n4" ; ex:m 6.0 .
+ex:c ex:f "1e2"^^xsd:double ; ex:l "z" ; ex:i "+9"^^xsd:integer ; ex:n "n3"@en ; ex:m 05.25 .
+"#;
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/> PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>";
+    let pattern = "?o ex:f ?f ; ex:l ?l ; ex:i ?i ; ex:n ?n ; ex:m ?m";
+    for e in [
+        "IF(LANG(?l) = \"en\", ?f, ?f)",
+        "IF(LANG(?l) = \"en\", \"s\", ?f)",
+        "IF(LANG(?l) = \"en\", 3.0e0, ?i)",
+        "IF(?n = \"n3\"@en, 3.0e0, ?f)",
+        "IF(LANGMATCHES(LANG(?l), \"en\"), ?i, ?m)",
+        "IF(STR(?m) < \"5\", ?m, 3.0e0)",
+        "IF(xsd:double(?i) > 3, ?f, \"x\")",
+        "COALESCE(IF(LANG(?l) = \"en\", ?nope, ?f), ?i)",
+        "IF(LANG(?l) = \"nl\", 7, ?i)",
+    ] {
+        for q in [
+            format!("SELECT ?o ?x WHERE {{ {pattern} BIND({e} AS ?x) }}"),
+            format!("SELECT ?o ({e} AS ?x) WHERE {{ {pattern} }}"),
+            format!("SELECT ?x (COUNT(*) AS ?c) WHERE {{ {pattern} }} GROUP BY ({e} AS ?x)"),
+        ] {
+            let evaluator = rows(
+                &engine,
+                &format!("#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n{prefix} {q}"),
+            );
+            for pragma in ["#pragma tt.executor ids\n", ""] {
+                assert_eq!(
+                    rows(&engine, &format!("{pragma}{prefix} {q}")),
+                    evaluator,
+                    "{pragma}{q}"
+                );
+            }
+        }
+        let q = format!("SELECT ?o ?x WHERE {{ {pattern} BIND({e} AS ?x) }}");
+        let plan = engine
+            .explain(&format!("#pragma tt.executor ids\n{prefix} {q}"))
+            .unwrap();
+        // A variable no pattern binds (`?nope`) is the evaluator's.
+        assert_eq!(
+            plan.contains(r#""executor":"ids""#),
+            !e.contains("?nope"),
+            "{q}"
+        );
+    }
+}

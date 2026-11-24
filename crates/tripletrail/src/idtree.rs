@@ -486,6 +486,28 @@ impl Eval<'_> {
         column: &mut Vec<TermId>,
     ) -> Option<bool> {
         let rows = t.len();
+        // An `IF` or `COALESCE` of variables and constants: the term it gives back, as the
+        // evaluator holds it (a number keeps its text).
+        if let Some(kernel) = crate::idstring::id_kernel(e, t, self.snapshot) {
+            let start = column.len();
+            let mut whole = true;
+            for r in 0..rows {
+                if r % 4096 == 0 && (self.cancelled)() {
+                    return None;
+                }
+                match kernel(t.row(r)) {
+                    Some(id) => column.push(id.unwrap_or(TermId(0))),
+                    None => {
+                        whole = false;
+                        break;
+                    }
+                }
+            }
+            if whole {
+                return Some(column[start..].contains(&TermId(0)));
+            }
+            column.truncate(start);
+        }
         let compile = |e: &Expression, t: &Table| {
             if evaluated {
                 crate::idstring::evaluator_kernel(e, t, self.snapshot)
