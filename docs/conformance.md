@@ -18,7 +18,7 @@ cargo run -p tripletrail-testsuite -- --tests rdf-tests --shacl-tests data-shape
   --server target/debug/tripletrail   # after cargo build -p tripletrail-server
 ```
 
-CI runs the commits in `RDF_TESTS_COMMIT`, `DATA_SHAPES_COMMIT` and `GEOSPARQL_BENCHMARK_COMMIT` of `.github/workflows/ci.yml`; bump them with the page and the known failures. It runs them twice, under each executor (`--executor spareval`, the default, and `--executor ids`, #11), and fails unless both give this page.
+CI runs the commits in `RDF_TESTS_COMMIT`, `DATA_SHAPES_COMMIT` and `GEOSPARQL_BENCHMARK_COMMIT` of `.github/workflows/ci.yml`; bump them with the page and the known failures. It runs them twice, under each executor (`--executor ids`, the default, and `--executor spareval`, #11), and fails unless both give this page.
 
 Each test runs on a new in-memory store. Results compare up to blank node renaming, and numeric literals compare by value (`"1.0"` and `"1"` are the same `xsd:decimal`), as in Jena's and Oxigraph's runners: the expected results come from several implementations that write numbers differently. Rows compare in order only when the query has `ORDER BY`. "Not run" counts tests the runner can't run yet (entailment regimes TripleTrail lacks, graphs named by server path, which Fuseki doesn't serve either) and tests the working group didn't approve; a pass rate counts only the tests that ran. The RDF suites load each file with `Engine::load`, the loader the server and the CLI use, and read the statements back from the store: they test the parsers and what the store keeps (literals exactly as written, language directions, triple terms).
 

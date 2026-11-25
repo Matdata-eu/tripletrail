@@ -986,9 +986,10 @@ struct ServeArgs {
     result_cache_mb: usize,
     /// What answers a SELECT whose body runs on term ids: `ids` answers it straight from the
     /// id tables (patterns, joins, OPTIONAL, MINUS, FILTER, ORDER BY, DISTINCT, LIMIT), only
-    /// decoding the terms it returns; `spareval` hands the rows to the term evaluator, as
-    /// before. A query can choose with `#pragma tt.executor ids|spareval`.
-    #[arg(long, env = "TRIPLETRAIL_EXECUTOR", default_value = "spareval",
+    /// decoding the terms it returns, and hands the rest to the term evaluator; `spareval`
+    /// hands every query to the evaluator. A query can choose with
+    /// `#pragma tt.executor ids|spareval`.
+    #[arg(long, env = "TRIPLETRAIL_EXECUTOR", default_value = "ids",
           value_parser = ["ids", "spareval"])]
     executor: String,
     /// Memory a bulk load (`--load`, or a Graph Store upload) may use to sort its quads

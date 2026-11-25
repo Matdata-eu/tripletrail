@@ -203,7 +203,7 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   other than TripleTrail's own, a user-defined function that is not inlined,
   `CONSTRUCT`/`DESCRIBE`, or Oxigraph's store). In the library,
   `Engine::set_result_cache` (off by default).
-- `--executor` (`TRIPLETRAIL_EXECUTOR`, `spareval` by default) picks what answers a `SELECT`
+- `--executor` (`TRIPLETRAIL_EXECUTOR`, `ids` by default) picks what answers a `SELECT`
   or `CONSTRUCT` whose pattern runs on term ids (#11). `ids` answers it straight from the id tables (triple
   patterns, joins, `OPTIONAL` (with a filter inside, also on values of the left side), `MINUS`, `UNION`, `FILTER (NOT) EXISTS` (also with filters and nested `EXISTS` inside, and a filter on values of the outer row), the filters on ids (with the effective boolean value of a column, `FILTER(?ok)`),
   `BIND` and `SELECT (expr AS ?v)` of copies, constants, arithmetic with division, `ABS`, `CEIL`, `FLOOR`, `ROUND`, casts to `xsd:integer`, `xsd:decimal`, `xsd:string`, `xsd:boolean`, `xsd:double`, `xsd:float`, `xsd:dateTime`, `xsd:date` and `xsd:time`, `IF`, `COALESCE`, `STR`, `CONCAT`, `IRI`, `STRLANG`, `STRDT`, `REPLACE`, `UCASE`, `LCASE`, `STRLEN`, `SUBSTR`, `STRBEFORE`, `STRAFTER`, `LANG`, `DATATYPE`, `isIRI`, `isBlank`, `isLiteral`, `MD5`, `SHA1`, `SHA256`, `SHA384`, `SHA512` and `ENCODE_FOR_URI`, any other expression of the values alone (`TZ`, date-time and duration arithmetic, `IF` on a language, …) with the evaluator's own code, also as filters (not `NOW`, `RAND`, `UUID`, `STRUUID`, `BNODE`, `IRI`, `EXISTS` or custom functions), filters comparing or testing such strings, and conditions and string tests (`STRSTARTS`, `STRENDS`, `CONTAINS`, `REGEX` with constant arguments) as booleans (the full list and its limits are in [the store](store.md)), `VALUES`, `GRAPH` with an IRI or a variable, sub-selects (with `DISTINCT`, an order and a slice), the `GROUP BY` counts and sums kept as ids, `ORDER BY` of variables (also of numbers a `BIND` computes) and of the expressions the kernels compute, `DISTINCT`, `REDUCED`, `OFFSET` and `LIMIT` with an order), decoding
@@ -212,8 +212,11 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   is written once and copied into the rows where it occurs (the bytes are those of the usual
   writers); other formats, and a `--max-rows` budget, get the solutions as terms. The result
   cache keeps such an answer as it is. On 133k orders, a three-pattern join returning every
-  row took 333 ms as CSV and takes 88 ms (JSON 402 → 119 ms), and an `OPTIONAL` 180 → 15 ms. The answers are the same; `spareval` stays the default until the
-  test suites agree under `ids` too. A query picks its own with `#pragma tt.executor`. In the
+  row took 333 ms as CSV and takes 88 ms (JSON 402 → 119 ms), and an `OPTIONAL` 180 → 15 ms. The answers are the same, and the test suites agree under both.
+  `ids` is the default since the benchmark of tripletrail#11 (Trainmarks, BSBM, Sparqloscope: the
+  same answers, none more than 10 % slower, Trainmarks CONSTRUCT 2.3× and BSBM BI query 2 3× faster);
+  `spareval` hands every query to the evaluator, as before. A query picks its own with
+  `#pragma tt.executor`. In the
   library, `Engine::set_default_executor_ids`.
 - `--memory-limit` (`TRIPLETRAIL_MEMORY_LIMIT`, e.g. `32G`; also on `tripletrail load`) is the
   memory a bulk load (`--load`, or a Graph Store upload) may use to sort its quads. A larger

@@ -849,7 +849,7 @@ fn geo_evaluator() -> SparqlEvaluator {
 }
 
 /// The default of [`Engine::set_default_executor_ids`], for the whole process.
-static EXECUTOR_IDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static EXECUTOR_IDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Whether the id executor runs this query: its `#pragma tt.executor`, else the default.
 pub(crate) fn executor_ids() -> bool {
@@ -2667,9 +2667,9 @@ impl Engine {
         })
     }
 
-    /// Sets which executor runs queries by default (#11): `true` for the id executor, which
-    /// answers whole queries from tables of term ids when they cover them, `false` (the
-    /// default) for the evaluator alone. `#pragma tt.executor` overrides it per query.
+    /// Sets which executor runs queries by default (#11): `true` (the default) for the id
+    /// executor, which answers whole queries from tables of term ids when they cover them and
+    /// hands the rest to the evaluator, `false` for the evaluator alone. `#pragma tt.executor` overrides it per query.
     pub fn set_default_executor_ids(ids: bool) {
         EXECUTOR_IDS.store(ids, Ordering::Relaxed);
     }
