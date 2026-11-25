@@ -227,8 +227,10 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   `spareval`; a pattern of triples alone that may give that many is counted first, so it is
   never built (100 million rows of a two-pattern join: 126 MB instead of 2.1 GB at the peak,
   three at once 132 MB instead of 5 GB). An answer that is ordered, or whose pattern has
-  more than triples, is built first and can take up to the id joins' memory, 1 GB without
-  `--query-memory`; a server with many concurrent exports sets it.
+  more than triples, is built first before it is handed over: without `--query-memory`
+  about 2 GB for one answer of 98 million rows (a `UNION`, `BIND` or `FILTER` over a join),
+  and 0.5 to 1.6 s before the first byte. A server with many concurrent exports sets
+  `--query-memory`, which keeps such answers flat (at `64MB`).
 - `--memory-limit` (`TRIPLETRAIL_MEMORY_LIMIT`, e.g. `32G`; also on `tripletrail load`) is the
   memory a bulk load (`--load`, or a Graph Store upload) may use to sort its quads. A larger
   load sorts them on disk, under the dataset's directory, and writes the indexes straight to
