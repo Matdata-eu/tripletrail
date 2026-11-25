@@ -218,6 +218,17 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   `spareval` hands every query to the evaluator, as before. A query picks its own with
   `#pragma tt.executor`. In the
   library, `Engine::set_default_executor_ids`.
+  What changes for an operator under `ids`: an answer is held whole before its first byte is
+  written, so a query that times out while it is being written answers 503 instead of a body
+  cut short, and the first byte of a large answer comes later (0.4 s instead of 2 ms for
+  180 MB of CSV), the whole answer 3 to 5 times sooner. Its memory counts against
+  `--query-memory` (below) like the id joins'. An answer without an `ORDER BY` of more than
+  about 8 million cells (rows times variables) streams from the evaluator instead, as under
+  `spareval`; a pattern of triples alone that may give that many is counted first, so it is
+  never built (100 million rows of a two-pattern join: 126 MB instead of 2.1 GB at the peak,
+  three at once 132 MB instead of 5 GB). An answer that is ordered, or whose pattern has
+  more than triples, is built first and can take up to the id joins' memory, 1 GB without
+  `--query-memory`; a server with many concurrent exports sets it.
 - `--memory-limit` (`TRIPLETRAIL_MEMORY_LIMIT`, e.g. `32G`; also on `tripletrail load`) is the
   memory a bulk load (`--load`, or a Graph Store upload) may use to sort its quads. A larger
   load sorts them on disk, under the dataset's directory, and writes the indexes straight to
