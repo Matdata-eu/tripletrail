@@ -31,6 +31,11 @@ pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<IdSolutions> {
     decode(s.variables.into(), &s.table, &s.columns, &s.rows, eval)
 }
 
+/// Cells (rows times variables) of the largest answer without an `ORDER BY` given from the
+/// ids: about 100 MB with its rows, held while it is written. A larger one streams from the
+/// evaluator.
+const ANSWER_CELLS: usize = 1 << 23;
+
 /// A sub-select with `DISTINCT`, `REDUCED`, an `ORDER BY` or a slice inside (#11), as a table
 /// of its variables, its rows in order. `None` when the ids don't answer it.
 pub(crate) fn sub_select(pattern: &GraphPattern, eval: &Eval) -> Option<Table> {
@@ -132,7 +137,35 @@ fn select(pattern: &GraphPattern, eval: &Eval, top: bool) -> Option<Selected> {
     if !covered(&body) {
         return None;
     }
+    // A large answer with no order is the evaluator's: it streams its rows, while the answer
+    // here is held whole until it is written, by every query that runs at once (#11). A
+    // pattern of triples alone that may give that many rows is counted first (the join's rows
+    // are not made for that), so such an answer is not built at all.
+    let streams = top && order.is_none();
+    let width = variables.len().max(1);
+    if streams
+        && let G::Bgp { patterns } = &*body
+        && let Some(compiled) = eval.snapshot.compile_bgp(patterns, &[])
+        && !compiled.empty
+        // Counted only when the planner's estimate is large, so that the usual answer is not
+        // joined twice.
+        && eval.snapshot.estimate_rows(&compiled.triples, eval.graph) * width as f64
+            > (ANSWER_CELLS / 4) as f64
+        && let Some(n) = eval.snapshot.count_ids(
+            &compiled.triples,
+            compiled.columns.len(),
+            eval.graph,
+            tripletrail_store::BgpCount::Rows,
+            eval.cancelled,
+        )
+        && usize::try_from(n).map_or(true, |n| n.saturating_mul(width) > ANSWER_CELLS)
+    {
+        return None;
+    }
     let t = eval.eval(&body)?;
+    if streams && t.len().saturating_mul(width) > ANSWER_CELLS {
+        return None;
+    }
     let rows: Vec<usize> = match order {
         Some(_) => {
             // The rows the slice keeps in order (under DISTINCT, the first row of each

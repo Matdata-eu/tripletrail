@@ -460,7 +460,7 @@ fn errors_and_timeouts() {
             b"a,b,c,d,e,f",
         ),
         (
-            "CONSTRUCT { ?a ?b ?d } WHERE { ?a ?b ?c . ?d ?e ?f }",
+            "#pragma tt.executor spareval\nCONSTRUCT { ?a ?b ?d } WHERE { ?a ?b ?c . ?d ?e ?f }",
             "application/n-triples",
             b"<http",
         ),

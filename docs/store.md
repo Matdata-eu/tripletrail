@@ -254,7 +254,7 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   ordered by `?x` with `LIMIT 10` 280 ms instead of 1.9 s. On 300 k labels, `ORDER BY ?label LIMIT 10`
   1.1 s → 11 ms, `SELECT DISTINCT ?t ... ORDER BY ?t LIMIT 10` 1.0 s → 12 ms. The top 50 of
   133 k double amounts 54 → 17 ms, and with a three-pattern join 319 → 34 ms.
-- **Whole queries on term ids.** Under `--executor ids` (#11, `crates/tripletrail/src/direct.rs`)
+- **Whole queries on term ids.** Under `--executor ids` (the default; #11, `crates/tripletrail/src/direct.rs`)
   a `SELECT` without a dataset of its own whose pattern the tables cover (as above) is answered
   from its table alone: the projection, `DISTINCT` and `REDUCED` on the ids of the projected
   columns, `ORDER BY` of variables as above, then `OFFSET` and `LIMIT`. The answer is an

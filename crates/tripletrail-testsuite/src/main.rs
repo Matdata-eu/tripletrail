@@ -179,9 +179,9 @@ struct Args {
     /// against `tripletrail serve`. Without it those suites are not run.
     #[arg(long)]
     server: Option<PathBuf>,
-    /// The executor the queries run on (`--executor` of the server, #11): `spareval`, the
-    /// default, or `ids`. The known failures are the same for both.
-    #[arg(long, default_value = "spareval", value_parser = ["ids", "spareval"])]
+    /// The executor the queries run on (`--executor` of the server, #11): `ids`, the
+    /// default, or `spareval`. The known failures are the same for both.
+    #[arg(long, default_value = "ids", value_parser = ["ids", "spareval"])]
     executor: String,
     /// Seconds a test may take.
     #[arg(long, default_value_t = 30)]
@@ -576,7 +576,7 @@ fn markdown(
          CI runs the commits in `RDF_TESTS_COMMIT`, `DATA_SHAPES_COMMIT` and \
          `GEOSPARQL_BENCHMARK_COMMIT` of `.github/workflows/ci.yml`; bump them with the page \
          and the known failures. It runs them twice, under each executor (`--executor \
-         spareval`, the default, and `--executor ids`, #11), and fails unless both give this \
+         ids`, the default, and `--executor spareval`, #11), and fails unless both give this \
          page.\n",
         shapes = shacl_commit.unwrap_or("gh-pages"),
         geo = benchmark.map_or("master", |b| b.commit.as_str())

@@ -238,7 +238,7 @@ See [read replicas](../server.md#read-replicas).
 
 <!-- test: run -->
 ```sh
-q='SELECT (COUNT(*) AS ?n) { { SELECT ?s ?p { ?s ?p ?o } } { SELECT ?p ?x { ?x ?p ?y } } }'
+q='SELECT (COUNT(*) AS ?n) { SELECT DISTINCT ?s ?x { ?s ?p ?o . ?x ?q ?y } }'
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:7878/rail_v1/query \
   --data-urlencode "query=$q" --data-urlencode 'query-memory=16KB'
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:7878/rail_v1/query \
@@ -285,21 +285,35 @@ SELECT * WHERE { hint:Query hint:optimizer "None" . ?s ?p ?o } LIMIT 1' | grep -
 "hints":["#pragma tt.optimizer off"]
 ```
 
-- `--executor ids` answers a `SELECT` whose pattern runs on term ids (joins, `OPTIONAL`,
-  `MINUS`, filters, `ORDER BY`, `DISTINCT`) straight from the id tables, without the term
-  evaluator: a query that returns many rows comes back up to twice as fast, and an `OPTIONAL`
-  several times. The answers are the same. It is off by default for now; try it on one query
-  with `#pragma tt.executor ids`, and `/explain` says which executor answered:
+- The id executor (`--executor ids`, the default) answers a `SELECT` whose pattern runs on
+  term ids (joins, `OPTIONAL`, `MINUS`, filters, `ORDER BY`, `DISTINCT`) straight from the id
+  tables, without the term evaluator: a query that returns many rows comes back up to twice
+  as fast, and an `OPTIONAL` several times. Anything else goes to the evaluator, and the
+  answers are the same. `/explain` says which executor answered:
 
 <!-- test: run -->
 ```sh
-curl -s 'http://localhost:7878/rail_v1/explain' --data-urlencode 'query=#pragma tt.executor ids
-SELECT ?s ?type WHERE { ?s a ?type }' | grep -o '"executor":"[a-z]*"'
+curl -s 'http://localhost:7878/rail_v1/explain' --data-urlencode 'query=SELECT ?s ?type WHERE { ?s a ?type }' | grep -o '"executor":"[a-z]*"'
 ```
 
 <!-- test: output -->
 ```text
 "executor":"ids"
+```
+
+  `--executor spareval` sends every query to the evaluator, as before; one query can ask
+  for it with `#pragma tt.executor spareval`. `/explain` then shows the evaluator's plan,
+  without an `executor`, and the hint it ran with:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/rail_v1/explain' --data-urlencode 'query=#pragma tt.executor spareval
+SELECT ?s ?type WHERE { ?s a ?type }' | grep -o '"executor":"[a-z]*"\|"hints":\[[^]]*\]'
+```
+
+<!-- test: output -->
+```text
+"hints":["#pragma tt.executor spareval"]
 ```
 
   All hints are listed under [query hints](../server.md#query-hints).
