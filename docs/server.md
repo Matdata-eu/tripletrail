@@ -3294,7 +3294,11 @@ https://tripletrail.example.org/kg/tiles/all/{z}/{x}/{y}.mvt
 - Below zoom 8, a layer of more than 1,000 features in one tile is generalised, as RINF Atlas
   does (#92): a 512 extent (and an 8-unit buffer) instead of 4096, and one feature per
   position, the one drawn on top (the last by IRI). Lines and polygons smaller than a unit are
-  left out. A layer of fewer features keeps them all at every zoom.
+  left out. Such a layer's features carry their IRI in two attributes in place of `iri`: `ns`,
+  the IRI up to its last `/` or `#`, which the layer holds once for all the features that
+  share it, and `local`, the rest (#261); the IRI is `ns` followed by `local`. On RINF's eight
+  countries this halves nine z6 tiles of every class around Brussels (1,239 instead of 2,481 KB). A
+  layer of fewer features keeps them all at every zoom, with `iri`.
 - Collections that read their geometry through the same path are fetched with one query
   (the spatial index is asked once per tile), and those queries run on up to four threads.
 - Tiles are kept in memory, 256 MiB at most over all datasets (oldest out first; a layer tile

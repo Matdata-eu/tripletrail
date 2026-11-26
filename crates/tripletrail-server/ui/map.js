@@ -881,13 +881,21 @@ window.TripleTrailMap = (function () {
     } catch (e) { /* the world view stays */ }
   }
 
+  /** A tile feature's IRI: `iri`, or in a generalised low-zoom layer `ns` and `local`. */
+  function featureIri(f) {
+    const p = f.properties || {};
+    return p.iri || (p.local != null ? (p.ns || "") + p.local : null);
+  }
+  /** The same as a style expression. */
+  const IRI_OF = ["coalesce", ["get", "iri"], ["concat", ["coalesce", ["get", "ns"], ""], ["get", "local"]]];
+
   /** Lists the features under a click, with labels, each linking to its describe page. */
   async function pick(ds, e, collections, layers) {
     const hits = map.queryRenderedFeatures(box(e.point, 4), { layers });
     const byId = new Map(collections.map((c) => [c.id, c]));
     const seen = new Map();
     for (const f of hits) {
-      const iri = f.properties && f.properties.iri;
+      const iri = featureIri(f);
       if (iri && !seen.has(iri)) seen.set(iri, byId.get(f.sourceLayer) || { title: f.sourceLayer, color: "#888" });
     }
     if (!seen.size) return;
@@ -1000,7 +1008,7 @@ window.TripleTrailMap = (function () {
     const run = () => {
       for (const id of ["sel-fill", "sel-outline", "sel-band", "sel-line", "sel-point"]) if (map.getLayer(id)) map.removeLayer(id);
       if (!iri) return;
-      const has = ["==", ["get", "iri"], iri];
+      const has = ["==", IRI_OF, iri];
       const layer = collection || (drawn.find((c) => map.getSource("tripletrail") &&
         map.querySourceFeatures("tripletrail", { sourceLayer: c.id, filter: has }).length) || {}).id;
       if (!layer) return;
