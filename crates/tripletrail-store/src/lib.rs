@@ -100,6 +100,7 @@ use rustc_hash::FxHashMap;
 use spareval::{ExpressionTerm, InternalQuad, QueryableDataset};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex, RwLock};
 use tripletrail_geo::sync::{LockUnpoisoned, RwLockUnpoisoned};
 use tripletrail_geo::{Geom, parse_wkt_literal_uncached};
@@ -344,6 +345,8 @@ struct Inner {
     /// The check of the checkpoint's files against their sums, run in the background after
     /// the store opens (#436).
     verification: Arc<VerifyState>,
+    /// How far the bulk load under way has got (see [`Store::load_progress`]).
+    load: LoadState,
     /// WKT literals that can be written back exactly are kept only in binary form by the
     /// next checkpoints (see [`Store::set_render_wkt`]).
     render_wkt: std::sync::atomic::AtomicBool,
@@ -523,6 +526,7 @@ impl Store {
             rdfs_into: Default::default(),
             render_wkt: Default::default(),
             verification: Default::default(),
+            load: LoadState::default(),
             closed: Default::default(),
             merge_threads: Default::default(),
             last_write: Default::default(),
@@ -1319,6 +1323,7 @@ impl Store {
     /// After a bulk load: entails again when the store keeps an entailment.
     fn entail_after_load(&self) -> Result<(), StoreError> {
         if let Some((into, regime)) = self.kept_entailment() {
+            self.inner.load.set(LoadPhase::Entailing);
             self.transaction(|t| {
                 t.entail(into.as_ref(), regime);
                 Ok::<_, StoreError>(())
@@ -1365,6 +1370,13 @@ impl Store {
             .collect()
     }
 
+    /// How far the bulk load under way has got: its step, and the quads it has read so far
+    /// (#232). Read from another thread, for a progress line of a long load;
+    /// [`LoadPhase::Idle`] when no load is running.
+    pub fn load_progress(&self) -> LoadProgress {
+        self.inner.load.progress()
+    }
+
     /// Loads an RDF document. N-Triples and N-Quads are read in blocks of 64 MB, each parsed on
     /// every core. The data is
     /// added in bulk: one rebuild of the indexes, not one write per quad, and on disk a new
@@ -1400,6 +1412,7 @@ impl Store {
         };
         let scope = scope.as_ref();
         let mut writer = self.lock_writer()?;
+        let _load = self.inner.load.start();
         let format = parser.format();
         let threads = rayon::current_num_threads();
         let sorter = Sorter::new(writer.as_ref().map(|d| Arc::clone(&d.spill)));
@@ -1511,6 +1524,7 @@ impl Store {
                             TermId::new(kind, u64::from(ordinal)).0
                         }
                     };
+                    self.inner.load.add(batch.terms.len() as u64 / 4);
                     for q in batch.terms.chunks_exact(4) {
                         ids.push([id(&q[0]), id(&q[1]), id(&q[2]), id(&q[3])]);
                     }
@@ -1567,6 +1581,7 @@ impl Store {
         for batch in batches {
             ids.clear();
             self.intern_into(&batch, &mut ids);
+            self.inner.load.add(batch.len() as u64);
             for &q in &ids {
                 sorter.push(q);
             }
@@ -1615,10 +1630,12 @@ impl Store {
     /// Adds quads in bulk, like [`Store::bulk_load`].
     pub fn bulk_load_quads(&self, quads: impl IntoIterator<Item = Quad>) -> Result<(), StoreError> {
         let mut writer = self.lock_writer()?;
+        let _load = self.inner.load.start();
         let mut sorter = Sorter::new(writer.as_ref().map(|d| Arc::clone(&d.spill)));
         let mut interner = Interner::new(self);
         for q in quads {
             sorter.push(interner.quad(q.as_ref()));
+            self.inner.load.add(1);
         }
         drop(interner);
         self.bulk_finish(sorter, &mut writer)?;
@@ -1634,6 +1651,7 @@ impl Store {
         batches: impl IntoIterator<Item = Vec<Quad>>,
     ) -> Result<usize, StoreError> {
         let mut writer = self.lock_writer()?;
+        let _load = self.inner.load.start();
         let sorter = Sorter::new(writer.as_ref().map(|d| Arc::clone(&d.spill)));
         let ids = self.intern_batches(batches, sorter);
         let added = self.bulk_finish(ids, &mut writer)?;
@@ -1653,6 +1671,7 @@ impl Store {
         writer: &mut Option<persist::Disk>,
     ) -> Result<usize, StoreError> {
         let added = sorter.len();
+        self.inner.load.set(LoadPhase::Sorting);
         // A load that goes into a checkpoint rather than the log waits for the check of a
         // large store's files (#436) before it changes anything, so that a load refused for
         // damage leaves the store as it was.
@@ -1670,6 +1689,7 @@ impl Store {
             drop(current);
             self.set_quads(index);
             if let Some(disk) = writer.as_mut() {
+                self.inner.load.set(LoadPhase::Writing);
                 disk.mark_load()?;
                 self.checkpoint_with(disk, true)?;
             }
@@ -1683,6 +1703,7 @@ impl Store {
             ids.retain(|q| !snapshot.quads.contains(q));
             drop(snapshot);
             let pending: Vec<([u64; 4], bool)> = ids.into_iter().map(|q| (q, true)).collect();
+            self.inner.load.set(LoadPhase::Writing);
             if let Some(disk) = writer.as_mut()
                 && !pending.is_empty()
             {
@@ -1703,6 +1724,7 @@ impl Store {
             current.merge_in(&ids);
             self.set_quads(current);
             if let Some(disk) = writer.as_mut() {
+                self.inner.load.set(LoadPhase::Writing);
                 disk.mark_load()?;
                 self.checkpoint_with(disk, true)?;
             }
@@ -1715,6 +1737,7 @@ impl Store {
         let index = QuadIndex::from_quads(ids);
         self.set_quads(index);
         if let Some(disk) = writer.as_mut() {
+            self.inner.load.set(LoadPhase::Writing);
             disk.mark_load()?;
             self.checkpoint_with(disk, true)?;
         }
@@ -4940,5 +4963,106 @@ mod tests {
         let bad = format!("{ttl}e:x e:p .\n");
         assert!(store.bulk_load(RdfFormat::Turtle, bad.as_bytes()).is_err());
         assert_eq!(store.len(), 200);
+    }
+}
+
+/// The step a bulk load is at (see [`Store::load_progress`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoadPhase {
+    /// No load is running.
+    Idle,
+    /// Parsing the input and adding its terms to the dictionary.
+    Reading,
+    /// Sorting the quads into the index permutations: past the memory limit, an external
+    /// sort that merges its runs with the store's quads.
+    Sorting,
+    /// Writing the checkpoint, or the write-ahead log of a small load.
+    Writing,
+    /// Bringing the kept RDFS entailment up to date.
+    Entailing,
+}
+
+impl LoadPhase {
+    const ALL: [Self; 5] = [
+        Self::Idle,
+        Self::Reading,
+        Self::Sorting,
+        Self::Writing,
+        Self::Entailing,
+    ];
+
+    /// The step in one lower-case word, as a progress line shows it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Reading => "reading",
+            Self::Sorting => "sorting",
+            Self::Writing => "writing",
+            Self::Entailing => "entailing",
+        }
+    }
+}
+
+impl std::fmt::Display for LoadPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// How far a bulk load has got (see [`Store::load_progress`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoadProgress {
+    /// Its step.
+    pub phase: LoadPhase,
+    /// The quads it has read so far, before duplicates are dropped.
+    pub quads: u64,
+}
+
+/// What [`Store::load_progress`] reads, set by the one writer that loads.
+#[derive(Default)]
+struct LoadState {
+    phase: std::sync::atomic::AtomicU8,
+    quads: std::sync::atomic::AtomicU64,
+}
+
+impl LoadState {
+    /// A load starts reading; back to [`LoadPhase::Idle`] when the guard drops, on an error
+    /// too.
+    fn start(&self) -> LoadGuard<'_> {
+        self.quads.store(0, Relaxed);
+        self.phase.store(LoadPhase::Reading as u8, Relaxed);
+        LoadGuard(self)
+    }
+
+    /// The step of the load under way; nothing outside one (a union into the default graph
+    /// sorts too).
+    fn set(&self, phase: LoadPhase) {
+        let _ = self.phase.fetch_update(Relaxed, Relaxed, |p| {
+            (p != LoadPhase::Idle as u8).then_some(phase as u8)
+        });
+    }
+
+    fn add(&self, quads: u64) {
+        self.quads.fetch_add(quads, Relaxed);
+    }
+
+    fn progress(&self) -> LoadProgress {
+        let phase = usize::from(self.phase.load(Relaxed));
+        LoadProgress {
+            phase: LoadPhase::ALL
+                .get(phase)
+                .copied()
+                .unwrap_or(LoadPhase::Idle),
+            quads: self.quads.load(Relaxed),
+        }
+    }
+}
+
+/// Sets the load's step back to [`LoadPhase::Idle`] when dropped.
+struct LoadGuard<'a>(&'a LoadState);
+
+impl Drop for LoadGuard<'_> {
+    fn drop(&mut self) {
+        self.0.phase.store(LoadPhase::Idle as u8, Relaxed);
     }
 }

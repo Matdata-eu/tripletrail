@@ -152,7 +152,6 @@ impl<T: Pod> Buf<T> {
         }
     }
 
-    /// Bytes of the file this array is mapped from (0 when owned).
     /// For mapped values, read ahead in order (`in_order`), or only the page asked for
     /// (see `Spill::map_keys`).
     pub(crate) fn advise_in_order(&self, in_order: bool) {
@@ -169,6 +168,7 @@ impl<T: Pod> Buf<T> {
         let _ = in_order;
     }
 
+    /// Bytes of the file this array is mapped from (0 when owned).
     pub(crate) fn mapped_size(&self) -> usize {
         match self {
             Self::Owned(_) | Self::Shared(_) => 0,

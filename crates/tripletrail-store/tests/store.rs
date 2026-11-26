@@ -1980,6 +1980,48 @@ fn copies_of_a_store_share_no_file_with_it() {
 }
 
 #[test]
+fn a_load_says_its_step_and_the_triples_it_has_read() {
+    use tripletrail_store::{LoadPhase, LoadProgress};
+    let store = Store::new();
+    let idle = |quads| LoadProgress {
+        phase: LoadPhase::Idle,
+        quads,
+    };
+    assert_eq!(store.load_progress(), idle(0));
+    let text: String = (0..1000)
+        .map(|i| {
+            format!(
+                "<http://example.com/s{i}> <http://example.com/p> \"{}\" .\n",
+                i % 7
+            )
+        })
+        .collect();
+    store
+        .bulk_load(RdfFormat::NTriples, text.as_bytes())
+        .unwrap();
+    // Read in parallel blocks, counted as the dictionary takes them; the step is over.
+    assert_eq!(store.load_progress(), idle(1000));
+    store
+        .bulk_load(
+            RdfFormat::Turtle,
+            "<http://example.com/a> <http://example.com/p> 1, 2 .".as_bytes(),
+        )
+        .unwrap();
+    assert_eq!(store.load_progress(), idle(2));
+    // A failed load ends its step too.
+    assert!(
+        store
+            .bulk_load(
+                RdfFormat::NTriples,
+                "<http://example.com/a> <x> .\n".as_bytes()
+            )
+            .is_err()
+    );
+    assert_eq!(store.load_progress().phase, LoadPhase::Idle);
+    assert_eq!(LoadPhase::Sorting.to_string(), "sorting");
+}
+
+#[test]
 fn bulk_loads_larger_than_the_memory_limit_sort_on_disk() {
     let dir = temp_dir("external-sort");
     let quad = |i: u64| {
