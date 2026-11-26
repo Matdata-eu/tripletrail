@@ -132,6 +132,68 @@ fn walk_alternative<'p>(p: &'p PropertyPathExpression, out: &mut Steps<'p>) -> O
     }
 }
 
+/// A basic graph pattern as its groups of triples connected through variables or blank
+/// nodes, each a pattern of its own (in the order of their first triples); anything else
+/// as it is.
+fn bgp_components(p: &GraphPattern) -> Vec<std::borrow::Cow<'_, GraphPattern>> {
+    use spargebra::term::{NamedNodePattern, TermPattern};
+    let GraphPattern::Bgp { patterns } = p else {
+        return vec![std::borrow::Cow::Borrowed(p)];
+    };
+    if patterns.len() < 2 {
+        return vec![std::borrow::Cow::Borrowed(p)];
+    }
+    // Names of variables and blank nodes, `?` and `_:` apart.
+    let names = |t: &spargebra::term::TriplePattern| -> Vec<String> {
+        let mut out = Vec::new();
+        for term in [&t.subject, &t.object] {
+            match term {
+                TermPattern::Variable(v) => out.push(format!("?{}", v.as_str())),
+                TermPattern::BlankNode(b) => out.push(format!("_:{}", b.as_str())),
+                _ => {}
+            }
+        }
+        if let NamedNodePattern::Variable(v) = &t.predicate {
+            out.push(format!("?{}", v.as_str()));
+        }
+        out
+    };
+    // Union-find over the triples.
+    let mut parent: Vec<usize> = (0..patterns.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut first: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, t) in patterns.iter().enumerate() {
+        for name in names(t) {
+            let j = *first.entry(name).or_insert(i);
+            let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+            if a != b {
+                parent[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let mut groups: Vec<(usize, Vec<spargebra::term::TriplePattern>)> = Vec::new();
+    for (i, t) in patterns.iter().enumerate() {
+        let r = root(&mut parent, i);
+        match groups.iter_mut().find(|(g, _)| *g == r) {
+            Some((_, ts)) => ts.push(t.clone()),
+            None => groups.push((r, vec![t.clone()])),
+        }
+    }
+    if groups.len() < 2 {
+        return vec![std::borrow::Cow::Borrowed(p)];
+    }
+    groups
+        .into_iter()
+        .map(|(_, patterns)| std::borrow::Cow::Owned(GraphPattern::Bgp { patterns }))
+        .collect()
+}
+
 /// The operands of a tree of joins, in order.
 fn joined_parts<'p>(p: &'p GraphPattern, out: &mut Vec<&'p GraphPattern>) {
     match p {
@@ -234,12 +296,26 @@ impl Eval<'_> {
             GraphPattern::Bgp { patterns } => self.bgp(patterns)?,
             GraphPattern::Join { .. } => {
                 // The parts joined, paths last: they start from the values the others give.
+                // Each next part shares a variable with those joined before when one does:
+                // `?f a ex:S . ?t ex:p ?v` beside a path from `?f` to `?t` is two parts, the
+                // path between them, not the product of all sections and all values (#257).
                 let mut parts = Vec::new();
                 joined_parts(p, &mut parts);
-                parts.sort_by_key(|p| matches!(p, GraphPattern::Path { .. }));
-                let mut t = self.eval(parts[0])?;
-                for part in &parts[1..] {
-                    let r = self.right(&t, part)?;
+                let mut parts: Vec<std::borrow::Cow<'_, GraphPattern>> =
+                    parts.into_iter().flat_map(bgp_components).collect();
+                parts.sort_by_key(|p| matches!(&**p, GraphPattern::Path { .. }));
+                let mut t = self.eval(&parts.remove(0))?;
+                while !parts.is_empty() {
+                    let next = parts
+                        .iter()
+                        .position(|part| {
+                            let mut shared = false;
+                            part.on_in_scope_variable(|v| shared |= t.col(v).is_some());
+                            shared
+                        })
+                        .unwrap_or(0);
+                    let part = parts.remove(next);
+                    let r = self.right(&t, &part)?;
                     t = join(&t, &r, self.cancelled)?;
                 }
                 t
