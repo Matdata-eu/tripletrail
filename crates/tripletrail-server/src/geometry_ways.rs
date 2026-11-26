@@ -236,13 +236,50 @@ impl Ways {
     /// [`Ways::pattern`] with `filter` (SPARQL on `o`, such as a `FILTER`) next to each way, so
     /// that a spatial filter stays beside the path it can use an index for.
     pub(crate) fn filtered(&self, s: &str, o: &str, filter: &str) -> String {
+        self.picked(s, o, filter, Pick::All)
+    }
+
+    /// [`Ways::filtered`] with each alternative of a path (`A|B|C`) only for the instances
+    /// that the alternatives before it give no geometry: the shape lists them from the one to
+    /// take first, as a track's own line before that of the section it is part of, which the
+    /// most detailed of them all would take (#316). The items draw these; filters and counts,
+    /// which ask only whether there is a geometry, need not.
+    pub(crate) fn chosen(&self, s: &str, o: &str, filter: &str) -> String {
+        self.picked(s, o, filter, Pick::First)
+    }
+
+    /// [`Ways::filtered`] that binds `rank` to the [`Rank`] of the alternative each geometry
+    /// comes from, for a reader that keeps the lowest and then asks [`Ways::earlier`] about
+    /// those it kept of a later alternative: the tiles, whose window would leave a `NOT
+    /// EXISTS` beside each alternative after the first to test every candidate in it (z6
+    /// tiles of RINF 13% slower).
+    pub(crate) fn ranked(&self, s: &str, o: &str, filter: &str, rank: &str) -> String {
+        self.picked(s, o, filter, Pick::Ranked(rank))
+    }
+
+    /// A graph pattern that holds when `s` (SPARQL text) has a geometry on an alternative
+    /// before the one of `rank`, in the same way; `None` when there is none before it.
+    pub(crate) fn earlier(&self, s: &str, rank: Rank) -> Option<String> {
+        let (way, alt) = (rank / RANKS_PER_WAY, rank % RANKS_PER_WAY);
+        let Some(Way::Path(p)) = self.0.get(usize::try_from(way).ok()?) else {
+            return None;
+        };
+        let before: Vec<String> = alternatives(p)
+            .into_iter()
+            .take(usize::try_from(alt).ok()?)
+            .map(|a| format!("{{ {s} {a} ?earlier . }}"))
+            .collect();
+        (!before.is_empty()).then(|| before.join(" UNION "))
+    }
+
+    fn picked(&self, s: &str, o: &str, filter: &str, pick: Pick<'_>) -> String {
         let filter = if filter.is_empty() {
             String::new()
         } else {
             format!(" {filter}")
         };
         if let [Way::Path(p)] = self.0.as_slice() {
-            return path_filtered(s, p, o, &filter);
+            return path_filtered(s, p, o, &filter, pick, 0);
         }
         if self.0.is_empty() {
             // A window none of the lines meets.
@@ -251,14 +288,15 @@ impl Ways {
         let mut branches = Vec::new();
         for (i, way) in self.0.iter().enumerate() {
             let alternatives = match way {
-                Way::Path(p) if !filter.is_empty() => alternatives(p),
+                Way::Path(p) if !filter.is_empty() || pick != Pick::All => alternatives(p),
                 _ => Vec::new(),
             };
+            let offset = i as Rank * RANKS_PER_WAY;
             let (mut branch, filter) = if alternatives.len() > 1 {
                 let Way::Path(p) = way else { unreachable!() };
-                (path_filtered(s, p, o, &filter), String::new())
+                (path_filtered(s, p, o, &filter, pick, offset), String::new())
             } else {
-                (way.bind(s, o, i), filter.clone())
+                (way.bind(s, o, i), format!("{filter}{}", pick.bind(offset)))
             };
             // The instances with a geometry on an earlier way take that one.
             for (j, earlier) in self.0[..i].iter().enumerate() {
@@ -274,23 +312,64 @@ impl Ways {
     }
 }
 
+/// Where a geometry comes from: its way's place times [`RANKS_PER_WAY`] plus its
+/// alternative's place in that way's path, so the lower the earlier the shape lists it.
+pub(crate) type Rank = i64;
+const RANKS_PER_WAY: Rank = 1024;
+
+/// Which of a path's alternatives a pattern gives (see [`Ways::picked`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pick<'a> {
+    /// All of them.
+    All,
+    /// Each for the instances the ones before it give no geometry.
+    First,
+    /// All of them, with their [`Rank`] bound to the variable.
+    Ranked(&'a str),
+}
+
+impl Pick<'_> {
+    /// The `BIND` of a rank, for `Ranked`.
+    fn bind(self, rank: Rank) -> String {
+        match self {
+            Pick::Ranked(v) => format!(" BIND({rank} AS {v})"),
+            _ => String::new(),
+        }
+    }
+}
+
 /// `s p o` with `filter` beside it. A path of alternatives (`A|B|C`) becomes a `UNION` of
 /// them, each with the filter: a spatial filter then uses the index for each, where beside the
 /// alternatives as a whole it was tested on every instance's geometry (1.3 s for a map tile of
 /// RINF Germany's tracks, 4 ms as a union, #947). The answers are the same, as a path of
 /// alternatives is the union of its alternatives.
-fn path_filtered(s: &str, p: &str, o: &str, filter: &str) -> String {
-    let alternatives = if filter.is_empty() {
+///
+/// `pick` says which alternatives, and their ranks start at `offset` (see [`Ways::picked`]).
+fn path_filtered(s: &str, p: &str, o: &str, filter: &str, pick: Pick<'_>, offset: Rank) -> String {
+    let alternatives = if filter.is_empty() && pick == Pick::All {
         Vec::new()
     } else {
         alternatives(p)
     };
     if alternatives.len() < 2 {
-        return format!("{s} {p} {o} .{filter}");
+        return format!("{s} {p} {o} .{filter}{}", pick.bind(offset));
     }
     alternatives
         .iter()
-        .map(|a| format!("{{ {s} {a} {o} .{filter} }}"))
+        .enumerate()
+        .map(|(i, a)| {
+            let before: String = if pick == Pick::First {
+                alternatives[..i]
+                    .iter()
+                    .enumerate()
+                    .map(|(j, b)| format!(" FILTER NOT EXISTS {{ {s} {b} {o}_alt_{i}_{j} . }}"))
+                    .collect()
+            } else {
+                String::new()
+            };
+            let bind = pick.bind(offset + i as Rank);
+            format!("{{ {s} {a} {o} .{before}{filter}{bind} }}")
+        })
         .collect::<Vec<_>>()
         .join(" UNION ")
 }
@@ -642,6 +721,43 @@ mod tests {
         assert!(
             text.starts_with("{ { ?f <p> ?w . FILTER(?w) } UNION { ?f <q> ?w . FILTER(?w) } }"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn the_first_alternative_with_a_geometry_is_chosen() {
+        let path = Ways(vec![Way::Path("<own>|<up>/<own>".into())]);
+        // The items: a later alternative for the instances the earlier ones leave without.
+        assert_eq!(
+            path.chosen("?f", "?w", ""),
+            "{ ?f <own> ?w . } UNION { ?f <up>/<own> ?w . \
+             FILTER NOT EXISTS { ?f <own> ?w_alt_1_0 . } }"
+        );
+        // The tiles: each with its rank, then the earlier ones asked about those kept.
+        assert_eq!(
+            path.ranked("?f", "?w", "FILTER(?w)", "?r"),
+            "{ ?f <own> ?w . FILTER(?w) BIND(0 AS ?r) } UNION \
+             { ?f <up>/<own> ?w . FILTER(?w) BIND(1 AS ?r) }"
+        );
+        assert_eq!(path.earlier("?f", 0), None);
+        assert_eq!(
+            path.earlier("<x>", 1).as_deref(),
+            Some("{ <x> <own> ?earlier . }")
+        );
+        // A second way's ranks are its own.
+        let both = Ways(vec![
+            Way::Line("<a>".into(), "<b>".into(), None),
+            Way::Path("<p>|<q>".into()),
+        ]);
+        let text = both.ranked("?f", "?w", "", "?r");
+        assert!(
+            text.contains("BIND(0 AS ?r)") && text.contains("BIND(1025 AS ?r)"),
+            "{text}"
+        );
+        assert_eq!(both.earlier("?f", 1024), None);
+        assert_eq!(
+            both.earlier("?f", 1025).as_deref(),
+            Some("{ ?f <p> ?earlier . }")
         );
     }
 }

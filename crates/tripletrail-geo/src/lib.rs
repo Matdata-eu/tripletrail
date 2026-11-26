@@ -45,7 +45,7 @@ pub use functions::{
     Func, FunctionTable, GEOF, ST, function, function_table, register, register_with,
     register_with_source,
 };
-pub use geosparql11::aggregate_functions;
+pub use geosparql11::{aggregate_functions, as_geojson};
 pub use hash::{FastBuildHasher, SampledHasher};
 pub use jena::{JENA_EARTH_RADIUS, metres_in_unit};
 pub use literal::{

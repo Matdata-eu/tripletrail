@@ -423,6 +423,12 @@ fn fmt_num(out: &mut String, v: f64) {
     }
 }
 
+/// RFC 7946 GeoJSON of a literal's geometry, as `geof:asGeoJSON` writes it: in CRS84, or
+/// `None` when the term is no geometry or its CRS has no transform to CRS84.
+pub fn as_geojson(g: &Geom) -> Option<String> {
+    Some(to_geojson(&crs::to_lon_lat(&g.geometry, &g.crs)?))
+}
+
 /// RFC 7946 GeoJSON (coordinates must already be CRS84).
 pub(crate) fn to_geojson(g: &Geometry<f64>) -> String {
     fn coord(out: &mut String, c: Coord<f64>) {

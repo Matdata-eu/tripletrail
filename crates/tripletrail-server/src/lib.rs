@@ -1194,6 +1194,9 @@ fn header(name: &str, value: &str) -> Header {
 /// Answers smaller than this go as they are: gzip would save little on them.
 const GZIP_FROM: usize = 1024;
 
+/// Answers of at least this many bytes are gzipped harder (see [`gzipped`]).
+const BIG_BODY: usize = 1 << 20;
+
 /// `reply` gzipped, for a client that accepts it (#261): the map's tiles, facets and searches
 /// and the OGC API's answers, which a browser fetches by the hundred. RINF Atlas sends its
 /// tiles gzipped too: a quarter to a fifth of their bytes. A body of unknown length (a
@@ -1226,10 +1229,13 @@ pub(crate) fn gzipped(request: &Request, mut reply: Reply) -> Reply {
     }
     // Level 3: RINF's nine z6 tiles (1,239 KB) take 14 ms and come to 488 KB. Level 1 (the
     // `fast` one) gives 659 KB, level 6 482 KB in 25 ms; a tile from the cache is sent in a
-    // few milliseconds.
+    // few milliseconds. A body of a megabyte or more (a page of features) takes level 5: 7,281
+    // tracks of RINF Austria (48.5 MB) come to 5.6 MB in 231 ms, where level 3 gives 6.1 MB in
+    // 199 ms and level 6 5.5 MB in 357 ms (#316).
+    let level = if data.len() >= BIG_BODY { 5 } else { 3 };
     let mut gz = flate2::write::GzEncoder::new(
         Vec::with_capacity(data.len() / 4),
-        flate2::Compression::new(3),
+        flate2::Compression::new(level),
     );
     let body = match gz.write_all(&data).and_then(|()| gz.finish()) {
         Ok(zipped) if zipped.len() < data.len() => {
