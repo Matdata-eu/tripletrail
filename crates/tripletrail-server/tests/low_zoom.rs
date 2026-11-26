@@ -21,9 +21,24 @@ fn tile(url: &str) -> Vec<u8> {
     body
 }
 
-/// How many of the stations a tile names.
+/// How many of the stations a tile names: by IRI, or in a generalised layer by the part of
+/// it after the namespace (`p3_7`), which the layer holds once (#261).
 fn stations(tile: &[u8]) -> usize {
     let needle = b"http://example.com/p";
+    let whole = tile.windows(needle.len()).filter(|w| w == needle).count();
+    if whole > 0 {
+        return whole;
+    }
+    tile.windows(3)
+        .filter(|w| {
+            w[0] == b'p' && w[1].is_ascii_digit() && (w[2] == b'_' || w[2].is_ascii_digit())
+        })
+        .count()
+}
+
+/// How many times a tile holds the stations' namespace.
+fn namespaces(tile: &[u8]) -> usize {
+    let needle = b"http://example.com/";
     tile.windows(needle.len()).filter(|w| w == needle).count()
 }
 
@@ -73,6 +88,9 @@ fn a_crowded_layer_is_generalised_below_zoom_8() {
     let drawn = stations(&low);
     assert!(drawn > 100 && drawn < 1200, "{drawn}");
     assert!(low.len() * 2 < full.len(), "{} {}", low.len(), full.len());
+    // Its features name their IRI as `ns` and `local`, the namespace held once.
+    assert_eq!(namespaces(&low), 1);
+    assert_eq!(namespaces(&full), 1200);
     // The same tile every time: the one on top is the last by IRI.
     assert_eq!(tile(&format!("{base}/Station/7/{x}/{y}.mvt")), low);
     // A layer of a few features keeps them all, however close.
