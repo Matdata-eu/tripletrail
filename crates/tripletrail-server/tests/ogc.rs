@@ -3348,7 +3348,7 @@ fn facets_of_blank_shapes_keep_their_order() {
         let base = format!("http://{}", server.address());
         server.spawn();
         // The property shapes written in another order each round.
-        let mut properties = vec![
+        let mut properties = [
             "[ sh:path ex:zone ; tts:key \"zone\" ; tts:facet tts:Facet-Values ]",
             "[ sh:path ex:kind ; tts:key \"kind\" ; tts:facet tts:Facet-Values ]",
             "[ sh:path ex:tracks ; tts:key \"tracks\" ; tts:facet tts:Facet-Values ]",
