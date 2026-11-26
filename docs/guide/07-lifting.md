@@ -294,11 +294,32 @@ or upload them to a running server with
 
 ## Import a file in the web UI
 
-The server's **Import** page (`/$/ui/import`) does the same without a command line. Drop a
-file on it: the page shows the file as Facade-X triples and drafts a `CONSTRUCT` that maps
-every column or key. Edit the query, **Preview** the triples it makes, and **Add to the graph**
-puts them in the named graph you give. **Download query** saves the query as a lift query that
-reads the file by its name, to run later with `tripletrail lift`.
+The server's **Import** page (`/$/ui/import`) does the same without a command line. The
+quickest way there is **Add data** in a dataset's dialog on the **Datasets** page: drop any
+files on it. RDF files load as they are; a CSV, JSON, XML or other file opens the Import page
+with the file sent and its lift drafted, so three clicks take it from the drop to a named
+graph: the drop, **Add**, and **Add to the graph**. Several files are lifted one after the
+other (**Next file**).
+
+The page shows the file as Facade-X triples and drafts a `CONSTRUCT` that lifts it in its own
+vocabulary, under a source namespace (`https://data.example.org/src/stations/` for
+`stations.csv`; change it and **Draft again**): a class for each kind of record (the rows of a
+table, the elements of one name in XML, the objects under one key in JSON), a property for each
+column or key, links from records to the records inside them, values typed by what they look
+like (`10` as an `xsd:integer`, `3.2170` as an `xsd:decimal`, dates as `xsd:date`), and
+`prov:wasDerivedFrom` the file. A record's IRI comes from its key column, found when one is
+unique and named like an id (`code` here), or chosen under the kind; without one, from its row
+number. Nothing is interpreted or dropped: mapping it to your own classes is the next step.
+Edit the query, **Preview** the triples it makes, and **Add to the graph** puts them in the
+named graph you give.
+
+**Save as lift query** keeps the lift repeatable: it writes the query and the file into a
+Workbench workspace (`lift/stations.rq` and `lift/stations.csv`) and adds a `lift` step for
+the graph to its `pipeline.yaml`, so the pipeline lifts the next version of the file the same
+way. **Download query** saves the query as a lift query that reads the file by its name, to run
+later with `tripletrail lift`. A file larger than the page takes (`--max-body`, 16 MiB by
+default) is drafted from its first lines, to save or download the query and lift the whole file
+with `tripletrail lift` or a pipeline.
 
 **Draft with AI**, under the query, has your AI service write the query for you: say what
 the file should become ("one station per row, with its name and position"), or nothing, and
@@ -336,7 +357,25 @@ curl -s -X POST "http://localhost:7878/rail/import/$id/run?graph=urn:import:stat
 {"after":18,"before":0,"graph":"urn:import:stations"}
 ```
 
-The query reads `location=stations.csv`, and the import runs it on the uploaded file of that
+The upload's answer also has the drafted lift: its `namespace`, the `kinds` of records with
+the class and key column of each, and the `query`:
+
+<!-- test: run -->
+```sh
+grep -o '"class":"[^"]*"\|"key":"[^"]*"\|"namespace":"[^"]*"' upload.json
+```
+
+<!-- test: output -->
+```text
+"class":"https://data.example.org/src/stations/Stations"
+"key":"code"
+"namespace":"https://data.example.org/src/stations/"
+```
+
+`?namespace=` on the upload, or `POST /rail/import/$id/draft` with `{"namespace": …, "keys":
+{"stations": null}}`, drafts it in another namespace or without the key column.
+
+Our own query reads `location=stations.csv`, and the import runs it on the uploaded file of that
 name: `upload:stations.csv` is the same file, and any other location is refused. `POST
 /rail/import/$id/preview` answers the triples without writing them, and `DELETE
 /rail/import/$id` forgets the file before the hour is up. See

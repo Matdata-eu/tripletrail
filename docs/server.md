@@ -2519,8 +2519,10 @@ which hold the admin token or a "view as"). Opening such a link adds the query a
 then takes it out of the address bar.
 
 - **Datasets**: totals, every dataset and alias with its mode and readiness, and per dataset
-  its statistics, back up, snapshot, detach, upload (Graph Store Protocol, with progress) and,
-  for an alias, swap and roll back. New datasets are created, attached or restored from a
+  its statistics, back up, snapshot, detach, **Add data** and, for an alias, swap and roll
+  back. **Add data** takes any files (#275): RDF loads through the Graph Store Protocol, with
+  progress (an `.xml` file is RDF when it holds `rdf:RDF`); each other file, or one set to
+  *Lift with Facade-X*, opens on the **Import** page with its lift drafted, one after the other. New datasets are created, attached or restored from a
   backup in one dialog.
 - **Query**: [MatGUI](https://github.com/Matdata-eu/Matgui) on the chosen dataset, with its
   table, map, chart and graph views, and **Explain**, which shows TripleTrail's plan with row counts,
@@ -2572,9 +2574,17 @@ then takes it out of the address bar.
   with live checks; the kept versions with rollback. See
   [The shapes editor](#the-shapes-editor).
 - **Import** (`/$/ui/import/{ds}`): drop a file (CSV, JSON, XML, YAML, a spreadsheet, HTML,
-  Markdown, an archive...), see it as Facade-X triples, edit the drafted `CONSTRUCT`, preview
-  the triples it makes and add them to a named graph. *Download query* saves the query as a
-  lift query that reads the file by its name. See [Importing files](#importing-files).
+  Markdown, an archive...), see it as Facade-X triples and the kinds of records in it, change
+  the source namespace and the column each kind's IRIs come from (*Draft again*), edit the
+  drafted `CONSTRUCT`, preview the triples it makes and add them to a named graph. *Save as lift
+  query* writes the query into a Workbench workspace (a new one, or one of the caller's) as
+  `lift/{file}.rq` reading `lift/{file}`, the file beside it, and a `lift` step into the graph
+  (with `clear: true`) at the end of its `pipeline.yaml`, so the pipeline lifts a new version of
+  the file the same way. *Download query* saves the query as a lift query that reads the file by
+  its name. A file larger than the import takes is drafted from its first MiB when it is made
+  of lines (CSV, TSV, JSON lines), to save or download the query and lift the whole file with
+  `tripletrail lift` or a pipeline; *Add to the graph* is then off. See
+  [Importing files](#importing-files).
 - **Workbench** (`/$/ui/workbench/{workspace}/{file}`): develop shapes, rules and queries in a
   [workspace](#workbench-workspaces), described below.
 - **Access** (`/$/ui/access`): API keys, groups, anonymous access and who may read and write
@@ -2730,20 +2740,46 @@ reading and writing every graph): callers whose policies give them only some gra
 under row rules, are answered 403, as a mapping's `WHERE` could read past them. A read-only
 dataset answers 405.
 
-- `POST /{ds}/import?name=NAME[&options=…]`: the file as the body. `NAME` (letters, digits,
-  `.`, `-`, `_`) chooses the format as a file name does; `options` are Facade-X options
-  (`csv.headers=true` by default for `.csv` and `.tsv`); options that name another source
-(`location`, `from-archive`, `content`, `table`, `sql`...) are refused. Answers 201 with `id`, `name`,
-  `bytes`, `options`, `location` (`upload:NAME`), `tree` (the first 300 triples, as N-Triples),
-  `triples` and `truncated`, and `query`: a `CONSTRUCT` that maps every key of the records (the
-  rows of a table, the objects of a JSON array), with IRIs under `https://example.org/import/`.
-  A file that cannot be read is answered 422.
+- `GET /{ds}/import`: `{"maxBytes", "kept"}`, the largest file it takes (`--max-body`, at most
+  256 MiB) and how many files it keeps.
+- `POST /{ds}/import?name=NAME[&options=…][&namespace=IRI]`: the file as the body. `NAME`
+  (letters, digits, `.`, `-`, `_`) chooses the format as a file name does; `options` are
+  Facade-X options (`csv.headers=true` by default for `.csv` and `.tsv`); options that name
+  another source (`location`, `from-archive`, `content`, `table`, `sql`...) are refused.
+  Answers 201 with `id`, `name`, `bytes`, `options`, `location` (`upload:NAME`), `tree` (the
+  first 300 triples, as N-Triples), `triples`, `truncated`, `namespace`, `kinds`, `schema` and
+  `query`, the drafted lift (below). A file that cannot be read is answered 422.
+- `POST /{ds}/import/{id}/draft`: `{"namespace": IRI, "keys": {KIND: COLUMN or null}}` as the
+  body; the lift drafted again (`{"namespace", "kinds", "query"}`), in another namespace or
+  with other key columns (`null`: none). A kind left out of `keys` gets the one found.
 - `POST /{ds}/import/{id}/preview`: a `CONSTRUCT` as the body; answers its triples (Turtle by
   default, any format `/{ds}/query` gives by `Accept`) and writes nothing.
 - `POST /{ds}/import/{id}/run?graph=IRI`: adds the triples of the `CONSTRUCT` (without `FROM`)
   to the graph, in one update, and answers `{"after", "before", "graph"}`: the graph's size
   before and after.
 - `DELETE /{ds}/import/{id}`: forgets the file (204).
+
+The drafted lift (#275) is the file in its own vocabulary, mechanically: nothing is
+interpreted, and nothing is dropped but empty values (interpreting it is the uplift's work).
+From the first 2,000 triples of the file's Facade-X graph it finds the kinds of records: the
+rows of a table (named after the file), the XML elements of one name, the objects under one
+JSON or YAML key, and the document itself when it has keys. Each kind becomes a class, each
+column, key or attribute a property, and records in records links under the key or element
+name that holds them. All are named in `namespace` (`https://data.example.org/src/{file}/`
+when none is given; one that ends in neither `/` nor `#` gets a `/`), the odd name
+percent-encoded. Values the file gives only as text (CSV cells, XML attributes) are typed by
+what they all look like: `xsd:integer` (not with a leading zero), `xsd:decimal`,
+`xsd:double`, `xsd:boolean`, `xsd:date` or `xsd:dateTime`; JSON keeps its own types. A
+record's IRI is `{namespace}{kind}/{key}` from its key column (`fx:entity`): one on every
+record sampled, with a value of its own each, and named as an id is (`id`, `code`, `key`,
+`…id`, `…code`), unless `keys` says otherwise; without one, a row's number, the namespace's
+`{file}` for the document, or the record's blank node. Every record gets
+`prov:wasDerivedFrom <{namespace}{NAME}>`. `kinds` lists them, each with `name`, `class`,
+`records` (`rows`, `elements`, `objects` or `document`), `sampled`, `columns` (those that can
+name a record) and `key`. `schema` is the schema the file names, for generating an ontology and
+shapes from it: `{"kind": "xsd", "location"}` for `xsi:schemaLocation` or
+`xsi:noNamespaceSchemaLocation`, `{"kind": "json-schema", "location"}` for `"$schema"`,
+`{"kind": "openapi"}` for an OpenAPI or Swagger document, else `null`.
 
 The queries may read only the upload: `location=upload:NAME`, or `location=NAME` of its own
 name (so a lift query that names the file runs as it is), and `from-archive` of it. Other

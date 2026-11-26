@@ -15,7 +15,12 @@ window.TripleTrailImport = (function () {
   const TOKEN_KEY = "tripletrail-admin-token";
   let ui = null;
   let ds = null;
-  let upload = null; // the server's answer to the upload: { id, name, bytes, options, tree, triples, truncated, query }
+  let upload = null; // the server's answer to the upload: { id, name, bytes, options, tree, triples, truncated, namespace, kinds, schema, query }, with the file
+  let queue = []; // files "Add data" handed over, still to lift
+  let queueFor = null; // the dataset they go into
+  const maxBytes = {}; // per dataset, the largest file the import takes
+  /** The most of a file too large to import that a draft is made from: its first lines. */
+  const SAMPLE = 1 << 20;
   const page = () => document.getElementById("page-import");
   const el = (...a) => ui.el(...a);
   const $ = (id) => document.getElementById(id);
@@ -47,6 +52,7 @@ window.TripleTrailImport = (function () {
     let want = args[0] ? decodeURIComponent(args[0]) : null;
     if (!want || !datasets.includes(want)) want = ds && datasets.includes(ds) ? ds : datasets[0];
     if (!want) { root.replaceChildren(el("p", { class: "muted loading" }, "No dataset to import into yet.")); return; }
+    if (queue.length && queueFor && datasets.includes(queueFor)) want = queueFor;
     if (want !== ds) forget();
     ds = want;
     if (decodeURIComponent(location.pathname.split("/")[4] || "") !== ds) {
@@ -70,7 +76,21 @@ window.TripleTrailImport = (function () {
         el("span", { class: "muted small" }, "Turn a file into RDF with a query, and add it to a graph.")),
       drop,
       el("div", { id: "imp-work" }));
-    if (upload) show();
+    if (queue.length && queueFor === ds) read(queue.shift());
+    else if (upload) show();
+  }
+
+  /** Files "Add data" hands over: the page lifts them one after the other. */
+  function take(name, files) {
+    queueFor = name;
+    queue = [...files];
+  }
+
+  async function limit() {
+    if (maxBytes[ds] == null) {
+      try { maxBytes[ds] = JSON.parse(await send("GET", base())).maxBytes; } catch { maxBytes[ds] = Infinity; }
+    }
+    return maxBytes[ds];
   }
 
   async function read(f) {
@@ -79,34 +99,99 @@ window.TripleTrailImport = (function () {
     work.replaceChildren(el("p", { class: "muted loading" }, "Reading " + f.name + "…"));
     // The server takes names of letters, digits, '.', '-' and '_'.
     const name = f.name.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "") || "upload";
+    const max = await limit();
+    let body = f, sample = false;
+    if (f.size > max) {
+      // Too large to keep in memory: a file of lines is drafted from its first ones, to save
+      // or download the query and lift the whole file with tripletrail lift or a pipeline.
+      if (!/\.(csv|tsv|txt|jsonl|ndjson)$/i.test(f.name)) {
+        work.replaceChildren(el("div", { class: "card imp-card" },
+          el("p", { class: "error" }, `${f.name} is ${ui.fmtBytes(f.size)}, more than the ${ui.fmtBytes(max)} the import keeps in memory.`),
+          el("p", {}, "Lift it with ", el("code", {}, "tripletrail lift"), " or a ", el("code", {}, "lift"),
+            " step of a Workbench pipeline instead (see the guide, chapter 7), or start the server with a larger ",
+            el("code", {}, "--max-body"), "."),
+          next()));
+        return;
+      }
+      const head = await f.slice(0, Math.min(SAMPLE, max)).text();
+      body = new Blob([head.slice(0, head.lastIndexOf("\n") + 1)]);
+      sample = true;
+    }
     try {
-      upload = JSON.parse(await send("POST", base() + "?name=" + encodeURIComponent(name), f));
+      upload = JSON.parse(await send("POST", base() + "?name=" + encodeURIComponent(name), body));
     } catch (e) {
-      work.replaceChildren(el("p", { class: "error" }, e.message));
+      work.replaceChildren(el("p", { class: "error" }, e.message), next());
       return;
     }
+    upload.file = f;
+    upload.sample = sample;
     show();
+  }
+
+  /** "Next file: NAME" while handed-over files wait, else nothing. */
+  function next() {
+    if (!queue.length) return null;
+    return el("p", {}, el("button", { class: "btn", type: "button", id: "imp-next", onclick: () => read(queue.shift()) },
+      "Next file: " + queue[0].name), queue.length > 1 ? el("span", { class: "muted small" }, ` and ${queue.length - 1} more`) : null);
+  }
+
+  /** The kinds of records the draft found, each with the column its IRIs come from. */
+  function kinds() {
+    const u = upload;
+    return el("div", { class: "imp-kinds", id: "imp-kinds" }, (u.kinds || []).map((k) =>
+      el("label", { title: k.class },
+        el("span", {}, el("strong", {}, k.class.slice(u.namespace.length) || k.name), el("span", { class: "muted small" }, ` ${ui.fmtNum(k.sampled)} ${k.records}`)),
+        el("select", { "data-kind": k.name, "aria-label": "IRIs of " + k.name },
+          el("option", { value: "", selected: !k.key }, k.records === "rows" ? "IRIs from the row number" : k.records === "document" ? "One IRI" : "Blank nodes"),
+          k.columns.map((c) => el("option", { value: c, selected: c === k.key }, "IRIs from " + c))))));
+  }
+
+  /** The draft again, with the namespace and key columns on the page. */
+  async function redraft() {
+    const keys = {};
+    for (const s of document.querySelectorAll("#imp-kinds select")) keys[s.dataset.kind] = s.value || null;
+    status("Drafting…");
+    try {
+      const d = JSON.parse(await send("POST", base() + "/" + upload.id + "/draft",
+        new Blob([JSON.stringify({ namespace: $("imp-ns").value.trim(), keys })], { type: "application/json" })));
+      Object.assign(upload, d);
+      $("imp-query").value = d.query;
+      $("imp-ns").value = d.namespace;
+      $("imp-kinds").replaceWith(kinds());
+      status("");
+    } catch (e) { status(""); fail(e); }
   }
 
   function show() {
     const u = upload;
     const graph = "urn:import:" + u.name.replace(/\.[^.]*$/, "");
+    const schemaNames = { xsd: "an XML Schema", "json-schema": "a JSON Schema", openapi: "an OpenAPI document" };
     $("imp-work").replaceChildren(
       el("div", { class: "card imp-card" },
         el("div", { class: "toolbar" }, el("h2", {}, u.name),
           el("span", { class: "muted small" }, ui.fmtBytes(u.bytes) + " · " + ui.fmtNum(u.triples) + (u.truncated ? "+" : "") + " triples as Facade-X" + (u.options ? " · " + u.options : "")),
           el("span", { class: "grow" }),
           el("button", { class: "btn small", type: "button", onclick: () => { forget(); $("imp-work").replaceChildren(); } }, "Forget the file")),
+        u.sample ? el("p", { class: "error", id: "imp-sample" }, `${u.file.name} is ${ui.fmtBytes(u.file.size)}, more than the import keeps in memory: the query is drafted from its first ${ui.fmtBytes(u.bytes)}. Save it as a lift query or download it, and lift the whole file with tripletrail lift or a pipeline.`) : null,
+        u.schema ? el("p", { class: "muted small", id: "imp-schema" }, `The file names ${schemaNames[u.schema.kind] || "a schema"}` + (u.schema.location ? ": " + u.schema.location : "") + ". Generating an ontology and shapes from it is a step of its own (schema to RDF).") : null,
         el("details", { open: true }, el("summary", {}, "The file as triples" + (u.truncated ? " (the first ones)" : "")),
           el("pre", { class: "imp-tree", id: "imp-tree" }, u.tree))),
       el("div", { class: "card imp-card" },
+        el("div", { class: "toolbar" }, el("h2", {}, "In its own vocabulary"), el("span", { class: "grow" }),
+          el("span", { class: "muted small" }, "A class per kind of record and a property per key, under the source's namespace.")),
+        el("div", { class: "sb-actions" },
+          el("label", {}, "Namespace ", el("input", { id: "imp-ns", type: "text", size: 50, value: u.namespace, "aria-label": "Source namespace" })),
+          el("button", { class: "btn", type: "button", id: "imp-redraft", onclick: redraft }, "Draft again")),
+        kinds()),
+      el("div", { class: "card imp-card" },
         el("div", { class: "toolbar" }, el("h2", {}, "The query"), el("span", { class: "grow" }),
-          el("span", { class: "muted small" }, "A draft that maps every key; change the IRIs, classes and datatypes.")),
+          el("span", { class: "muted small" }, "The draft lifts every key as the file has it; the uplift interprets it later.")),
         el("textarea", { class: "imp-query", id: "imp-query", rows: 18, spellcheck: "false", "aria-label": "The CONSTRUCT query" }, u.query),
         el("div", { class: "sb-actions" },
           el("button", { class: "btn", type: "button", onclick: preview }, "Preview"),
           el("label", {}, "Into graph ", el("input", { id: "imp-graph", type: "text", size: 40, value: graph, "aria-label": "Graph IRI" })),
-          el("button", { class: "btn primary", type: "button", onclick: run }, "Add to the graph"),
+          el("button", { class: "btn primary", type: "button", id: "imp-run", onclick: run, disabled: u.sample, title: u.sample ? "Only a part of the file is here" : null }, "Add to the graph"),
+          el("button", { class: "btn", type: "button", id: "imp-save", onclick: saveLift, title: "Write the query, and the file, into a Workbench workspace with a lift step in its pipeline" }, "Save as lift query"),
           el("button", { class: "btn", type: "button", onclick: download, title: "Save the query to run with tripletrail lift, reading the file by its name" }, "Download query"),
           el("span", { class: "muted small", id: "imp-status", role: "status" })),
         el("details", { class: "imp-ai", id: "imp-ai" }, el("summary", {}, "Draft with AI"),
@@ -145,7 +230,8 @@ window.TripleTrailImport = (function () {
       const out = $("imp-out");
       out.replaceChildren(el("h2", {}, "Added to " + r.graph),
         el("p", {}, "The graph had " + ui.fmtNum(r.before) + " triples and now has " + ui.fmtNum(r.after) + ". ",
-          el("a", { href: UI + "query/" + encodeURIComponent(ds) + "?query=" + encodeURIComponent("SELECT * WHERE { GRAPH <" + r.graph + "> { ?s ?p ?o } } LIMIT 100") }, "Look at it")));
+          el("a", { href: UI + "query/" + encodeURIComponent(ds) + "?query=" + encodeURIComponent("SELECT * WHERE { GRAPH <" + r.graph + "> { ?s ?p ?o } } LIMIT 100") }, "Look at it")),
+        next());
       out.hidden = false;
       ui.toast("Added to " + r.graph);
     } catch (e) { status(""); fail(e); }
@@ -237,10 +323,86 @@ window.TripleTrailImport = (function () {
     $("imp-ai-back").hidden = true;
   }
 
+  /** The query as a lift query: it reads the file at `path` (its name) instead of the upload. */
+  function liftQuery(path) {
+    return query().split("location=upload:" + upload.name).join("location=" + path)
+      .split("from-archive=upload:" + upload.name).join("from-archive=" + path);
+  }
+
+  // "Save as lift query" (#275): the query goes into a Workbench workspace as lift/NAME.rq,
+  // reading lift/FILE, the file beside it (when the workspace takes it: data/ is for RDF), and
+  // a lift step into its pipeline.yaml, so a new version of the file is lifted the same way.
+  const WS = "/$/workspaces";
+  async function wsSend(method, path, body, type) {
+    const headers = { "X-TripleTrail-Client": "ui" };
+    const token = ui.store.get(TOKEN_KEY);
+    if (token) headers.Authorization = "Bearer " + token;
+    if (type) headers["Content-Type"] = type;
+    const r = await fetch(path, { method, headers, body });
+    const text = await r.text();
+    if (!r.ok && !(method === "GET" && r.status === 404)) throw new ui.ApiError(r.status, text.trim() || r.statusText);
+    return r.ok ? text : null;
+  }
+
+  /** `pipeline.yaml` with `step` (YAML lines) added at the end of its steps. */
+  function withStep(yaml, step) {
+    if (!yaml || !/^steps:/m.test(yaml)) return (yaml ? yaml.replace(/\n*$/, "\n") : "") + "steps:\n" + step;
+    const lines = yaml.replace(/\n*$/, "").split("\n");
+    const at = lines.findIndex((l) => /^steps:/.test(l));
+    let end = lines.length;
+    for (let i = at + 1; i < lines.length; i++) if (/^\S/.test(lines[i]) && !lines[i].startsWith("#")) { end = i; break; }
+    lines.splice(end, 0, ...step.replace(/\n$/, "").split("\n"));
+    return lines.join("\n") + "\n";
+  }
+
+  async function saveLift() {
+    const out = $("imp-out");
+    let list = [];
+    try { list = JSON.parse(await wsSend("GET", WS) || "{}").workspaces || []; }
+    catch (e) { fail(e); return; }
+    const stem = upload.name.replace(/\.[^.]*$/, "");
+    const pick = el("select", { id: "imp-ws", "aria-label": "Workspace" },
+      el("option", { value: "" }, "A new workspace: lift " + upload.name),
+      list.map((w) => el("option", { value: w.id }, w.name || w.id)));
+    out.replaceChildren(el("h2", {}, "Save as lift query"),
+      el("p", { class: "muted small" }, `Writes lift/${stem}.rq, reading lift/${upload.name}` + (upload.sample ? "" : ", the file beside it") + `, and a lift step into graph ${$("imp-graph").value.trim()} in the workspace's pipeline.yaml.`),
+      el("div", { class: "sb-actions" }, el("label", {}, "Workspace ", pick),
+        el("button", { class: "btn primary", type: "button", id: "imp-ws-save", onclick: () => saveInto(pick.value, stem) }, "Save")),
+      el("p", { class: "small", id: "imp-ws-msg", role: "status" }));
+    out.hidden = false;
+  }
+
+  async function saveInto(id, stem) {
+    const msg = $("imp-ws-msg");
+    const graph = $("imp-graph").value.trim();
+    msg.className = "small";
+    msg.textContent = "Saving…";
+    try {
+      if (!id) {
+        const made = JSON.parse(await wsSend("POST", WS, JSON.stringify({ name: "lift " + upload.name, lifetime: "saved" }), "application/json"));
+        id = made.id;
+      }
+      const files = WS + "/" + encodeURIComponent(id) + "/files/";
+      await wsSend("PUT", files + "lift/" + encodeURIComponent(stem) + ".rq", liftQuery("lift/" + upload.name), "application/sparql-query");
+      let copied = false;
+      if (!upload.sample) {
+        try { await wsSend("PUT", files + "lift/" + encodeURIComponent(upload.name), upload.file, "application/octet-stream"); copied = true; }
+        catch (e) { if (e.status !== 413 && e.status !== 507) throw e; }
+      }
+      const yaml = await wsSend("GET", files + "pipeline.yaml");
+      const step = `  - name: lift ${upload.name}\n    lift: lift/${stem}.rq\n` + (/^[a-z][a-z0-9+.-]*:\S+$/i.test(graph) ? `    graph: ${graph}\n    clear: true\n` : "");
+      if (!(yaml || "").includes(`lift: lift/${stem}.rq`)) await wsSend("PUT", files + "pipeline.yaml", withStep(yaml, step), "application/yaml");
+      msg.replaceChildren("Saved. ", copied ? "" : `Put ${upload.name} into the workspace's lift/ folder, where the query reads it. `,
+        el("a", { href: UI + "workbench/" + encodeURIComponent(id), "data-route": "" }, "Open the workspace"));
+    } catch (e) {
+      msg.className = "error small";
+      msg.textContent = e.status === 404 ? "Workspaces are turned off on this server (--no-workspaces)." : e.message;
+    }
+  }
+
   /** The query as a lift query: it reads the file by its name instead of the upload. */
   function download() {
-    const text = query().split("location=upload:" + upload.name).join("location=" + upload.name)
-      .split("from-archive=upload:" + upload.name).join("from-archive=" + upload.name);
+    const text = liftQuery(upload.name);
     const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "application/sparql-query" })), download: upload.name.replace(/\.[^.]*$/, "") + ".rq" });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -256,5 +418,5 @@ window.TripleTrailImport = (function () {
     send("DELETE", path).catch(() => { /* gone already */ });
   }
 
-  return { render };
+  return { render, take };
 })();

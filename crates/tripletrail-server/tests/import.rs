@@ -61,16 +61,28 @@ fn a_file_is_read_mapped_and_added_to_a_graph() {
         tree.contains("<http://sparql.xyz/facade-x/data/name> \"Gent - Brugge\""),
         "{tree}"
     );
-    // The drafted query maps every column, the odd one under a name of its own.
+    // The drafted query lifts the file in its own vocabulary: a class for its rows, a
+    // property per column (the odd one percent-encoded), IRIs from the id column.
+    assert_eq!(
+        upload["namespace"],
+        "https://data.example.org/src/sections/"
+    );
+    assert_eq!(
+        upload["kinds"][0]["class"],
+        "https://data.example.org/src/sections/Sections"
+    );
+    assert_eq!(upload["kinds"][0]["key"], "id");
     let query = upload["query"].as_str().unwrap();
     assert!(
         query.contains("SERVICE <x-sparql-anything:location=upload:sections.csv,csv.headers=true>"),
         "{query}"
     );
     for key in [
-        "ex:id ?id",
-        "ex:name ?name",
-        "ex:speed__km_h_ ?speed__km_h_",
+        "?sections a src:Sections",
+        "src:id ?sections_id",
+        "src:name ?sections_name",
+        "<https://data.example.org/src/sections/speed%20%28km%2Fh%29> ?sections_speed__km_h_",
+        "prov:wasDerivedFrom <https://data.example.org/src/sections/sections.csv>",
     ] {
         assert!(query.contains(key), "{key} in {query}");
     }
@@ -85,7 +97,7 @@ fn a_file_is_read_mapped_and_added_to_a_graph() {
     assert_eq!(preview.0, 200, "{}\n{query}", preview.1);
     assert!(
         preview.1.contains(
-            "<https://example.org/import/record/2> <https://example.org/import/name> \"Brugge - Oostende\""
+            "<https://data.example.org/src/sections/sections/S02> <https://data.example.org/src/sections/name> \"Brugge - Oostende\""
         ),
         "{}",
         preview.1
@@ -105,14 +117,14 @@ fn a_file_is_read_mapped_and_added_to_a_graph() {
     let ran: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(
         (ran["before"].as_u64(), ran["after"].as_u64()),
-        (Some(0), Some(8))
+        (Some(0), Some(10))
     );
     assert_eq!(
         ask(
             &base,
-            "SELECT ?s ?v { GRAPH <urn:x:sections> { ?s <https://example.org/import/speed__km_h_> ?v } } ORDER BY ?s"
+            "SELECT ?s (DATATYPE(?v) AS ?t) ?v { GRAPH <urn:x:sections> { ?s <https://data.example.org/src/sections/speed%20%28km%2Fh%29> ?v } } ORDER BY ?s"
         ),
-        "s,v\r\nhttps://example.org/import/record/1,160\r\nhttps://example.org/import/record/2,120\r\n"
+        "s,t,v\r\nhttps://data.example.org/src/sections/sections/S01,http://www.w3.org/2001/XMLSchema#integer,160\r\nhttps://data.example.org/src/sections/sections/S02,http://www.w3.org/2001/XMLSchema#integer,120\r\n"
     );
 
     // Not a CONSTRUCT, or one with FROM: refused. Forgotten: gone.
@@ -300,4 +312,152 @@ fn options_and_queries_read_only_the_upload() {
             "{location}: {code} {body}"
         );
     }
+}
+
+/// Runs `query` on the upload `id` into `graph` and answers the graph's triples, sorted, as
+/// N-Triples lines.
+fn lifted(base: &str, id: &str, query: &str, graph: &str) -> Vec<String> {
+    let (code, body) = post(
+        base,
+        &format!("/kg/import/{id}/run?graph={graph}"),
+        query.as_bytes(),
+    );
+    assert_eq!(code, 200, "{body}\n{query}");
+    let nt = ureq::get(&format!("{base}/kg/data"))
+        .query("graph", graph)
+        .set("Accept", "application/n-triples")
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    let mut lines: Vec<String> = nt.lines().map(str::to_owned).collect();
+    lines.sort();
+    lines
+}
+
+#[test]
+fn nested_json_and_xml_get_a_class_per_kind_of_record_and_links_between_them() {
+    let base = start();
+    let json = br#"{"network": "rail", "stations": [
+        {"id": "BE1", "name": "Brussels", "tracks": [{"no": 1, "length": 420.5}, {"no": 2}]},
+        {"id": "BE2", "name": "Leuven", "open": true, "tracks": []}]}"#;
+    let (code, body) = post(
+        &base,
+        "/kg/import?name=network.json&namespace=https://data.example.org/rail/",
+        json,
+    );
+    assert_eq!(code, 201, "{body}");
+    let upload: Value = serde_json::from_str(&body).unwrap();
+    let kinds: Vec<(&str, &str, Option<&str>)> = upload["kinds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| {
+            (
+                k["name"].as_str().unwrap(),
+                k["records"].as_str().unwrap(),
+                k["key"].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("network", "document", None),
+            ("stations", "objects", Some("id")),
+            ("tracks", "objects", None),
+        ]
+    );
+    let id = upload["id"].as_str().unwrap();
+    let triples = lifted(&base, id, upload["query"].as_str().unwrap(), "urn:x:json");
+    let r = "https://data.example.org/rail/";
+    for t in [
+        format!("<{r}network> <{r}network> \"rail\" ."),
+        format!("<{r}network> <{r}stations> <{r}stations/BE1> ."),
+        format!(
+            "<{r}stations/BE1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{r}Stations> ."
+        ),
+        format!("<{r}stations/BE1> <http://www.w3.org/ns/prov#wasDerivedFrom> <{r}network.json> ."),
+        format!(
+            "<{r}stations/BE2> <{r}open> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> ."
+        ),
+    ] {
+        assert!(triples.contains(&t), "{t} in {triples:#?}");
+    }
+    // Tracks have no id: blank nodes, linked from their station, typed as the file types them.
+    let tracks: Vec<&String> = triples
+        .iter()
+        .filter(|t| t.starts_with(&format!("<{r}stations/BE1> <{r}tracks> _:")))
+        .collect();
+    assert_eq!(tracks.len(), 2, "{triples:#?}");
+    assert!(
+        triples.iter().any(|t| t.ends_with(&format!(
+            "<{r}length> \"420.5\"^^<http://www.w3.org/2001/XMLSchema#decimal> ."
+        ))),
+        "{triples:#?}"
+    );
+
+    // Drafted again without the key column: the stations are blank nodes too.
+    let (code, body) = post(
+        &base,
+        &format!("/kg/import/{id}/draft"),
+        br#"{"namespace": "https://data.example.org/rail/", "keys": {"stations": null}}"#,
+    );
+    assert_eq!(code, 200, "{body}");
+    let again: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(again["kinds"][1]["key"], Value::Null);
+    assert!(
+        !again["query"].as_str().unwrap().contains("\"stations/\""),
+        "{}",
+        again["query"]
+    );
+
+    // XML: a class per element name, the document's root element at the namespace's
+    // document IRI, text as rdf:value, attributes typed from what they look like.
+    let xml = br#"<?xml version="1.0"?>
+<lines xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="lines.xsd">
+  <line id="L36" opened="1866-10-01"><station code="BE1">Brussels</station><station code="BE2">Leuven</station></line>
+  <line id="L50" opened="1856-06-01"><station code="BE3">Aalst</station></line>
+</lines>"#;
+    let (code, body) = post(
+        &base,
+        "/kg/import?name=lines.xml&namespace=https://data.example.org/rail",
+        xml,
+    );
+    assert_eq!(code, 201, "{body}");
+    let upload: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(upload["schema"]["kind"], "xsd");
+    assert_eq!(upload["schema"]["location"], "lines.xsd");
+    assert_eq!(upload["namespace"], "https://data.example.org/rail/");
+    let id = upload["id"].as_str().unwrap();
+    let triples = lifted(&base, id, upload["query"].as_str().unwrap(), "urn:x:xml");
+    for t in [
+        format!("<{r}lines> <{r}line> <{r}line/L36> ."),
+        format!("<{r}line/L36> <{r}station> <{r}station/BE2> ."),
+        format!(
+            "<{r}line/L36> <{r}opened> \"1866-10-01\"^^<http://www.w3.org/2001/XMLSchema#date> ."
+        ),
+        format!("<{r}station/BE3> <http://www.w3.org/1999/02/22-rdf-syntax-ns#value> \"Aalst\" ."),
+        format!(
+            "<{r}station/BE3> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{r}Station> ."
+        ),
+    ] {
+        assert!(triples.contains(&t), "{t} in {triples:#?}");
+    }
+
+    // The largest file taken, for the page to say so before it sends one.
+    let limits: Value = serde_json::from_str(
+        &ureq::get(&format!("{base}/kg/import"))
+            .set("Authorization", "Bearer w")
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(limits["maxBytes"], 16 << 20);
+
+    // A namespace that is not an IRI is refused.
+    let (code, _) = post(&base, "/kg/import?name=a.csv&namespace=not%20an%20iri", CSV);
+    assert_eq!(code, 400);
 }

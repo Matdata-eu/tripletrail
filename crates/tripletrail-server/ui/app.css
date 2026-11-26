@@ -713,6 +713,11 @@ body[data-page=workbench] main { max-width: none; padding: 8px 12px; }
 .imp-drop { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; padding: 20px; margin-top: 12px; border: 2px dashed var(--border); cursor: pointer; }
 .imp-drop.over { border-color: var(--brand); background: var(--surface-2); }
 .imp-drop input[type=file] { margin-top: 8px; }
+.add-drop { margin: 0 0 8px; padding: 14px; }
+.add-files { list-style: none; margin: 0 0 8px; padding: 0; }
+.add-files li { display: flex; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.imp-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin: 8px 0; }
+.imp-kinds label { display: flex; flex-direction: column; gap: 2px; }
 .imp-card { padding: 16px; margin-top: 12px; }
 .imp-card h2 { font-size: 15px; margin: 0; }
 .imp-tree { max-height: 40vh; overflow: auto; font-family: var(--mono); font-size: 12px; white-space: pre; padding: 8px 12px; background: var(--surface-2); border-radius: 6px; margin: 8px 0 0; }

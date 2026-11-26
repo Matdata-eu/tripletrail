@@ -39,6 +39,7 @@ pub mod fuseki_config;
 mod geometry_ways;
 mod id_results;
 mod import;
+mod import_draft;
 #[doc(hidden)]
 pub mod jena_binary;
 #[doc(hidden)]
