@@ -36,6 +36,7 @@ pub mod config;
 pub mod database_sources;
 mod dcat;
 mod describe_view;
+pub mod examples;
 pub mod fuseki_config;
 mod geometry_ways;
 mod id_results;
@@ -224,6 +225,9 @@ pub struct Options {
     pub map_basemaps: Vec<Basemap>,
     /// The name, favicon, logo and colour of the pages (`--site-*`, #262).
     pub branding: branding::Branding,
+    /// The Query page's example queries and default query text (`--examples`,
+    /// `--default-query`, #262), at `/{ds}/examples`.
+    pub examples: examples::Examples,
     /// Write one JSON line per request to standard output.
     pub log_requests: bool,
     /// On SIGTERM or Ctrl-C, how long running requests may take before the server exits
@@ -363,6 +367,7 @@ impl Default for Options {
             map_attribution: None,
             map_basemaps: Vec::new(),
             branding: branding::Branding::default(),
+            examples: examples::Examples::default(),
             log_requests: false,
             shutdown_grace: Duration::from_secs(30),
             base_iris: Vec::new(),
@@ -2084,9 +2089,9 @@ fn route(
             return rdf4j::route(state, request, rest, &mut params, context);
         }
     }
-    const SERVICES: [&str; 12] = [
+    const SERVICES: [&str; 13] = [
         "sparql", "query", "update", "data", "get", "explain", "void", "describe", "graphql",
-        "shacl", "patch", "mcp",
+        "shacl", "patch", "mcp", "examples",
     ];
     let (entry, service) = {
         let registry = state.registry.read_unpoisoned();
@@ -2200,7 +2205,7 @@ fn route(
         || (service == "void" && matches!(method, Method::Get | Method::Head))
         || (matches!(
             service,
-            "get" | "describe" | "ogc" | "tiles" | "api" | "search"
+            "get" | "describe" | "ogc" | "tiles" | "api" | "search" | "examples"
         ) && reads)
         // REST writes go through the engine, which checks each graph written (#201).
         || service == "api";
@@ -2647,6 +2652,20 @@ fn route(
             );
         }
         "shacl" => return shacl_service(state, request, &params, &method, context, engine),
+        // The Query page's examples and default query text (#262): the operator's files, the
+        // same for every caller who may read the dataset.
+        "examples" => {
+            if !matches!(method, Method::Get | Method::Head) {
+                return Err(HttpError(405, format!("{method} is not allowed here")));
+            }
+            context.operation = Some(Operation::Read);
+            let answer = state.options.examples.answer(&[asked, entry.name.as_str()]);
+            return Ok(Reply::bytes(
+                200,
+                "application/json",
+                serde_json::to_vec(&answer).unwrap_or_default(),
+            ));
+        }
         "void" => {
             let entry = context.dataset.clone().expect("set above");
             return describe_datasets(

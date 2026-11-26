@@ -84,6 +84,10 @@ for Fuseki or oxigraph-server work unchanged:
   the indexes and are computed once per version of the data (a few ms at 1M triples); while
   writes not yet folded into the indexes are under 1 % of the store they are left out.
   MatGUI reads these for its dataset overview and its class and property autocompletion.
+- `/{ds}/examples`: the dataset's example queries and default query text as JSON,
+  `{"examples": [{"title", "query"}], "defaultQuery"}` (`defaultQuery` is null without
+  `--default-query`), for anyone who may read the dataset. The Query page reads it; see
+  [Branding](#branding).
 - `/.well-known/dcat`: a [DCAT-AP](https://semiceu.github.io/DCAT-AP/) catalog for data
   portals (data.europa.eu and others harvest DCAT). The catalog `<{origin}/#catalog>` lists
   each dataset as a `dcat:Dataset` (the node of its VoID description), with two
@@ -2749,6 +2753,8 @@ URLs, never HTML.
 | `--default-dataset NAME` | `TRIPLETRAIL_DEFAULT_DATASET` | The dataset the Query, Map, Search, Explore, Records and Import pages and the top search open on, in place of the first in the list, when the viewer may see it and has not picked another. |
 | `--ui-theme auto\|light\|dark` | `TRIPLETRAIL_UI_THEME` | The theme of a viewer's first visit; `auto` (the default) follows the system. The viewer's own choice is kept over it. |
 | `--map-view ZOOM/LAT/LON` | `TRIPLETRAIL_MAP_VIEW` | Where the Map page starts, as in a map link's `#zoom/lat/lon` (such as `7/50.8/4.4`), when the dataset's extent is unknown or spans half the world or more. A link with a place still opens there. |
+| `--examples [DATASET=]DIR` | `TRIPLETRAIL_EXAMPLES` (one per line) | Example queries for the Query page: the `.rq` files of a directory, by file name, each titled by its first line when that is a `#` comment (else its file name). The page lists them under **Examples…**, and a viewer's first visit opens up to five as tabs. `DATASET=DIR` gives one dataset's, listed before every dataset's. Repeatable; at most 200 files of 64 KB each per directory. |
+| `--default-query [DATASET=]FILE` | `TRIPLETRAIL_DEFAULT_QUERY` (one per line) | The text of a new tab in the Query page, such as the dataset's prefixes, in place of MatGUI's. `DATASET=FILE` gives one dataset's. At most 64 KB. |
 
 An image file is SVG, PNG, ICO, WebP or JPEG, at most 256 KB, read when the server starts, and
 served with its type, `X-Content-Type-Options: nosniff` and a sandboxing
@@ -3984,6 +3990,8 @@ option given several times, `true` for a flag. `datasets` lists the datasets, ea
 | `rdfs`, `owl-rl` | `true`, or the IRI of the graph to keep the entailment in (`--rdfs`, `--owl-rl`) |
 | `aliases` | a name or a list of names that answer for the dataset (`--alias`) |
 | `text-properties` | an IRI or a list of IRIs whose literals full-text search indexes too (`--text-properties name=IRI`, see [full-text search](full-text-search.md#what-is-indexed)) |
+| `examples` | a directory of the dataset's example queries (`--examples name=DIR`) |
+| `default-query` | a file with the text of a new query tab for the dataset (`--default-query name=FILE`) |
 
 ```yaml
 bind: 0.0.0.0:3030

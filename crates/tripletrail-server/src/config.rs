@@ -199,10 +199,11 @@ fn dataset(d: &Yaml) -> Result<Vec<(&'static str, String)>, String> {
         let ok = matches!(k, Yaml::String(k) if [
             "name", "path", "read-only", "read_only", "union-default-graph", "union_default_graph",
             "rdfs", "owl-rl", "owl_rl", "aliases", "alias", "text-properties", "text_properties",
+            "examples", "default-query", "default_query",
         ].contains(&k.as_str()));
         if !ok {
             return Err(format!(
-                "datasets: unknown key {k:?}; a dataset has name, path, read-only, union-default-graph, rdfs, owl-rl, aliases and text-properties"
+                "datasets: unknown key {k:?}; a dataset has name, path, read-only, union-default-graph, rdfs, owl-rl, aliases, text-properties, examples and default-query"
             ));
         }
     }
@@ -246,6 +247,13 @@ fn dataset(d: &Yaml) -> Result<Vec<(&'static str, String)>, String> {
                     "datasets: {name}: {regime} is true or the IRI of the graph to keep it in"
                 ));
             }
+        }
+    }
+    for key in ["examples", "default-query"] {
+        match get(key) {
+            None | Some(Yaml::Null) => {}
+            Some(Yaml::String(path)) => out.push((key, format!("{name}={path}"))),
+            Some(_) => return Err(format!("datasets: {name}: {key} is a path")),
         }
     }
     match get("text-properties") {
@@ -305,6 +313,8 @@ mod tests {
             o("rdfs", true, None),
             o("owl-rl", true, None),
             o("config", true, None),
+            o("examples", true, None),
+            o("default-query", true, None),
         ]
     }
 
@@ -357,6 +367,31 @@ mod tests {
         )
         .unwrap();
         assert!(!out.iter().any(|a| a == "kg"));
+    }
+
+    #[test]
+    fn a_datasets_examples_and_default_query_name_it() {
+        let text = "examples: /ex\ndatasets:\n  - name: rail\n    examples: /ex/rail\n    default-query: /ex/rail.rq\n";
+        let out = expand(&args(&["tripletrail", "serve"]), text, &opts()).unwrap();
+        let got: Vec<String> = out
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "tripletrail",
+                "serve",
+                "--examples",
+                "/ex",
+                "--dataset",
+                "rail",
+                "--examples",
+                "rail=/ex/rail",
+                "--default-query",
+                "rail=/ex/rail.rq",
+            ]
+        );
     }
 
     #[test]

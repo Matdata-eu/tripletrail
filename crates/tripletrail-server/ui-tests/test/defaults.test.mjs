@@ -1,11 +1,12 @@
-// What a new viewer starts on (#262): `--ui-home`, `--default-dataset`, `--ui-theme` and
-// `--map-view` in the web UI. `TRIPLETRAIL_BIN` names the `tripletrail` binary (`target/debug/tripletrail` of the
+// What a new viewer starts on (#262): `--ui-home`, `--default-dataset`, `--ui-theme`,
+// `--map-view`, `--examples` and `--default-query` in the web UI. `TRIPLETRAIL_BIN` names the `tripletrail` binary (`target/debug/tripletrail` of the
 // workspace by default).
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -22,11 +23,18 @@ const network = join(workspace, "docs", "guide", "data", "network.ttl");
 let server;
 let browser;
 let base;
+let dir;
 
 before(async () => {
   assert.ok(existsSync(bin), `no tripletrail binary at ${bin}: cargo build -p tripletrail-server`);
+  dir = mkdtempSync(join(tmpdir(), "tripletrail-ui-defaults-"));
+  mkdirSync(join(dir, "examples"));
+  writeFileSync(join(dir, "examples", "1-count.rq"), "# Count the triples\nSELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }\n");
+  writeFileSync(join(dir, "examples", "2-classes.rq"), "# The classes\nSELECT DISTINCT ?c WHERE { ?s a ?c }\n");
+  writeFileSync(join(dir, "default.rq"), "PREFIX ex: <http://example.com/>\nSELECT * WHERE { ?s ?p ?o } LIMIT 5\n");
   server = spawn(bin, ["serve", "--bind", "127.0.0.1:0", "--load", network,
-    "--ui-home", "map", "--default-dataset", "rail", "--ui-theme", "dark", "--map-view", "7/50.8/4.4"],
+    "--ui-home", "map", "--default-dataset", "rail", "--ui-theme", "dark", "--map-view", "7/50.8/4.4",
+    "--examples", join(dir, "examples"), "--default-query", "rail=" + join(dir, "default.rq")],
   { stdio: ["ignore", "pipe", "pipe"] });
   base = await new Promise((resolve, reject) => {
     let seen = "";
@@ -53,6 +61,7 @@ before(async () => {
 after(async () => {
   await browser?.close();
   server?.kill();
+  if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
 test("a new viewer lands on the map of the default dataset, dark, at the start view", async () => {
@@ -78,5 +87,34 @@ test("a new viewer lands on the map of the default dataset, dark, at the start v
   assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
   await page.reload();
   assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
+  await context.close();
+});
+
+test("the Query page offers the examples, and a first visit opens them as tabs", async () => {
+  const context = await browser.newContext();
+  await context.addInitScript(() => localStorage.setItem("tripletrail-tour", "9999"));
+  await context.route((url) => !url.href.startsWith(base), (route) => route.abort());
+  const page = await context.newPage();
+  await page.goto(base + "/$/ui/query/rail");
+  const examples = page.locator("#query-examples");
+  await examples.waitFor();
+  assert.deepEqual(await examples.locator("option").allTextContents(), ["Examples…", "Count the triples", "The classes"]);
+  const tabs = page.locator("#yasgui .tabsList .tab");
+  await page.waitForFunction(() => document.querySelectorAll("#yasgui .tabsList .tab").length === 3);
+  assert.deepEqual((await tabs.allTextContents()).map((t) => t.trim()).slice(1), ["Count the triples", "The classes"]);
+  // The first tab, selected, holds the dataset's default query text.
+  await page.waitForFunction(() => document.querySelector("#yasgui .CodeMirror").CodeMirror.getValue().startsWith("PREFIX ex:"));
+  // Picking an example opens it in a new tab.
+  await examples.selectOption({ label: "The classes" });
+  await page.waitForFunction(() => document.querySelectorAll("#yasgui .tabsList .tab").length === 4);
+  // A reload keeps the viewer's tabs: no examples opened again.
+  await page.reload();
+  await page.locator("#query-examples").waitFor();
+  await page.waitForTimeout(500);
+  assert.equal(await tabs.count(), 4);
+  // Another dataset has the examples too, but not rail's default query text.
+  const other = await (await fetch(base + "/ds/examples")).json();
+  assert.equal(other.examples.length, 2);
+  assert.equal(other.defaultQuery, null);
   await context.close();
 });
