@@ -395,6 +395,7 @@ fn expression_(e: Expression) -> Expression {
             if let Function::Custom(name) = &f
                 && let Some(e) = builtin(name.as_str(), &mut args)
                     .or_else(|| crate::ttfn::rewrite(name.as_str(), &mut args))
+                    .or_else(|| crate::temporal::rewrite(name.as_str(), &mut args))
             {
                 return e;
             }

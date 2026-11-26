@@ -288,6 +288,12 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   vectors of one length `tt:nearest` compares one by one, exactly. Past it, it builds a graph
   of them (HNSW) in the background, on half the cores, and searches that: fast, but
   approximate. `0` keeps every search exact. See [vector search](vector-search.md#exact-then-approximate).
+- `--time-offset [NAME=]OFFSET` (`TRIPLETRAIL_TIME_OFFSET`, comma-separated; repeatable) is
+  the offset, `Z` or `±hh:mm` up to 14:00, at which the temporal functions (`tt:period` and the
+  rest, see [D.4](function-matrix.md#d4-temporal-300)) read a date or date-time without a
+  timezone, in place of UTC: `--time-offset rinf=+01:00` reads RINF's local days as Brussels
+  winter days. A bare offset is every dataset's; a dataset's own wins. A value with its own
+  timezone, and a call that gives one (`tt:period(?d, "+02:00")`), keep theirs.
 - The spatial index is built in the background at start, and again after a write that drops
   it, rather than on the first spatial query. `/$/ready` answers 200 once every dataset is open
   and its index built (503 before), and `/$/status` gives the state per dataset.
@@ -2845,7 +2851,9 @@ REST API and GraphQL pages add its origin to their `img-src`.
 empty). The banner is `{"text", "level", "link"}`, each link `{"label", "url"}`, and the
 defaults `{"dataset", "home", "theme", "mapView", "mapViews"}` (`home` is `datasets` and
 `theme` `auto` when unset; `mapViews` holds the per-dataset start views by name). It and `/$/ui/brand/…` need no credentials, also
-with [authentication](#authentication) on: they hold no data. The About dialog keeps naming
+with [authentication](#authentication) on: they hold no data, but they do name the default
+dataset and the datasets that have their own map view, so a caller without access to those
+datasets can read their names. The About dialog keeps naming
 TripleTrail, its version and the licences of what it ships, whatever the name.
 
 ## Linked Data
@@ -4086,6 +4094,7 @@ option given several times, `true` for a flag. `datasets` lists the datasets, ea
 | `examples` | a directory of the dataset's example queries (`--examples name=DIR`) |
 | `default-query` | a file with the text of a new query tab for the dataset (`--default-query name=FILE`) |
 | `map-view` | the Map page's start view for the dataset, in quotes (`"7/50.8/4.4"`, `--map-view name=ZOOM/LAT/LON`) |
+| `time-offset` | the offset, in quotes (`"+01:00"`), at which the temporal functions read dates without a timezone (`--time-offset name=OFFSET`) |
 
 ```yaml
 bind: 0.0.0.0:3030
