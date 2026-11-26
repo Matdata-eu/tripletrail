@@ -90,6 +90,24 @@ per shape (`shape`, `shape_iri`, `property`, `focus_nodes`, `value_nodes`,
 `distinct_focus_nodes`, `failing_focus_nodes`); the server's JSON answer has `shapeIri`,
 `distinctFocusNodes` and `failingFocusNodes`.
 
+### Finding keys
+
+To compare two runs, or the same data under two sets of shapes, each result has a finding key
+(`ValidationResult::key` in Rust): a 128-bit FNV-1a hash of its focus node, path, value, source
+shape (by its `ttsh:shapeIri`), constraint component and severity, written out (terms in
+N-Triples, the path in SPARQL syntax, each followed by the byte `0xff`). FNV-1a is fixed by its
+definition, so a key stored today matches the same result in a later run of a later build.
+That holds for focus nodes and values that are IRIs or literals. A blank node is hashed by its
+label: in the same store it keeps its label and its key, but data loaded again (or into another
+store) gives its blank nodes new labels, so results on them get new keys.
+Messages and `sh:detail`s are not part of it. The same result found twice (two parents of one
+focus node) has one key. A comparison holds about 40 bytes per distinct result, and at most
+`FINDING_KEYS_HELD` (4 million, about 160 MB) of them; past that it gives counts by shape only.
+Proposal validation (`validation` on a shapes pull request, see [the server](server.md)) tells
+new results from old ones by this key. Each result in Python's `report.results` and in the
+server's JSON results has it as `key` (32 hexadecimal digits), next to `shape_iri`
+(`shapeIri`).
+
 ## SHACL-AF rules
 
 SHACL-AF rules (`sh:SPARQLRule` with `$this` pre-bound, `sh:TripleRule` with node

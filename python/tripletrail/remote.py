@@ -197,7 +197,7 @@ class RemoteValidationReport:
     """A validation report answered by a server, with the attributes of `ValidationReport`:
     `conforms`, `results` (one dict per result: `focus_node`, `result_path` as a SPARQL path or
     None, `value`, `source_shape`, `source_constraint_component`, `severity`, `message`,
-    `messages`), `shape_counts`, `coverage` (workspaces), `triples()` and `serialize()` (the
+    `messages`, `shape_iri`, `key`), `shape_counts`, `coverage` (workspaces), `triples()` and `serialize()` (the
     W3C report, fetched when first asked for)."""
 
     def __init__(self, answer, fetch_report):
@@ -218,6 +218,8 @@ class RemoteValidationReport:
                     "severity": _term(r.get("severity")),
                     "message": messages[0] if messages else None,
                     "messages": messages,
+                    "shape_iri": r.get("shapeIri"),
+                    "key": r.get("key"),
                 }
             )
         self.shape_counts = [

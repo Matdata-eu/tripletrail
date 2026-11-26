@@ -53,7 +53,9 @@ mod value;
 pub use graph::{DataGraph, Edited, StoreGraph, Triple3, Union};
 pub use inferred::Inferred;
 pub use path::Path;
-pub use report::{FailingFocusNodes, ReportWriter, ShapeCount, ValidationResult};
+pub use report::{
+    FINDING_KEYS_HELD, FailingFocusNodes, ReportWriter, ShapeCount, ValidationResult,
+};
 pub use rules::{
     Inference, Origin, PLAN_EDGES, Plan, PlanEdge, PlanGroup, PlanRule, PlanSink, RuleRun,
 };
