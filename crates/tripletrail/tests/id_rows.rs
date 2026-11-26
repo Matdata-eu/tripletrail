@@ -3594,6 +3594,45 @@ fn sums_of_conditions_on_ids_are_the_evaluators() {
 }
 
 #[test]
+fn sums_of_one_large_group_on_several_cores_are_the_evaluators() {
+    // 40,000 values, integers, decimals and doubles mixed: one group, summed in parts (#10).
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..40_000 {
+        let v = match i % 4 {
+            0 => format!("{}", i - 20_000),
+            1 => format!("{}.{:02}", i, i % 100),
+            2 => format!(
+                "\"2001-{:02}-{:02}\"^^<http://www.w3.org/2001/XMLSchema#date>",
+                i % 12 + 1,
+                i % 28 + 1
+            ),
+            _ => format!("{}.5e-1", i),
+        };
+        data.push_str(&format!("ex:s{i} ex:v {v} .\n"));
+    }
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for q in [
+        "SELECT (SUM(?v) AS ?s) (AVG(?v) AS ?a) WHERE { ?o ex:v ?v FILTER(!isLiteral(?v) || DATATYPE(?v) != <http://www.w3.org/2001/XMLSchema#date>) }",
+        "SELECT (SUM(DAY(?v)) AS ?s) (AVG(MONTH(?v)) AS ?a) WHERE { ?o ex:v ?v FILTER(DATATYPE(?v) = <http://www.w3.org/2001/XMLSchema#date>) }",
+        "SELECT (SUM(FLOOR(?v)) AS ?s) WHERE { ?o ex:v ?v FILTER(DATATYPE(?v) != <http://www.w3.org/2001/XMLSchema#date>) }",
+        "SELECT (SUM(?v) AS ?s) WHERE { ?o ex:v ?v }",
+    ] {
+        let ids = format!("#pragma tt.executor ids\n{prefix} {q}");
+        let expected = rows(
+            &engine,
+            &format!("#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n{prefix} {q}"),
+        );
+        // A sum over dates is an error: the evaluator's.
+        let on_ids = !q.ends_with("{ ?o ex:v ?v }");
+        let plan = engine.explain(&ids).unwrap();
+        assert_eq!(plan.contains(r#""executor":"ids""#), on_ids, "{q}: {plan}");
+        assert_eq!(rows(&engine, &ids), expected, "{q}");
+    }
+}
+
+#[test]
 fn large_answers_under_union_bind_and_filter_stream_from_the_evaluator() {
     // 40 subjects of one class: the join gives 1,600 rows of 2 variables, past an answer of
     // 2,000 cells (8 million on a server) that the ids hold before writing (#234).
