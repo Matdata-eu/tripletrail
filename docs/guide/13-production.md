@@ -769,12 +769,13 @@ The Datasets page, where the web UI opens, is an admin's page. A server for end 
 somewhere else: `--ui-home` picks the page (`query`, `map`, `search` or `explore`),
 `--default-dataset` the dataset the pages open on in place of the first in the list,
 `--ui-theme dark` (or `light`) the theme of a first visit, and `--map-view ZOOM/LAT/LON` where
-the Map page starts when the data's extent is unknown or spans half the world:
+the Map page starts when the data's extent is unknown or spans half the world
+(`--map-view DATASET=ZOOM/LAT/LON` for one dataset, over the one for all):
 
 <!-- test: serve -->
 ```sh
 tripletrail serve --location data --dataset rail_v1 --ui-home map --default-dataset rail_v1 \
-  --ui-theme dark --map-view 7/50.8/4.4
+  --ui-theme dark --map-view 5/50.8/4.4 --map-view rail_v1=7/50.8/4.4
 ```
 
 <!-- test: run -->
@@ -784,7 +785,7 @@ curl -s 'http://localhost:7878/$/ui/config.json' | jq -c '.site.defaults'
 
 <!-- test: output -->
 ```text
-{"dataset":"rail_v1","home":"map","mapView":"7/50.8/4.4","theme":"dark"}
+{"dataset":"rail_v1","home":"map","mapView":"5/50.8/4.4","mapViews":{"rail_v1":"7/50.8/4.4"},"theme":"dark"}
 ```
 
 A viewer's own choices still win: the dataset they picked, the theme they set and the place a
@@ -818,7 +819,33 @@ curl -s 'http://localhost:7878/rail_v1/examples' | jq -c '{titles: [.examples[].
 {"titles":["Stations by name"],"defaultQuery":"PREFIX ex: <http://example.org/rail#>\n\nSELECT * WHERE { ?s ?p ?o } LIMIT 10\n"}
 ```
 
-In the `--config` file, a dataset takes them as `examples:` and `default-query:`.
+In the `--config` file, a dataset takes them as `examples:` and `default-query:`, and its
+start view as `map-view:`.
+
+For what the options do not cover, `--ui-css FILE` adds your own stylesheet after the web
+UI's; its class names may change between versions, so check it after an upgrade.
+`--hide-version` leaves the version out of the `Server` header, for security scans that flag
+it:
+
+<!-- test: run -->
+```sh
+printf '.topbar { border-bottom: 3px solid #00634f; }\n' > custom.css
+```
+
+<!-- test: serve -->
+```sh
+tripletrail serve --location data --dataset rail_v1 --ui-css custom.css --hide-version
+```
+
+<!-- test: run -->
+```sh
+curl -sI 'http://localhost:7878/$/ui/brand/custom.css' | grep -i '^server:' | tr -d '\r'
+```
+
+<!-- test: output -->
+```text
+Server: TripleTrail
+```
 
 Every option also works as an environment variable (`TRIPLETRAIL_SITE_NAME`, ...) and as a key
 of the `--config` file. See [the web UI](../server.md#web-ui).
@@ -835,7 +862,8 @@ of the `--config` file. See [the web UI](../server.md#web-ui).
 - `--site-name`, `--site-logo`, `--site-favicon` and `--site-color` give the pages your
   service's name and look; `--banner`, `--site-link`, `--support-url` and `--contact-email`
   its notices and links; `--ui-home`, `--default-dataset`, `--ui-theme` and `--map-view` where
-  a new viewer starts, and `--examples` and `--default-query` the queries they start with.
+  a new viewer starts, and `--examples` and `--default-query` the queries they start with;
+  `--ui-css` adds your own stylesheet.
 - The enterprise edition is a separate build that reads an offline licence and never stops
   the server when it expires; its audit log records who changed what, in a chain that shows
   tampering.

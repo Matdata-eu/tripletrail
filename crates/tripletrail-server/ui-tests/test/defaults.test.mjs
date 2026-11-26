@@ -33,7 +33,7 @@ before(async () => {
   writeFileSync(join(dir, "examples", "2-classes.rq"), "# The classes\nSELECT DISTINCT ?c WHERE { ?s a ?c }\n");
   writeFileSync(join(dir, "default.rq"), "PREFIX ex: <http://example.com/>\nSELECT * WHERE { ?s ?p ?o } LIMIT 5\n");
   server = spawn(bin, ["serve", "--bind", "127.0.0.1:0", "--load", network,
-    "--ui-home", "map", "--default-dataset", "rail", "--ui-theme", "dark", "--map-view", "7/50.8/4.4",
+    "--ui-home", "map", "--default-dataset", "rail", "--ui-theme", "dark", "--map-view", "3/40/0", "--map-view", "rail=7/50.8/4.4",
     "--examples", join(dir, "examples"), "--default-query", "rail=" + join(dir, "default.rq")],
   { stdio: ["ignore", "pipe", "pipe"] });
   base = await new Promise((resolve, reject) => {
@@ -73,7 +73,8 @@ test("a new viewer lands on the map of the default dataset, dark, at the start v
   await page.goto(base + "/");
   await page.waitForURL(/\/\$\/ui\/map/);
   assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
-  // The map of rail (empty, so no extent): the start view in the map's link.
+  // The map of rail (empty, so no extent): rail's own start view, over every dataset's, in the
+  // map's link.
   await page.waitForFunction(() => /^#7\/50\.8\/4\.4/.test(location.hash), null, { timeout: 15000 });
   assert.equal(await page.locator("#map-ds").inputValue(), "rail");
   // The brand link goes home.

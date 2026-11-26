@@ -1244,9 +1244,23 @@ struct ServeArgs {
     #[arg(long, env = "TRIPLETRAIL_UI_THEME", value_name = "auto|light|dark")]
     ui_theme: Option<String>,
     /// The Map page's start view when the data's extent is unknown, as ZOOM/LAT/LON, e.g.
-    /// 5/50.8/4.4.
-    #[arg(long, env = "TRIPLETRAIL_MAP_VIEW", value_name = "ZOOM/LAT/LON")]
-    map_view: Option<String>,
+    /// 5/50.8/4.4. `DATASET=ZOOM/LAT/LON` gives one dataset's. Repeatable; in the environment,
+    /// one per line.
+    #[arg(
+        long = "map-view",
+        env = "TRIPLETRAIL_MAP_VIEW",
+        value_delimiter = '\n',
+        value_name = "[DATASET=]ZOOM/LAT/LON"
+    )]
+    map_view: Vec<String>,
+    /// A stylesheet the web UI loads after its own, for what the other options do not cover:
+    /// a CSS file of at most 256 KB. Its class names may change between versions.
+    #[arg(long, env = "TRIPLETRAIL_UI_CSS", value_name = "FILE")]
+    ui_css: Option<String>,
+    /// Leave the version out of the `Server` header (`TripleTrail` instead of
+    /// `TripleTrail/0.2.0`), for security scans that flag it.
+    #[arg(long, env = "TRIPLETRAIL_HIDE_VERSION")]
+    hide_version: bool,
     /// A directory of example queries for the web UI's Query page: `.rq` files, each titled by
     /// its first line when that is a `#` comment. `DATASET=DIR` gives one dataset's, listed
     /// before every dataset's. Repeatable; in the environment, one per line.
@@ -2291,6 +2305,8 @@ fn serve(args: ServeArgs) -> Result<()> {
         ui_home,
         ui_theme,
         map_view,
+        ui_css,
+        hide_version,
         examples,
         default_query,
         log_requests,
@@ -2632,8 +2648,10 @@ fn serve(args: ServeArgs) -> Result<()> {
                 default_dataset.as_deref(),
                 ui_home.as_deref(),
                 ui_theme.as_deref(),
-                map_view.as_deref(),
-            )?,
+                &map_view.iter().map(String::as_str).collect::<Vec<_>>(),
+            )?
+            .with_css(ui_css.as_deref())?,
+            hide_version,
             examples: tripletrail_server::examples::Examples::read(&examples, &default_query)?,
             log_requests,
             shutdown_grace: Duration::try_from_secs_f64(shutdown_grace)
