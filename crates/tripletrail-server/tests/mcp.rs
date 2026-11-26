@@ -355,22 +355,34 @@ fn tool_queries_land_in_the_slow_query_log() {
         json!({ "query": query }),
     );
     assert!(!error, "{text}");
+    // Both logs are written after the answer is sent: read them until their lines are in,
+    // rather than stopping the server at once and losing them.
+    let read = |pipe: Box<dyn Read + Send>| {
+        let text = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let into = std::sync::Arc::clone(&text);
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(pipe).lines().map_while(Result::ok) {
+                let mut t = into.lock().unwrap();
+                t.push_str(&line);
+                t.push('\n');
+            }
+        });
+        text
+    };
+    let err = read(Box::new(child.stderr.take().unwrap()));
+    let out = read(Box::new(child.stdout.take().unwrap()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !(err.lock().unwrap().contains("\"slow_query\"")
+        && out.lock().unwrap().contains("/kg/mcp"))
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     let _ = child.kill();
     let _ = child.wait();
-    let mut stderr = String::new();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut stderr)
-        .unwrap();
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut stdout)
-        .unwrap();
+    let stderr = err.lock().unwrap().clone();
+    let stdout = out.lock().unwrap().clone();
     let slow: Value = stderr
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
