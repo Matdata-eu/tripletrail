@@ -36,6 +36,26 @@ pub(crate) fn answer(query: &Query, eval: &Eval) -> Option<IdSolutions> {
 /// evaluator.
 const ANSWER_CELLS: usize = 1 << 23;
 
+std::thread_local! {
+    /// [`ANSWER_CELLS`] on this thread, lowered by [`with_answer_cells`].
+    static CELLS: std::cell::Cell<usize> = const { std::cell::Cell::new(ANSWER_CELLS) };
+}
+
+/// [`ANSWER_CELLS`] on this thread.
+fn answer_cells() -> usize {
+    CELLS.with(std::cell::Cell::get)
+}
+
+/// Runs `f` with `cells` in place of [`ANSWER_CELLS`] on this thread: for tests of what a
+/// large answer does, without one.
+#[doc(hidden)]
+pub fn with_answer_cells<R>(cells: usize, f: impl FnOnce() -> R) -> R {
+    let before = CELLS.with(|c| c.replace(cells));
+    let out = f();
+    CELLS.with(|c| c.set(before));
+    out
+}
+
 /// A sub-select with `DISTINCT`, `REDUCED`, an `ORDER BY` or a slice inside (#11), as a table
 /// of its variables, its rows in order. `None` when the ids don't answer it.
 pub(crate) fn sub_select(pattern: &GraphPattern, eval: &Eval) -> Option<Table> {
@@ -138,32 +158,19 @@ fn select(pattern: &GraphPattern, eval: &Eval, top: bool) -> Option<Selected> {
         return None;
     }
     // A large answer with no order is the evaluator's: it streams its rows, while the answer
-    // here is held whole until it is written, by every query that runs at once (#11). A
-    // pattern of triples alone that may give that many rows is counted first (the join's rows
-    // are not made for that), so such an answer is not built at all.
+    // here is held whole until it is written, by every query that runs at once (#11). The
+    // patterns of triples that give its rows (under a `UNION`, `BIND` or `FILTER`, #234) are
+    // counted first when they may give that many (the join's rows are not made for that), so
+    // such an answer is not built at all.
     let streams = top && order.is_none();
     let width = variables.len().max(1);
     if streams
-        && let G::Bgp { patterns } = &*body
-        && let Some(compiled) = eval.snapshot.compile_bgp(patterns, &[])
-        && !compiled.empty
-        // Counted only when the planner's estimate is large, so that the usual answer is not
-        // joined twice.
-        && eval.snapshot.estimate_rows(&compiled.triples, eval.graph) * width as f64
-            > (ANSWER_CELLS / 4) as f64
-        && let Some(n) = eval.snapshot.count_ids(
-            &compiled.triples,
-            compiled.columns.len(),
-            eval.graph,
-            tripletrail_store::BgpCount::Rows,
-            eval.cancelled,
-        )
-        && usize::try_from(n).map_or(true, |n| n.saturating_mul(width) > ANSWER_CELLS)
+        && answer_rows(&body, eval, width).saturating_mul(width as u64) > answer_cells() as u64
     {
         return None;
     }
     let t = eval.eval(&body)?;
-    if streams && t.len().saturating_mul(width) > ANSWER_CELLS {
+    if streams && t.len().saturating_mul(width) > answer_cells() {
         return None;
     }
     let rows: Vec<usize> = match order {
@@ -706,5 +713,54 @@ impl Iterator for Construct {
                 self.buffered.push(Triple::new(subject, predicate, o));
             }
         }
+    }
+}
+
+/// At most how many rows `p` gives, counted for the patterns of triples whose rows make its
+/// rows (one by one, or under a `UNION`, `BIND` or `FILTER`, as the ids rewrite it) when the planner's estimate of
+/// them, times `width`, passes a quarter of [`ANSWER_CELLS`]; 0 for anything else, which
+/// the ids answer (#234).
+fn answer_rows(p: &GraphPattern, eval: &Eval, width: usize) -> u64 {
+    match p {
+        GraphPattern::Bgp { patterns } => {
+            let Some(compiled) = eval.snapshot.compile_bgp(patterns, &[]) else {
+                return 0;
+            };
+            // Counted only when the estimate is large, so that the usual answer is not
+            // joined twice.
+            if compiled.empty
+                || eval.snapshot.estimate_rows(&compiled.triples, eval.graph) * width as f64
+                    <= (answer_cells() / 4) as f64
+            {
+                return 0;
+            }
+            eval.snapshot
+                .count_ids(
+                    &compiled.triples,
+                    compiled.columns.len(),
+                    eval.graph,
+                    tripletrail_store::BgpCount::Rows,
+                    eval.cancelled,
+                )
+                .unwrap_or(u64::MAX)
+        }
+        GraphPattern::Union { left, right } => {
+            answer_rows(left, eval, width).saturating_add(answer_rows(right, eval, width))
+        }
+        GraphPattern::Extend { inner, .. } => answer_rows(inner, eval, width),
+        // The filter as the ids rewrite it: an equality of two variables joins fewer rows
+        // (`FILTER(?s = ?x)`), which are counted instead.
+        GraphPattern::Filter { expr, inner } => {
+            if let Some(p) = crate::idtree::pushed_filter(expr, inner) {
+                return answer_rows(&p, eval, width);
+            }
+            if let GraphPattern::Bgp { patterns } = &**inner
+                && let Some((_, _, patterns)) = crate::idtree::equal_vars(expr, patterns)
+            {
+                return answer_rows(&GraphPattern::Bgp { patterns }, eval, width);
+            }
+            answer_rows(inner, eval, width)
+        }
+        _ => 0,
     }
 }

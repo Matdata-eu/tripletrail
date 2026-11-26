@@ -3592,3 +3592,52 @@ fn sums_of_conditions_on_ids_are_the_evaluators() {
         assert_eq!(rows(&engine, &ids), expected, "{q}");
     }
 }
+
+#[test]
+fn large_answers_under_union_bind_and_filter_stream_from_the_evaluator() {
+    // 40 subjects of one class: the join gives 1,600 rows of 2 variables, past an answer of
+    // 2,000 cells (8 million on a server) that the ids hold before writing (#234).
+    let engine = Engine::new_tripletrail();
+    let mut data = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..40 {
+        data.push_str(&format!("ex:s{i} ex:in ex:c .\n"));
+    }
+    data.push_str("ex:t ex:small ex:d .\n");
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for (body, n, streams) in [
+        ("{ ?s ex:in ?c . ?x ex:in ?c }", 1_600, true),
+        (
+            "{ { ?s ex:in ?c . ?x ex:in ?c } UNION { ?s ex:small ?x } }",
+            1_601,
+            true,
+        ),
+        ("{ ?s ex:in ?c . ?x ex:in ?c BIND(1 AS ?k) }", 1_600, true),
+        (
+            "{ ?s ex:in ?c . ?x ex:in ?c FILTER(?s != ex:s0) }",
+            1_560,
+            true,
+        ),
+        // An equality of two variables: the ids join 40 rows, and answer.
+        ("{ ?s ex:in ?c . ?x ex:in ?c FILTER(?s = ?x) }", 40, false),
+        ("{ ?s ex:in ?c . ?x ex:small ?c BIND(1 AS ?k) }", 0, false),
+        (
+            "{ ?s ex:small ?c . ?x ex:small ?c BIND(1 AS ?k) }",
+            1,
+            false,
+        ),
+    ] {
+        let q = format!("#pragma tt.executor ids\n{prefix} SELECT ?s ?x {body}");
+        let (plan, got) = tripletrail::with_answer_cells(2_000, || {
+            (engine.explain(&q).unwrap(), rows(&engine, &q))
+        });
+        let executor = if streams { "spareval" } else { "ids" };
+        assert!(
+            plan.contains(&format!(r#""executor":"{executor}""#)),
+            "{body}: {plan}"
+        );
+        assert_eq!(got.len(), n, "{body}");
+        let expected = rows(&engine, &q.replace("executor ids", "executor spareval"));
+        assert_eq!(got, expected, "{body}");
+    }
+}
