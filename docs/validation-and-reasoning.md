@@ -112,8 +112,10 @@ and `ttsh:sample` linking to its first three results in the report:
 The cell properties are TripleTrail's own (`ttsh:severity`, not `sh:resultSeverity`), so a
 query that counts `sh:resultSeverity` still counts results only. Each result costs a hash of
 its cell and one of its focus node; each distinct focus node takes 8 bytes for the run and 8
-for each cell it is in. On the SHACL benchmark's Norway data with the ERA shapes, `--stats`
-with the summary takes OVERHEAD longer than `--stats` without it.
+for each cell it is in. With the ERA shapes on the SHACL benchmark's data, `--stats` with the
+summary took 1.4% longer than without it on Germany (894,300 results: 308 against 304 s, the
+mean of two runs each) and the same within noise on Norway (31,783 results, 16.6 against
+16.5 s).
 
 In Python, `report.summary` (with `statistics=True`) is a dict with `results`,
 `failing_focus_nodes`, `by_severity` (severity IRI to results) and `cells` (each with
