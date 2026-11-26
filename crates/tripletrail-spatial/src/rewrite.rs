@@ -183,6 +183,14 @@ pub trait SpatialContext: Sync {
         let _ = (pattern, all_graphs);
         None
     }
+    /// About how many rows the join of `triples` gives, following each join through the
+    /// matches per value of the triple it reaches (`?v ex:country ?c . ?o ex:vendor ?v` has a
+    /// row per offer, not per vendor). Must be cheap. `None` (the default): the cost model
+    /// takes the smallest triple's matches.
+    fn estimate_join(&self, triples: &[TriplePattern], all_graphs: bool) -> Option<f64> {
+        let _ = (triples, all_graphs);
+        None
+    }
     /// Whether the cost model may answer a join of two large sides with the sweep-line join
     /// (the default) rather than by probing the index once per geometry of one side.
     fn sweep_join(&self) -> bool {
@@ -1505,6 +1513,26 @@ impl<'a> Rewriter<'a> {
         self.estimator.rows(p, all_graphs)
     }
 
+    /// The rows of the operands binding a variable: for triples alone, as the store follows
+    /// the joins through their fanouts, where it can (#209); otherwise [`Self::rows`].
+    fn bound_rows(&mut self, p: &GraphPattern) -> Option<f64> {
+        let mut parts = Vec::new();
+        cost::join_parts(p, &mut parts);
+        let triples: Option<Vec<TriplePattern>> = parts
+            .into_iter()
+            .map(|part| match part {
+                GraphPattern::Bgp { mut patterns } if patterns.len() == 1 => patterns.pop(),
+                _ => None,
+            })
+            .collect();
+        if let Some(triples) = triples
+            && let Some(rows) = self.ctx.estimate_join(&triples, self.scoped > 0)
+        {
+            return Some(rows);
+        }
+        self.rows(p)
+    }
+
     /// Whether a constant test of `var` is worth a `VALUES` block: the index would return
     /// few candidates next to the rows the operands binding `var` produce (otherwise the
     /// block costs more than the FILTER it saves). Always, without estimates.
@@ -1515,7 +1543,7 @@ impl<'a> Rewriter<'a> {
         constant: &Term,
         inner: &GraphPattern,
     ) -> bool {
-        let Some(rows) = component(inner, var).0.and_then(|p| self.rows(&p)) else {
+        let Some(rows) = component(inner, var).0.and_then(|p| self.bound_rows(&p)) else {
             return true;
         };
         let Some(geom) = parse_wkt_literal(constant) else {
