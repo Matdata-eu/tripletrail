@@ -684,6 +684,10 @@
     for (const a of $$(".tabs a")) {
       if (a.dataset.page === page) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     }
+    // The tab title: the page, then the server's name (--site-name).
+    const tab = $$(".tabs a").find((a) => a.dataset.page === page);
+    const site = document.documentElement.dataset.siteName || "TripleTrail";
+    document.title = tab ? `${tab.textContent.trim()} · ${site}` : site;
     if (page === "datasets") { renderDatasets(); if (name) openDataset(name); }
     else if (page === "query") renderQuery(name);
     else if (page === "map") {

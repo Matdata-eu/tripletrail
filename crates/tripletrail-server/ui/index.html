@@ -1,12 +1,13 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-site-name="{{SITE_NAME}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TripleTrail</title>
-<link rel="icon" href="/$/ui/icon.svg" type="image/svg+xml">
+<title>{{SITE_NAME}}</title>
+<link rel="icon" href="{{FAVICON}}">
 <link rel="stylesheet" href="{{MATGUI}}yasgui.min.css">
 <link rel="stylesheet" href="/$/ui/app.css">
+{{BRAND_STYLE}}
 <script>
   // Apply the stored theme before anything paints (same key and values as MatGUI).
   (function () {
@@ -35,7 +36,7 @@
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" data-route href="/$/ui/datasets"><span class="logo" aria-hidden="true"></span><span><b>TripleTrail</b> server</span></a>
+  <a class="brand" data-route href="/$/ui/datasets">{{LOGO}}<span>{{TOPBAR_NAME}}</span></a>
   <nav class="tabs" aria-label="Pages">
     <a href="/$/ui/datasets" data-route data-page="datasets">Datasets</a>
     <a href="/$/ui/query" data-route data-page="query">Query</a>

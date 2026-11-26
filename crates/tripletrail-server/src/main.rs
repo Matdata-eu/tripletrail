@@ -1142,6 +1142,26 @@ struct ServeArgs {
         value_name = "TITLE|URL|ATTRIBUTION[|MAXZOOM]"
     )]
     map_basemaps: Vec<String>,
+    /// The name of this server on its pages (#262): the tab title and top bar of the web UI,
+    /// the REST API and GraphQL pages, the DCAT catalog's title (unless --catalog gives one)
+    /// and map exports. Plain text, at most 80 characters. Default: TripleTrail.
+    #[arg(long, env = "TRIPLETRAIL_SITE_NAME")]
+    site_name: Option<String>,
+    /// The favicon of the pages: an SVG, PNG, ICO, WebP or JPEG file of at most 256 KB, read at
+    /// start-up, or an http(s) URL. Served at /$/ui/brand/favicon without credentials.
+    #[arg(long, env = "TRIPLETRAIL_SITE_FAVICON", value_name = "FILE|URL")]
+    site_favicon: Option<String>,
+    /// The logo in the web UI's top bar, in place of TripleTrail's mark, shown 28 px high: a
+    /// file or URL as for --site-favicon. Served at /$/ui/brand/logo.
+    #[arg(long, env = "TRIPLETRAIL_SITE_LOGO", value_name = "FILE|URL")]
+    site_logo: Option<String>,
+    /// The logo for the dark theme, when --site-logo does not read on a dark background.
+    #[arg(long, env = "TRIPLETRAIL_SITE_LOGO_DARK", value_name = "FILE|URL")]
+    site_logo_dark: Option<String>,
+    /// The accent colour of the pages, as #rrggbb: buttons, links, tabs and MatGUI's. White
+    /// text must read on it (contrast at least 4.5:1); the dark theme uses lighter shades.
+    #[arg(long, env = "TRIPLETRAIL_SITE_COLOR", value_name = "#RRGGBB")]
+    site_color: Option<String>,
     /// Write one JSON line per request to standard output (time, method, path, dataset,
     /// status, ms, query_hash).
     #[arg(long, env = "TRIPLETRAIL_LOG_REQUESTS")]
@@ -2151,6 +2171,11 @@ fn serve(args: ServeArgs) -> Result<()> {
         map_tiles,
         map_attribution,
         map_basemaps,
+        site_name,
+        site_favicon,
+        site_logo,
+        site_logo_dark,
+        site_color,
         log_requests,
         shutdown_grace,
         base_iris,
@@ -2471,6 +2496,13 @@ fn serve(args: ServeArgs) -> Result<()> {
             map_tiles: Some(map_tiles)
                 .filter(|t| !t.trim().is_empty() && !t.trim().eq_ignore_ascii_case("none")),
             map_basemaps: read_basemaps(&map_basemaps)?,
+            branding: tripletrail_server::branding::Branding::new(
+                site_name.as_deref(),
+                site_favicon.as_deref(),
+                site_logo.as_deref(),
+                site_logo_dark.as_deref(),
+                site_color.as_deref(),
+            )?,
             log_requests,
             shutdown_grace: Duration::try_from_secs_f64(shutdown_grace)
                 .map_err(|_| "--shutdown-grace takes a positive number of seconds")?,

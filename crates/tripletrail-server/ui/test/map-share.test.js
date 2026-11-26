@@ -45,3 +45,8 @@ test("a citation names the data, the link and each layer's query", () => {
     "SELECT ?f WHERE { ?f a <https://example.org/Station> }",
   ].join("\n"));
 });
+
+test("a citation names the server by --site-name when it has one", () => {
+  const text = m.citation({ title: "rail", dataset: "rail", site: "Rail KG", link: "https://example.org/", when: "2026-11-26", layers: [] });
+  assert.ok(text.startsWith('rail. Map of the dataset "rail" in Rail KG. Retrieved 2026-11-26.'), text);
+});

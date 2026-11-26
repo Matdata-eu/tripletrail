@@ -4,6 +4,7 @@
 //! MatGUI is embedded (gzipped) so the UI works without network access; `--matgui-url`
 //! loads it from a CDN instead and leaves the embedded copy unused.
 
+use crate::branding::{Branding, Image};
 use crate::{HttpError, Reply, State, request_header};
 use std::io::Read;
 use tiny_http::Request;
@@ -190,18 +191,56 @@ const WORKBENCH_VENDOR: &[(&str, &str, &[u8], bool)] = &[
 /// Where the page loads MatGUI from when no `--matgui-url` is given.
 const EMBEDDED_BASE: &str = "/$/ui/vendor/matgui/";
 
+fn page(content_type: &str, body: &str) -> Reply {
+    let mut reply = Reply::bytes(200, content_type, body.as_bytes().to_vec());
+    reply.headers.push(("Cache-Control", "no-cache".to_owned()));
+    reply
+}
+
 pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<Reply, HttpError> {
+    let brand = &state.options.branding;
+    // The brand's images and settings are public, for the other HTML pages too (#262).
+    match path {
+        ["config.json"] => {
+            let mut reply = crate::json_reply(200, &brand.config_json());
+            reply.headers.push(("Cache-Control", "no-cache".to_owned()));
+            return Ok(reply);
+        }
+        ["brand", which] => {
+            return match brand.image(which) {
+                Some(Image::File {
+                    content_type,
+                    bytes,
+                }) => {
+                    let mut reply = Reply::bytes(200, content_type, bytes.clone());
+                    reply.headers.push(("Cache-Control", "no-cache".to_owned()));
+                    reply
+                        .headers
+                        .push(("X-Content-Type-Options", "nosniff".to_owned()));
+                    // An SVG opened on its own runs no script.
+                    reply.headers.push((
+                        "Content-Security-Policy",
+                        "default-src 'none'; style-src 'unsafe-inline'; sandbox".to_owned(),
+                    ));
+                    Ok(reply)
+                }
+                Some(Image::Url(url)) => {
+                    let mut reply = Reply::empty(302);
+                    reply.headers.push(("Location", url.clone()));
+                    Ok(reply)
+                }
+                None if *which == "favicon" => Ok(page("image/svg+xml", ICON)),
+                None => Err(HttpError(404, format!("No brand image {which}"))),
+            };
+        }
+        _ => {}
+    }
     if !state.options.ui {
         return Err(HttpError(
             404,
             "The web UI is turned off (--no-ui)".to_owned(),
         ));
     }
-    let page = |content_type: &str, body: &str| {
-        let mut reply = Reply::bytes(200, content_type, body.as_bytes().to_vec());
-        reply.headers.push(("Cache-Control", "no-cache".to_owned()));
-        reply
-    };
     // Relative links need the trailing slash.
     if request
         .url()
@@ -233,9 +272,19 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
                     }
                 })
                 .unwrap_or_else(|| EMBEDDED_BASE.to_owned());
+            let topbar = match &brand.name {
+                Some(name) => format!("<b>{}</b>", html_attribute(name)),
+                None => "<b>TripleTrail</b> server".to_owned(),
+            };
+            // The operator's text goes in last, so that it is never read as a placeholder.
             let html = INDEX
                 .replace("{{MATGUI}}", &html_attribute(&base))
-                .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"));
+                .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
+                .replace("{{FAVICON}}", brand.favicon_href())
+                .replace("{{BRAND_STYLE}}", &brand.style())
+                .replace("{{LOGO}}", &brand.logo_html())
+                .replace("{{TOPBAR_NAME}}", &topbar)
+                .replace("{{SITE_NAME}}", &html_attribute(brand.name()));
             let mut reply = page("text/html; charset=utf-8", &html);
             reply.headers.push((
                 "Content-Security-Policy",
@@ -252,7 +301,7 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
         ["api", ds] => {
             // The page names the dataset only; its definition is read under the caller's
             // access, so the page tells nothing about a dataset the caller may not read.
-            let html = API_DOCS.replace("{{DATASET}}", &html_attribute(ds));
+            let html = branded(API_DOCS, brand).replace("{{DATASET}}", &html_attribute(ds));
             let mut reply = page("text/html; charset=utf-8", &html);
             reply.headers.push((
                 "Content-Security-Policy",
@@ -267,7 +316,7 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
         }
         // The GraphQL playground (#144) over `/{ds}/graphql`.
         ["graphql", ds] => {
-            let html = GRAPHQL.replace("{{DATASET}}", &html_attribute(ds));
+            let html = branded(GRAPHQL, brand).replace("{{DATASET}}", &html_attribute(ds));
             let mut reply = page("text/html; charset=utf-8", &html);
             reply.headers.push((
                 "Content-Security-Policy",
@@ -342,6 +391,14 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
         }
         _ => Err(HttpError(404, "No such page".to_owned())),
     }
+}
+
+/// The REST API and GraphQL pages with the server's name, favicon and colour.
+fn branded(template: &str, brand: &Branding) -> String {
+    template
+        .replace("{{FAVICON}}", brand.favicon_href())
+        .replace("{{BRAND_STYLE}}", &brand.page_style())
+        .replace("{{SITE_NAME}}", &html_attribute(brand.name()))
 }
 
 fn html_attribute(s: &str) -> String {
