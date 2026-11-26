@@ -4221,7 +4221,16 @@ impl Engine {
                     self.spatial.views.lock_unpoisoned().clear();
                 }
                 "vectorIndexes" => {
-                    for (_, _, slot) in self.vectors.lock_unpoisoned().iter() {
+                    // The slots are taken out of the list first: a slot's lock is held while
+                    // its index is built, and waiting for it under the list's lock would hold
+                    // up every vector query until that build ends.
+                    let slots: Vec<_> = self
+                        .vectors
+                        .lock_unpoisoned()
+                        .iter()
+                        .map(|(_, _, slot)| Arc::clone(slot))
+                        .collect();
+                    for slot in slots {
                         *slot.lock_unpoisoned() = None;
                     }
                 }
