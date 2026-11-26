@@ -3379,7 +3379,6 @@ fn run() -> Result<()> {
             }
         }
         #[cfg(feature = "postgres")]
-        #[cfg(feature = "postgres")]
         Command::Schema {
             command:
                 SchemaCommand::Database {
@@ -3421,12 +3420,8 @@ fn run() -> Result<()> {
                 let path = dir.join(file);
                 if path.is_file() {
                     // Said against what is there: triples added and removed.
-                    let fresh = dir.join(format!(".new.{file}"));
-                    std::fs::write(&fresh, text)?;
-                    let before =
-                        read_canonical(std::slice::from_ref(&path), StoreKind::TripleTrail)?;
-                    let after =
-                        read_canonical(std::slice::from_ref(&fresh), StoreKind::TripleTrail)?;
+                    let before = canonical_turtle(&std::fs::read(&path)?)?;
+                    let after = canonical_turtle(text.as_bytes())?;
                     let diff = tripletrail::canon::diff(&before, &after);
                     eprintln!(
                         "{}: {} triples added, {} removed",
@@ -3440,7 +3435,7 @@ fn run() -> Result<()> {
                     for line in diff.added.iter().take(20) {
                         eprint!("+ {line}");
                     }
-                    std::fs::rename(&fresh, &path)?;
+                    std::fs::write(&path, text)?;
                 } else {
                     std::fs::write(&path, text)?;
                     eprintln!("{}: written", path.display());
@@ -3448,6 +3443,7 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        #[cfg(feature = "postgres")]
         Command::DirectMapping {
             database,
             base_iri,
@@ -4050,6 +4046,16 @@ fn read_functions(files: &[PathBuf]) -> Result<tripletrail::udf::Functions> {
 }
 
 /// The quads of `inputs` (files, or directories of on-disk datasets), canonicalized.
+/// A Turtle document's triples, canonical, read without a store or a word on standard error.
+#[cfg(feature = "postgres")]
+fn canonical_turtle(text: &[u8]) -> Result<tripletrail::canon::Canonical> {
+    let quads = tripletrail::oxigraph::io::RdfParser::from_format(RdfFormat::Turtle)
+        .for_slice(text)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    tripletrail::canon::canonicalize(quads).map_err(|e| e.to_string().into())
+}
+
 fn read_canonical(inputs: &[PathBuf], store: StoreKind) -> Result<tripletrail::canon::Canonical> {
     let mut quads = Vec::new();
     for input in inputs {
