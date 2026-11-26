@@ -91,6 +91,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Changed
 
+- Map tiles, the map's facets, counts and searches, and the OGC API's answers go gzipped to a client that accepts it (#261), as RINF Atlas sends them. On RINF's eight countries, nine tiles of every class around Brussels come to 488 KB at z6 (was 1,239), 113 KB at z9 (was 497) and 34 KB at z12 (was 152); RINF Atlas sends 431, 228 and 82 KB.
 - A generalised low-zoom tile layer (below zoom 8, over 1,000 features) gives each feature its IRI as `ns` (up to the last `/` or `#`, held once per layer) and `local` in place of `iri` (#261): IRIs were most of its bytes. The Map page reads either. On RINF's eight countries, nine z6 tiles of every class around Brussels are 1,239 KB instead of 2,481 KB (RINF Atlas: 1,019 KB).
 - The map's unfiltered facet counts, which the warm-up makes, are kept for each collection until the next write, instead of only in the result cache, whose other queries could push them out (#258). On the RINF data of #256, the first request for the facets of all 31 collections took 68 s minutes after the warm-up. A request for them now asks the engine nothing until the next write (not measured on RINF yet).
 - The id executor sums `SUM` and `AVG` (without `DISTINCT`) of one group of more than 16,384 rows, such as an aggregate without `GROUP BY`, in parts on several cores (#10): Sparqloscope's `date-day` on bsbm-2785 (93,000 dates) 7.6 → 4.1 ms on 4 cores, same answers.

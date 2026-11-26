@@ -574,6 +574,20 @@ or `#`, kept once for the whole layer) and `local`, and the IRI is `ns` followed
 A style or client that picks features by IRI reads either. The small network here keeps every
 feature.
 
+A client that asks for gzip gets the tiles gzipped, as it does the map's facets and searches
+and the OGC API's answers; a browser always asks. Answers under 1 KB, as this network's tiles
+are, go as they are:
+
+<!-- test: run -->
+```sh
+curl -s -D - -o /dev/null -H 'Accept-Encoding: gzip' http://localhost:7878/ds/ogc/collections | tr -d '\r' | grep -i '^content-encoding'
+```
+
+<!-- test: output -->
+```text
+Content-Encoding: gzip
+```
+
 ### Narrow facets and tiles to an area, a graph or a text
 
 `/ds/tiles/facets/{collection}` counts what the Map page's filters keep. Three more filters

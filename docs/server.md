@@ -3299,6 +3299,12 @@ https://tripletrail.example.org/kg/tiles/all/{z}/{x}/{y}.mvt
   share it, and `local`, the rest (#261); the IRI is `ns` followed by `local`. On RINF's eight
   countries this halves nine z6 tiles of every class around Brussels (1,239 instead of 2,481 KB). A
   layer of fewer features keeps them all at every zoom, with `iri`.
+- A client whose `Accept-Encoding` takes gzip gets tiles gzipped (level 3), as it does the
+  styles, facets, counts and searches under `/{ds}/tiles/` and every answer of the OGC API
+  (`/{ds}/ogc/`); answers under 1 KB and streamed ones go as they are, and these answers say
+  `Vary: Accept-Encoding`. On RINF's eight countries the nine tiles of every class around
+  Brussels come to 488 KB at z6, 113 KB at z9 and 34 KB at z12 (RINF Atlas, gzipped too: 431,
+  228 and 82 KB).
 - Collections that read their geometry through the same path are fetched with one query
   (the spatial index is asked once per tile), and those queries run on up to four threads.
 - Tiles are kept in memory, 256 MiB at most over all datasets (oldest out first; a layer tile
