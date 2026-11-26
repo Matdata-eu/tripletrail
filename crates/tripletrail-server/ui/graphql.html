@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GraphQL – {{DATASET}}</title>
-<link rel="icon" href="../icon.svg">
+<link rel="icon" href="{{FAVICON}}">
 <style>
   :root { --bg: #fff; --surface: #f6f8fa; --border: #dfe5ec; --text: #1c2633; --muted: #6a7380;
     --brand: #0563bb; --danger: #b42318; color-scheme: light;
@@ -46,10 +46,11 @@
     .main { grid-template-columns: 1fr; grid-auto-rows: minmax(240px, auto); overflow: auto; }
   }
 </style>
+{{BRAND_STYLE}}
 </head>
 <body>
 <div class="bar">
-  <a href="../datasets">TripleTrail</a> <span>GraphQL of <strong>{{DATASET}}</strong></span>
+  <a href="../datasets">{{SITE_NAME}}</a> <span>GraphQL of <strong>{{DATASET}}</strong></span>
   <a href="../api/{{DATASET}}">REST API</a>
   <span class="grow"></span>
   <span class="muted" id="gq-time"></span>

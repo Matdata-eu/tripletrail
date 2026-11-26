@@ -66,6 +66,7 @@ pub(crate) fn describe(
     all: &[&str],
     aliases: &[(&str, &str)],
     file: Option<&str>,
+    site_name: Option<&str>,
 ) -> Result<Vec<Triple>, HttpError> {
     // The origin comes from the request's Host (or X-Forwarded-Host): not an IRI, the
     // request is wrong.
@@ -141,7 +142,11 @@ pub(crate) fn describe(
         add.push(t(
             &catalog,
             dct("title"),
-            Literal::new_simple_literal(format!("TripleTrail at {host}")).into(),
+            Literal::new_simple_literal(match site_name {
+                Some(name) => name.to_owned(),
+                None => format!("TripleTrail at {host}"),
+            })
+            .into(),
         ));
     }
     if !has(&out, &catalog, &dct("description")) {
@@ -292,6 +297,7 @@ mod tests {
             &["kg", "secret"],
             &[("live", "kg"), ("secalias", "secret")],
             Some(file),
+            None,
         )
         .unwrap();
         let text: Vec<String> = triples.iter().map(ToString::to_string).collect();
@@ -327,14 +333,20 @@ mod tests {
 
     #[test]
     fn a_host_that_is_no_iri_is_the_requests_fault() {
-        let e = describe("http://a b<>", &["kg"], &["kg"], &[], None).unwrap_err();
+        let e = describe("http://a b<>", &["kg"], &["kg"], &[], None, None).unwrap_err();
         assert_eq!(e.0, 400);
     }
 
     #[test]
     fn without_a_file_the_mandatory_properties_are_there() {
-        let triples = describe("http://h", &["kg"], &["kg"], &[], None).unwrap();
+        let triples = describe("http://h", &["kg"], &["kg"], &[], None, None).unwrap();
         let text: Vec<String> = triples.iter().map(ToString::to_string).collect();
+        // --site-name titles the catalog when the file does not (#262).
+        let named = describe("http://h", &["kg"], &["kg"], &[], None, Some("Rail KG")).unwrap();
+        assert!(named.iter().any(|t| {
+            t.to_string()
+                .ends_with("<http://purl.org/dc/terms/title> \"Rail KG\"")
+        }));
         for want in [
             "<http://h/#catalog> <http://purl.org/dc/terms/title> \"TripleTrail at h\"",
             "<http://h/kg/void#dataset> <http://purl.org/dc/terms/title> \"kg\"",
