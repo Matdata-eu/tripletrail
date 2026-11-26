@@ -166,6 +166,16 @@ fn validate_a_workspace_after_its_rules() {
     assert!(r["shapeIri"].as_str().unwrap().starts_with("http"), "{r}");
     let again = json_of(ureq::post(&url).call().unwrap());
     assert_eq!(again["results"][0]["key"], json!(key));
+    // The summary: one cell, whose sample is that result.
+    let s = &v["summary"];
+    assert_eq!(
+        (s["results"].as_u64(), s["failingFocusNodes"].as_u64()),
+        (Some(1), Some(1))
+    );
+    assert_eq!(s["cells"].as_array().unwrap().len(), 1);
+    assert_eq!(s["cells"][0]["shapeIri"], r["shapeIri"]);
+    assert_eq!(s["cells"][0]["samples"][0]["key"], json!(key));
+    assert_eq!(s["bySeverity"][0]["results"], 1);
     assert_eq!(
         r["sourceConstraintComponent"]["value"],
         "http://www.w3.org/ns/shacl#MinCountConstraintComponent"

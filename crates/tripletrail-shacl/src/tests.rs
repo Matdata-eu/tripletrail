@@ -675,3 +675,60 @@ fn finding_keys_are_stable() {
         1
     );
 }
+
+#[test]
+fn cells_group_results_by_rule_severity_and_component() {
+    let shapes = Shapes::compile(&graph(
+        "ex:S sh:targetClass ex:Car ;
+            sh:property [ sh:path ex:p ; sh:maxInclusive 1 ; sh:datatype xsd:integer ] ;
+            sh:property [ sh:path ex:q ; sh:minCount 1 ; sh:severity sh:Warning ] .",
+    ))
+    .unwrap();
+    let data = graph(
+        "ex:a a ex:Car ; ex:p 2, 3, 4, 5 . ex:b a ex:Car ; ex:p 9 ; ex:q 1 . ex:c a ex:Car ; ex:p \"x\" .",
+    );
+    let mut cells = crate::Cells::default();
+    Validator::new(&shapes, &data).report(&mut |r| cells.add(&r));
+    let s = cells.finish();
+    // ex:p over 1 (or not a number): a (4 values), b and c; not an integer: c; no ex:q: a, c.
+    assert_eq!((s.results, s.failing_focus_nodes), (9, 3));
+    let rows: Vec<(String, u64, usize, usize)> = s
+        .cells
+        .iter()
+        .map(|c| {
+            let component = c.component.to_string();
+            let local = component
+                .rsplit('#')
+                .next()
+                .unwrap()
+                .trim_end_matches('>')
+                .to_owned();
+            (local, c.results, c.focus_nodes, c.samples.len())
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("MaxInclusiveConstraintComponent".to_owned(), 6, 3, 3),
+            ("MinCountConstraintComponent".to_owned(), 2, 2, 2),
+            ("DatatypeConstraintComponent".to_owned(), 1, 1, 1),
+        ]
+    );
+    assert_eq!(
+        s.by_severity()
+            .iter()
+            .map(|(t, n)| (t.to_string(), *n))
+            .collect::<Vec<_>>(),
+        [
+            ("<http://www.w3.org/ns/shacl#Violation>".to_owned(), 7),
+            ("<http://www.w3.org/ns/shacl#Warning>".to_owned(), 2),
+        ]
+    );
+    // Samples are the first results found, with their finding keys.
+    assert!(
+        s.cells[0]
+            .samples
+            .iter()
+            .all(|x| x.key != 0 && x.node.is_none())
+    );
+}
