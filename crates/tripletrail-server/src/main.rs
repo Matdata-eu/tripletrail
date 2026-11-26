@@ -1604,16 +1604,20 @@ fn load_progress_line(
         _ => String::new(),
     };
     let gb = |b: u64| b as f64 / 1e9;
-    let share = if size > 0 {
-        format!(" ({:.0} %)", 100.0 * read as f64 / size as f64)
+    // The size of a pipe, or of a file whose metadata could not be read, is not known.
+    let read = if size > 0 {
+        format!(
+            "{:.1} of {:.1} GB read ({:.0} %)",
+            gb(read),
+            gb(size),
+            100.0 * read as f64 / size as f64
+        )
     } else {
-        String::new()
+        format!("{:.1} GB read", gb(read))
     };
     format!(
-        "loading {}: {store}{:.1} of {:.1} GB read{share}, {} s",
+        "loading {}: {store}{read}, {} s",
         path.display(),
-        gb(read),
-        gb(size),
         elapsed.as_secs()
     )
 }
@@ -4112,6 +4116,18 @@ mod tests {
         assert_eq!(
             line,
             "loading planet.nt: idle, 0 triples, 232.0 of 932.0 GB read (25 %), 3600 s"
+        );
+        // A pipe: its size is not known.
+        let line = load_progress_line(
+            &engine,
+            std::path::Path::new("/dev/stdin"),
+            200_000_000,
+            0,
+            std::time::Duration::from_secs(60),
+        );
+        assert_eq!(
+            line,
+            "loading /dev/stdin: idle, 0 triples, 0.2 GB read, 60 s"
         );
     }
 

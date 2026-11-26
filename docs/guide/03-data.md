@@ -48,7 +48,9 @@ loading planet.nt: reading, 1,204,331,870 triples, 223.4 of 932.0 GB read (24 %)
 
 The step is `reading` (parsing the file and adding its terms), `sorting` (building the indexes;
 past `--memory-limit`, a sort on disk), `writing` (the dataset's files) or `entailing` (a kept
-RDFS entailment). The triples are those read so far, duplicates included.
+RDFS entailment). The triples are those read so far, duplicates included; they are counted as
+each block of the file is taken in, so the count trails the bytes read a little. When the size
+of the input is not known (a pipe), the line gives only the gigabytes read.
 
 ## Add data while the server runs
 
