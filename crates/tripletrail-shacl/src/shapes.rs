@@ -33,6 +33,9 @@ pub struct Shape {
     pub(crate) severity: Term,
     /// `sh:message`s, used for every result of the shape.
     pub(crate) messages: Vec<Term>,
+    /// The shape's IRI, or for a blank node shape a stable IRI named for it (see
+    /// [`Shape::iri`]).
+    pub(crate) iri: NamedNode,
 }
 
 impl Shape {
@@ -44,6 +47,18 @@ impl Shape {
     /// Whether the shape has targets.
     pub fn has_targets(&self) -> bool {
         !self.targets.is_empty()
+    }
+
+    /// The shape's IRI. A blank node shape (a property shape written inline, say) has a new
+    /// label in every read of the shapes graph, so it gets an IRI that is the same in every
+    /// run while the shape says the same thing: its nearest ancestor with an IRI (the node
+    /// shape it belongs to), then `#` (`-` when that IRI has a `#`) and 16 hexadecimal digits
+    /// of a 64-bit FNV-1a hash of the shape's triples written out, nested blank nodes and
+    /// lists in full and sorted. With no ancestor with an IRI it is
+    /// `urn:x-tripletrail-shacl:shape:` and the digits. Two blank node shapes of one ancestor
+    /// that say exactly the same thing share it.
+    pub fn iri(&self) -> &NamedNode {
+        &self.iri
     }
 }
 
@@ -215,6 +230,7 @@ impl Shapes {
             c.shape(&node, 0)?;
         }
         c.finish();
+        c.name_blank_shapes();
         Ok(c.shapes)
     }
 
@@ -421,6 +437,11 @@ impl Compiler<'_> {
             deactivated: false,
             severity: sh::VIOLATION.into(),
             messages: Vec::new(),
+            iri: match node {
+                Term::NamedNode(n) => n.clone(),
+                // Named in `Compiler::name_blank_shapes`.
+                _ => NamedNode::new_unchecked("urn:x-tripletrail-shacl:shape:"),
+            },
         });
 
         let path = match self.objects(node, sh::PATH).first() {
@@ -1058,6 +1079,104 @@ impl Compiler<'_> {
             }
         }
     }
+}
+
+impl Compiler<'_> {
+    /// Gives each blank node shape its stable IRI (see [`Shape::iri`]).
+    fn name_blank_shapes(&mut self) {
+        let g = self.g;
+        for s in &mut self.shapes.shapes {
+            if !matches!(s.node, Term::BlankNode(_)) {
+                continue;
+            }
+            let mut text = String::new();
+            written(g, &s.node, &mut Vec::new(), &mut text);
+            let hash = fnv1a(text.as_bytes());
+            s.iri = NamedNode::new_unchecked(match named_ancestor(g, &s.node) {
+                Some(a) if a.as_str().contains('#') => format!("{}-{hash:016x}", a.as_str()),
+                Some(a) => format!("{}#{hash:016x}", a.as_str()),
+                None => format!("urn:x-tripletrail-shacl:shape:{hash:016x}"),
+            });
+        }
+    }
+}
+
+/// 64-bit FNV-1a: fixed by its definition, so the same in every build and run.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Appends `t` written out: an IRI or literal in N-Triples, a blank node as `[ p o ; … ]` with
+/// its triples written out the same way and sorted (`[ … ]` for one it is already inside).
+fn written(g: &dyn DataGraph, t: &Term, inside: &mut Vec<Term>, out: &mut String) {
+    use std::fmt::Write;
+    if !matches!(t, Term::BlankNode(_)) {
+        let _ = write!(out, "{t}");
+        return;
+    }
+    if inside.contains(t) {
+        out.push_str("[ … ]");
+        return;
+    }
+    inside.push(t.clone());
+    let mut pairs = Vec::new();
+    g.outgoing(t, &mut pairs);
+    let mut parts: Vec<String> = pairs
+        .iter()
+        .map(|(p, o)| {
+            let mut part = format!("{p} ");
+            written(g, o, inside, &mut part);
+            part
+        })
+        .collect();
+    inside.pop();
+    parts.sort_unstable();
+    out.push_str("[ ");
+    out.push_str(&parts.join(" ; "));
+    out.push_str(" ]");
+}
+
+/// The IRI nearest to blank node `t` among the subjects that refer to it, through blank
+/// nodes (the list nodes of `sh:or`, an inline node shape), breadth first; at one distance,
+/// the least IRI.
+fn named_ancestor(g: &dyn DataGraph, t: &Term) -> Option<NamedNode> {
+    let mut seen: FxHashSet<Term> = FxHashSet::default();
+    let mut level = vec![t.clone()];
+    seen.insert(t.clone());
+    let mut triples = Vec::new();
+    while !level.is_empty() {
+        let mut next = Vec::new();
+        let mut named: Option<NamedNode> = None;
+        for node in &level {
+            triples.clear();
+            g.triples(None, None, Some(node), &mut triples);
+            for tr in &triples {
+                let s = tr.0.clone();
+                match &s {
+                    Term::NamedNode(n) => {
+                        if named.as_ref().is_none_or(|m| n.as_str() < m.as_str()) {
+                            named = Some(n.clone());
+                        }
+                    }
+                    _ => {
+                        if seen.insert(s.clone()) {
+                            next.push(s);
+                        }
+                    }
+                }
+            }
+        }
+        if named.is_some() {
+            return named;
+        }
+        level = next;
+    }
+    None
 }
 
 /// An XPath regular expression with `sh:flags`, as a Rust one.

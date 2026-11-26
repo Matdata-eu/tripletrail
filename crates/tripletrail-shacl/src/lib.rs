@@ -53,7 +53,7 @@ mod value;
 pub use graph::{DataGraph, Edited, StoreGraph, Triple3, Union};
 pub use inferred::Inferred;
 pub use path::Path;
-pub use report::{ReportWriter, ShapeCount, ValidationResult};
+pub use report::{FailingFocusNodes, ReportWriter, ShapeCount, ValidationResult};
 pub use rules::{
     Inference, Origin, PLAN_EDGES, Plan, PlanEdge, PlanGroup, PlanRule, PlanSink, RuleRun,
 };
@@ -85,10 +85,16 @@ pub mod vocab {
             NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#shapeStatistics");
         pub const SHAPE: NamedNodeRef<'static> =
             NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#shape");
+        pub const SHAPE_IRI: NamedNodeRef<'static> =
+            NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#shapeIri");
         pub const FOCUS_NODES: NamedNodeRef<'static> =
             NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#focusNodes");
         pub const VALUE_NODES: NamedNodeRef<'static> =
             NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#valueNodes");
+        pub const DISTINCT_FOCUS_NODES: NamedNodeRef<'static> =
+            NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#distinctFocusNodes");
+        pub const FAILING_FOCUS_NODES: NamedNodeRef<'static> =
+            NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#failingFocusNodes");
     }
 
     pub mod sh {

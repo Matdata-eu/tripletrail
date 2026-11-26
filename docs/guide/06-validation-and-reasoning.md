@@ -49,8 +49,40 @@ does not conform in
 ```
 
 `tripletrail validate` exits with status 1 when the data does not conform (a warning counts), so
-a script or CI job can stop on it. `--report report.ttl` writes the report to a file, and
-`--stats` adds how many nodes each shape checked.
+a script or CI job can stop on it. `--report report.ttl` writes the report to a file.
+
+`--stats` adds, for each shape, how many nodes it checked, how many distinct focus nodes it
+had and how many of those have a result, so `ttsh:failingFocusNodes` divided by
+`ttsh:distinctFocusNodes` is the share of the network that fails the shape. Here 1 of the 12
+sections is too fast:
+
+<!-- test: run fails -->
+```sh
+tripletrail validate --data network.ttl --shapes shapes.ttl --stats
+```
+
+<!-- test: output contains -->
+```text
+ttsh:distinctFocusNodes 12 ;
+ttsh:failingFocusNodes 1 .
+```
+
+Each shape's statistics also name it with `ttsh:shapeIri`, the same in every run, so that you
+can compare one run with the next. The property shapes above are written inline, as blank
+nodes, so TripleTrail names each from its node shape and a hash of what it says. The speed
+rule is:
+
+<!-- test: run fails -->
+```sh
+tripletrail validate --data network.ttl --shapes shapes.ttl --stats
+```
+
+<!-- test: output contains -->
+```text
+ttsh:shapeIri <https://example.org/rail#SectionShape-1928b564a0725f04> ;
+```
+
+The name changes only when that property shape changes.
 
 To validate a dataset on disk instead of files, give its location and the named graph that
 holds the shapes: `tripletrail validate --location db --dataset rail --shapes-graph

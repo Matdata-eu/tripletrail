@@ -3,7 +3,9 @@
 use crate::ShaclError;
 use crate::graph::DataGraph;
 use crate::path::{Path, dedup};
-use crate::report::{ShapeCount, ValidationResult, core_component, fill_messages, template_names};
+use crate::report::{
+    ShapeCount, ValidationResult, core_component, fill_messages, template_names, term_hash,
+};
 use crate::shapes::{
     Component, KIND_BLANK, KIND_IRI, KIND_LITERAL, Shape, ShapeId, Shapes, Target,
 };
@@ -533,13 +535,15 @@ impl<'a> Validator<'a> {
     /// shape is checked against its focus nodes; a shape reached through `sh:property`,
     /// `sh:node`, `sh:not`, `sh:and`, `sh:or`, `sh:xone` or `sh:qualifiedValueShape` against
     /// the value nodes of its parent, once per parent focus node (so a node reached from two
-    /// parents counts twice). The value nodes of a property shape are those of its path; a
-    /// node shape's value node is its focus node.
+    /// parents counts twice), and the distinct focus nodes of each shape (each once). The
+    /// value nodes of a property shape are those of its path; a node shape's value node is
+    /// its focus node. The failing focus nodes are 0: see [`crate::FailingFocusNodes`].
     pub fn shape_counts(&self) -> Vec<ShapeCount> {
         let mut counts = vec![(0usize, 0usize); self.shapes.len()];
+        let mut distinct: Vec<FxHashSet<u64>> = vec![FxHashSet::default(); self.shapes.len()];
         for &s in self.shapes.targeted() {
             for focus in self.focus_nodes(s) {
-                self.count(&focus, s, 0, &mut counts);
+                self.count(&focus, s, 0, &mut counts, &mut distinct);
             }
         }
         let shapes = self.shapes;
@@ -552,15 +556,25 @@ impl<'a> Validator<'a> {
                 let s = shapes.get(ShapeId(i as u32));
                 ShapeCount {
                     shape: s.node.clone(),
+                    iri: s.iri.clone(),
                     property: s.path.is_some(),
                     focus_nodes,
                     value_nodes,
+                    distinct_focus_nodes: distinct[i].len(),
+                    failing_focus_nodes: 0,
                 }
             })
             .collect()
     }
 
-    fn count(&self, focus: &Term, shape: ShapeId, depth: usize, counts: &mut [(usize, usize)]) {
+    fn count(
+        &self,
+        focus: &Term,
+        shape: ShapeId,
+        depth: usize,
+        counts: &mut [(usize, usize)],
+        distinct: &mut [FxHashSet<u64>],
+    ) {
         if depth > MAX_DEPTH {
             return;
         }
@@ -575,6 +589,7 @@ impl<'a> Validator<'a> {
         let c = &mut counts[shape.0 as usize];
         c.0 += 1;
         c.1 += values.len();
+        distinct[shape.0 as usize].insert(term_hash(focus));
         for c in &s.components {
             let nested: &[ShapeId] = match c {
                 Component::Property(p) | Component::Node(p) | Component::Not(p) => {
@@ -586,7 +601,7 @@ impl<'a> Validator<'a> {
             };
             for &n in nested {
                 for v in &values {
-                    self.count(v, n, depth + 1, counts);
+                    self.count(v, n, depth + 1, counts, distinct);
                 }
             }
         }
@@ -617,6 +632,7 @@ impl<'a> Validator<'a> {
                 result_path: s.path.as_ref().map(Cow::Borrowed),
                 value,
                 source_shape: &s.node,
+                source_shape_iri: &s.iri,
                 source_constraint_component: component,
                 source_constraint: None,
                 severity: &s.severity,
@@ -709,6 +725,7 @@ impl<'a> Validator<'a> {
                                 result_path: Some(Cow::Owned(Path::Predicate(p))),
                                 value: Some(o),
                                 source_shape: &s.node,
+                                source_shape_iri: &s.iri,
                                 source_constraint_component: component.clone(),
                                 source_constraint: None,
                                 severity: &s.severity,

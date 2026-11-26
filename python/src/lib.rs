@@ -1382,8 +1382,10 @@ impl PyValidationReport {
 
     /// With `Engine.validate(..., statistics=True)`, one dict per shape checked (conforming or
     /// not, and every targeted shape), ready for `pandas.DataFrame`: `shape` (a
-    /// term), `property` (whether it has `sh:path`), `focus_nodes` and `value_nodes`. Empty
-    /// otherwise.
+    /// term), `shape_iri` (its IRI, for a blank node shape the stable IRI TripleTrail names it,
+    /// the same in every run), `property` (whether it has `sh:path`), `focus_nodes` and `value_nodes` (checks,
+    /// a node reached from two parents counting twice), `distinct_focus_nodes` and
+    /// `failing_focus_nodes` (distinct focus nodes of its results). Empty otherwise.
     #[getter]
     fn shape_counts<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
         self.counts
@@ -1391,9 +1393,12 @@ impl PyValidationReport {
             .map(|c| {
                 let d = PyDict::new(py);
                 d.set_item("shape", py_term(py, c.shape.clone())?)?;
+                d.set_item("shape_iri", c.iri.as_str())?;
                 d.set_item("property", c.property)?;
                 d.set_item("focus_nodes", c.focus_nodes)?;
                 d.set_item("value_nodes", c.value_nodes)?;
+                d.set_item("distinct_focus_nodes", c.distinct_focus_nodes)?;
+                d.set_item("failing_focus_nodes", c.failing_focus_nodes)?;
                 Ok(d)
             })
             .collect()

@@ -120,6 +120,20 @@ jobs:
               }
               return out;
             };
+            // Priority, Effort, Estimate, Start date and Target date are the organisation's issue
+            // fields: the board shows them, but an item's GraphQL field values leave them out, so
+            // they are read from the issue itself (REST issue_field_values).
+            const withIssueFields = async (content, out) => {
+              if (!content || content.__typename !== 'Issue' || !content.repository) return out;
+              const { data } = await github.rest.issues.get({
+                owner: process.env.PROJECT_OWNER, repo: content.repository.name, issue_number: content.number,
+              });
+              for (const v of data.issue_field_values || []) {
+                const value = v.single_select_option ? v.single_select_option.name : v.value;
+                if (!(v.issue_field_name in out) && value !== undefined && value !== null) out[v.issue_field_name] = String(value);
+              }
+              return out;
+            };
             const label = (c) => c.repository ? `${c.repository.name}#${c.number}` : '(draft)';
             const clean = (s) => String(s ?? '').replace(/[\t\r\n]+/g, ' ');
 
@@ -172,7 +186,7 @@ jobs:
                 for (const n of page.nodes) {
                   if (n.isArchived || !n.content || hidden(n.content)) continue;
                   if (itemInput === '' && n.content.state && n.content.state !== 'OPEN') continue;
-                  rows.push({ content: n.content, values: valuesOf(n) });
+                  rows.push({ content: n.content, values: await withIssueFields(n.content, valuesOf(n)) });
                 }
                 after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
               } while (after);
@@ -295,6 +309,6 @@ jobs:
 
             if (changes.length) item = await getItem();
             if (!itemId) core.notice(`${label(found)} is not on the board`);
-            table([{ content: found, values: item ? valuesOf(item) : {} }]);
+            table([{ content: found, values: await withIssueFields(found, item ? valuesOf(item) : {}) }]);
             await finish();
             if (failed) core.setFailed(`${failed} of ${changes.length} changes failed`);

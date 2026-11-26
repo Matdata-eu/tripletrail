@@ -52,18 +52,43 @@ For a non-conformance rate per shape, `--stats` (`statistics=True` in Python,
 `Engine::validate_counted` in Rust) also counts the focus and value nodes each shape was
 checked against, conforming shapes and targeted shapes with no focus nodes included. A shape
 reached through `sh:property`, `sh:node`, `sh:and`, `sh:or`, ... counts the value nodes of
-its parent, once per parent focus node. The report gets one IRI node per shape (no blank
-nodes, for pipelines that skolemise):
+its parent, once per parent focus node, so `ttsh:focusNodes` counts a node reached from two
+parents twice. `ttsh:distinctFocusNodes` counts each focus node once, however it was reached
+and however many targets select it, and `ttsh:failingFocusNodes` the distinct focus nodes of
+the results whose `sh:sourceShape` is the shape (those in `sh:detail`s included), so their
+ratio is the shape's failure rate. Both are counted by a 64-bit hash of each node, 8 bytes a
+node; two nodes count as one with a probability under one in a million below six million
+nodes. The report gets one IRI node per shape (no blank nodes, for pipelines that
+skolemise):
 
 ```turtle
 [] a sh:ValidationReport ;
   ttsh:shapeStatistics <urn:tripletrail:shape-statistics:...:0> .
 <urn:tripletrail:shape-statistics:...:0> ttsh:shape ex:PersonShape ;
-  ttsh:focusNodes 1200 ; ttsh:valueNodes 1200 .
+  ttsh:shapeIri ex:PersonShape ;
+  ttsh:focusNodes 1200 ; ttsh:valueNodes 1200 ;
+  ttsh:distinctFocusNodes 1200 ; ttsh:failingFocusNodes 37 .
 ```
 
+`ttsh:shapeIri` names the shape the same way in every run, to compare runs. A shape with an IRI
+is its own IRI. A blank node shape, such as a property shape written inline as
+`sh:property [ ... ]`, gets a new label every time the shapes are read, so it is named from the
+nearest node that refers to it and has an IRI (its node shape), then `#` (or `-` when that IRI
+already has a `#`) and 16 hexadecimal digits of a 64-bit FNV-1a hash of the shape's own triples
+written out, nested blank nodes and lists in full and sorted:
+`ex:PersonShape-3f9c0a7d51e2b864` for a property shape of `ex:PersonShape` whose IRI is
+`http://example.com/shapes#PersonShape`. A blank node shape no IRI refers to is
+`urn:x-tripletrail-shacl:shape:` and the digits. The name changes when the shape's own triples
+change, and not when other shapes do. Two blank node shapes of the same node shape that say
+exactly the same thing get the same name. In the report, `ttsh:shape` is the blank node the
+results' `sh:sourceShape` names, and `ttsh:shapeIri` the stable name; the W3C part of the
+report is unchanged. In Rust, `Shape::iri`, `ShapeCount::iri` and
+`ValidationResult::source_shape_iri` hold it.
+
 `ttsh:` is `http://w3id.org/tripletrail/shacl#`; in Python, `report.shape_counts` holds one dict
-per shape (`shape`, `property`, `focus_nodes`, `value_nodes`).
+per shape (`shape`, `shape_iri`, `property`, `focus_nodes`, `value_nodes`,
+`distinct_focus_nodes`, `failing_focus_nodes`); the server's JSON answer has `shapeIri`,
+`distinctFocusNodes` and `failingFocusNodes`.
 
 ## SHACL-AF rules
 
