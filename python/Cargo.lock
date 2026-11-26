@@ -2305,6 +2305,7 @@ dependencies = [
  "arrow-schema",
  "bytes",
  "geo",
+ "md-5",
  "oxigraph",
  "oxiri",
  "oxsdatatypes",
@@ -2313,6 +2314,7 @@ dependencies = [
  "regex",
  "rust-stemmers",
  "serde_json",
+ "sha1",
  "sha2",
  "spareval",
  "spargebra",
@@ -2387,7 +2389,7 @@ dependencies = [
 
 [[package]]
 name = "tripletrail-python"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "oxigraph",
  "pyo3",
