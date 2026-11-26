@@ -128,6 +128,8 @@ pub(crate) fn validate(
                 "property": c.property,
                 "focusNodes": c.focus_nodes,
                 "valueNodes": c.value_nodes,
+                "distinctFocusNodes": c.distinct_focus_nodes,
+                "failingFocusNodes": c.failing_focus_nodes,
             })
         })
         .collect();
