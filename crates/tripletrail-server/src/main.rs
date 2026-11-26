@@ -314,6 +314,13 @@ enum Command {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Turns a source's schema into RDF: an OWL ontology, SHACL shapes and SKOS concept
+    /// schemes (#278).
+    #[cfg(feature = "postgres")]
+    Schema {
+        #[command(subcommand)]
+        command: SchemaCommand,
+    },
     /// Writes the results of a SPARQL SELECT as a GeoParquet file: geometry literal columns
     /// become WKB geometry columns, with their CRS and a bbox covering column.
     #[cfg(feature = "geoparquet")]
@@ -667,6 +674,41 @@ enum LicenseCommand {
         /// Prints JSON (as GET /$/license answers) instead of text.
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[cfg(feature = "postgres")]
+#[derive(Subcommand)]
+enum SchemaCommand {
+    /// A PostgreSQL schema's tables and views as an OWL ontology and SHACL shapes, named as
+    /// `tripletrail direct-mapping --base-iri NAMESPACE` names their data: a class per table,
+    /// a property per column and foreign key, with the comments as `rdfs:comment`; a node
+    /// shape per table with each column's datatype, `NOT NULL`, length, enum values and the
+    /// `CHECK`s it can translate, foreign keys' classes and unique keys. Code tables become
+    /// SKOS concept schemes. Writes `ontology.ttl`, `shapes.ttl` and `skos.ttl` to `--out`,
+    /// saying what changed when they are there already, or all as Turtle to standard output.
+    Database {
+        /// The database, as a connection string: `postgresql://user:password@host:port/name`.
+        #[arg(long, env = "TRIPLETRAIL_DATABASE", value_name = "URL")]
+        database: String,
+        /// The IRI the classes, properties and shapes start with: the direct mapping's base
+        /// IRI, or the namespace of the lift of the source.
+        #[arg(long, value_name = "IRI")]
+        namespace: String,
+        /// The schema whose tables and views are read.
+        #[arg(long, default_value = "public")]
+        schema: String,
+        /// Read only these tables (all of the schema's if none is given). Repeat for more.
+        #[arg(long = "table", value_name = "NAME")]
+        tables: Vec<String>,
+        /// A code table to make a SKOS concept scheme of, its rows concepts: `TABLE`, or
+        /// `TABLE=COLUMN` to take the labels from `COLUMN` (its first text column otherwise).
+        /// Repeat for more.
+        #[arg(long = "code-table", value_name = "TABLE[=COLUMN]")]
+        code_tables: Vec<String>,
+        /// The folder to write `ontology.ttl`, `shapes.ttl` and `skos.ttl` to.
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
     },
 }
 
@@ -3337,6 +3379,75 @@ fn run() -> Result<()> {
             }
         }
         #[cfg(feature = "postgres")]
+        #[cfg(feature = "postgres")]
+        Command::Schema {
+            command:
+                SchemaCommand::Database {
+                    database,
+                    namespace,
+                    schema,
+                    tables,
+                    code_tables,
+                    out,
+                },
+        } => {
+            let codes: Vec<(String, Option<String>)> = code_tables
+                .iter()
+                .map(|c| match c.split_once('=') {
+                    Some((t, l)) => (t.to_owned(), Some(l.to_owned())),
+                    None => (c.clone(), None),
+                })
+                .collect();
+            let made = lift::database_schema(&database, &namespace, &schema, &tables, &codes)?;
+            for note in &made.notes {
+                eprintln!("{note}");
+            }
+            let Some(dir) = out else {
+                use std::io::Write as _;
+                let mut stdout = std::io::stdout().lock();
+                // One Turtle document: the prefixes once.
+                let body = |t: &str| t.split("\n\n").skip(1).collect::<Vec<_>>().join("\n\n");
+                stdout.write_all(made.ontology.as_bytes())?;
+                stdout.write_all(body(&made.shapes).as_bytes())?;
+                stdout.write_all(body(&made.skos).as_bytes())?;
+                return Ok(());
+            };
+            std::fs::create_dir_all(&dir)?;
+            for (file, text) in [
+                ("ontology.ttl", &made.ontology),
+                ("shapes.ttl", &made.shapes),
+                ("skos.ttl", &made.skos),
+            ] {
+                let path = dir.join(file);
+                if path.is_file() {
+                    // Said against what is there: triples added and removed.
+                    let fresh = dir.join(format!(".new.{file}"));
+                    std::fs::write(&fresh, text)?;
+                    let before =
+                        read_canonical(std::slice::from_ref(&path), StoreKind::TripleTrail)?;
+                    let after =
+                        read_canonical(std::slice::from_ref(&fresh), StoreKind::TripleTrail)?;
+                    let diff = tripletrail::canon::diff(&before, &after);
+                    eprintln!(
+                        "{}: {} triples added, {} removed",
+                        path.display(),
+                        diff.added.len(),
+                        diff.removed.len()
+                    );
+                    for line in diff.removed.iter().take(20) {
+                        eprint!("- {line}");
+                    }
+                    for line in diff.added.iter().take(20) {
+                        eprint!("+ {line}");
+                    }
+                    std::fs::rename(&fresh, &path)?;
+                } else {
+                    std::fs::write(&path, text)?;
+                    eprintln!("{}: written", path.display());
+                }
+            }
+            Ok(())
+        }
         Command::DirectMapping {
             database,
             base_iri,

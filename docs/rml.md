@@ -42,6 +42,45 @@ With `B` the base IRI (`http://example.com/base/` by default) and names percent-
 The command writes an R2RML mapping that does this and runs it as `tripletrail lift` would, so
 `--mapping` gives a starting point to rename classes and properties and run with `lift`.
 
+## Database schema
+
+`tripletrail schema database` writes what a PostgreSQL schema says about its data (comments,
+keys and constraints) as RDF, with the IRIs of the [direct mapping](#direct-mapping) for the
+same base (`--namespace`):
+
+```sh
+tripletrail schema database --database postgresql://reader@db/assets --schema public \
+    --namespace https://data.example.org/ [--table T …] [--code-table T[=LABEL] …] [--out DIR]
+```
+
+With `--out`, it writes `ontology.ttl`, `shapes.ttl` and `skos.ttl` to `DIR`; when a file is
+already there it prints how many triples were added and removed, and the first of them.
+Without `--out`, it prints all three as Turtle. For a table or view `T`, columns `c` and
+namespace `B`:
+
+| Catalogue | Ontology | Shapes |
+|---|---|---|
+| table or view | `<B T>` an `owl:Class` | node shape `<B schema/shapes/T>`, `sh:targetClass <B T>` |
+| column | `<B T#c>` an `owl:DatatypeProperty`, domain `<B T>`, range its datatype | property shape `<B schema/shapes/T#c>`, `sh:datatype`, `sh:maxCount 1` |
+| `COMMENT` | `rdfs:comment` | `sh:description` |
+| `NOT NULL` | | `sh:minCount 1` |
+| `varchar(n)`, `char(n)` | | `sh:maxLength n` |
+| enum type | | `sh:in` its labels |
+| `CHECK` on the column or its domain: `<`, `<=`, `>`, `>=` a constant | | `sh:maxExclusive`, `sh:maxInclusive`, `sh:minExclusive`, `sh:minInclusive` |
+| `CHECK (c IN (…))` | | `sh:in` |
+| `CHECK (c ~ 're')` | | `sh:pattern` |
+| `CHECK (length(c) <= n)` and the like | | `sh:maxLength`, `sh:minLength` |
+| `CHECK (c IS NOT NULL)` | | `sh:minCount 1` |
+| foreign key `c1, c2` | `<B T#ref-c1;c2>` an `owl:ObjectProperty`, range the referenced class | `sh:class`, `sh:nodeKind sh:IRI` |
+| one-column primary or unique key | | `dash:uniqueValueForClass <B T>` |
+
+A `--code-table` becomes a concept scheme `<B schema/skos/T>`: each row, at its direct-mapping
+IRI, is a `skos:Concept` with its key as `skos:notation` and the `LABEL` column (its first text
+column otherwise) as `skos:prefLabel`. Everything carries `dct:source` (`schema.table` or
+`schema.table.column`). `CHECK`s over several columns, those it cannot read, and unique keys of
+several columns are not translated: each is said on standard error and in an `rdfs:comment` of
+the shape it belongs to.
+
 ## Sources (RML-IO)
 
 A logical source names a file, relative to the base directory (`--base`, else the current
