@@ -573,8 +573,6 @@ const FACET_VALUES: usize = 50;
 /// The most classes a map coloured by a range draws: the web UI's colours for them.
 const RANGE_CLASSES: usize = 8;
 
-const LABELS: &str =
-    "<http://www.w3.org/2000/01/rdf-schema#label>|<http://www.w3.org/2004/02/skos/core#prefLabel>";
 /// IRIs one query for facet values' labels names at most.
 const LABEL_BATCH: usize = 500;
 /// Data versions, callers and languages whose facet value labels are kept, at most.
@@ -651,7 +649,13 @@ fn label_values(
         let rows = run(
             entry,
             &format!(
-                "SELECT ?v ?l WHERE {{ VALUES ?v {{ {} }} ?v {LABELS} ?l FILTER(isLiteral(?l)) }}",
+                // The label properties as `VALUES`, not a path: the path `a|b` reads every
+                // label of the store before the values join it (on 300,000 labels, 35 ms
+                // against 3 ms; seconds on RINF).
+                "SELECT ?v ?l WHERE {{ VALUES ?v {{ {} }} \
+                   VALUES ?p {{ <http://www.w3.org/2000/01/rdf-schema#label> \
+                   <http://www.w3.org/2004/02/skos/core#prefLabel> }} \
+                   ?v ?p ?l FILTER(isLiteral(?l)) }}",
                 values.join(" ")
             ),
             timeout,
