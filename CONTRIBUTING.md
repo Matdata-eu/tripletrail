@@ -82,7 +82,9 @@ artifact. The tag also starts "Docker image", which publishes the image as `1.2.
 `latest` (a pre-release tag such as `v0.1.0-rc.3` publishes only `0.1.0-rc.3`, so `latest` stays
 on the last release), and "Helm chart" with "publish" ticked publishes the chart.
 
-The same run builds the Python wheels and source package and packs the JavaScript client.
+The same run builds the Python wheels (each with `THIRD_PARTY_LICENSES.md` for `python/Cargo.lock`; there
+is no source package, which would need the workspace and `vendor/` around `python/`) and packs
+the JavaScript client.
 After the GitHub release, it publishes them to PyPI (`tripletrail`) and npm
 (`@matdata/tripletrail-client`, a pre-release under the `next` tag), each only while the repository
 variable `PUBLISH_PYPI` or `PUBLISH_NPM` is `true`. Both use trusted publishing (no token):

@@ -17,7 +17,8 @@ name: Release
 # The binaries are not signed yet: cosign keyless signing would write the repository's name
 # and commits to Sigstore's public log, so it waits until the repository is public (#150).
 #
-# The same run builds the Python package (wheels for Linux, macOS and Windows, and the source)
+# The same run builds the Python package (wheels for Linux, macOS and Windows; no source
+# package, as it would need the workspace and vendor/ around python/)
 # and packs the JavaScript client. After the GitHub release, a tag publishes them to PyPI
 # (`tripletrail`) and npm (`@matdata/tripletrail-client`), each only while its repository variable is
 # `true`: PUBLISH_PYPI, PUBLISH_NPM. Both log in with trusted publishing (OIDC, no token).
@@ -86,10 +87,22 @@ jobs:
         run: |
           cargo fetch --locked
           python3 .github/scripts/third-party-licenses.py -o THIRD_PARTY_LICENSES.md
+      # The Python package links its own set (python/Cargo.lock), shipped in each wheel.
+      - name: Third-party licenses of the Python package
+        run: |
+          cargo fetch --locked --manifest-path python/Cargo.toml
+          mkdir -p python-third-party
+          python3 .github/scripts/third-party-licenses.py --package tripletrail-python \
+            --manifest-path python/Cargo.toml --product '`tripletrail` Python package' \
+            -o python-third-party/THIRD_PARTY_LICENSES.md
       - uses: actions/upload-artifact@v4
         with:
           name: third-party
           path: THIRD_PARTY_LICENSES.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: third-party-python
+          path: python-third-party/THIRD_PARTY_LICENSES.md
 
   # Both Linux binaries from the Dockerfile's build stage, cross-compiled on one machine and
   # linked against Debian 12's glibc (2.36), so they run on most current distributions.
@@ -224,11 +237,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # The license files go into the wheel's metadata (maturin picks up LICENSE* and NOTICE*).
+      - uses: actions/download-artifact@v4
+        with:
+          name: third-party-python
+          path: python-third-party
+      # LICENSE and NOTICE go into the wheel's metadata (maturin picks up LICENSE* and
+      # NOTICE*); all three, with the third-party list, into the package folder too.
       - name: License files
         shell: bash
-        run: cp LICENSE NOTICE python/
-      - uses: PyO3/maturin-action@v1
+        run: |
+          cp LICENSE NOTICE python/
+          cp LICENSE NOTICE python-third-party/THIRD_PARTY_LICENSES.md python/tripletrail/
+      # Pinned by commit: it runs in the release workflow. v1.51.0.
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
         with:
           working-directory: python
           target: ${{ matrix.target }}
@@ -241,28 +262,18 @@ jobs:
         run: |
           python -m pip install --no-index --find-links python/dist tripletrail
           python -c "import tripletrail; e = tripletrail.Engine(); print(e.query('ASK {}'))"
+          python - python/dist/*.whl <<'EOF'
+          import sys, zipfile
+          names = zipfile.ZipFile(sys.argv[1]).namelist()
+          for f in ("LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.md"):
+              assert f"tripletrail/{f}" in names, f"{f} is not in the wheel"
+          print("license files in the wheel")
+          EOF
+          ls -l python/dist
       - uses: actions/upload-artifact@v4
         with:
           name: python-wheels-${{ matrix.os }}-${{ matrix.target }}
           path: python/dist/*.whl
-
-  python-sdist:
-    needs: check
-    if: github.event_name == 'push' || inputs.python
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - run: cp LICENSE NOTICE python/
-      - uses: PyO3/maturin-action@v1
-        with:
-          working-directory: python
-          command: sdist
-          args: --out dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: python-sdist
-          path: python/dist/*.tar.gz
 
   # The JavaScript client as npm would publish it, kept as `matdata-tripletrail-client-<version>.tgz`.
   npm-pack:
@@ -340,7 +351,7 @@ jobs:
   # PyPI with trusted publishing: the project's publisher on pypi.org names this repository,
   # this workflow (release.yml) and the environment `pypi`. Only after the GitHub release.
   publish-pypi:
-    needs: [release, python-wheels, python-sdist]
+    needs: [release, python-wheels]
     if: github.event_name == 'push' && vars.PUBLISH_PYPI == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -352,11 +363,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: python-*
+          pattern: python-wheels-*
           path: dist
           merge-multiple: true
       - run: ls -l dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      # Pinned by commit: it runs with id-token: write. v1.14.3.
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
         with:
           packages-dir: dist
 
