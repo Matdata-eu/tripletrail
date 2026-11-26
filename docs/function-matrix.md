@@ -361,6 +361,12 @@ is none of these, or an empty period, gives no value (an error, as a bad cast do
 | Set operations (`span`, `gap`, `intersection`), the ISWC 2025 `tfn:` functions | ⬜ | #304. |
 | OWL-Time instants and intervals read as one period | ⬜ | #301. |
 
+SPARQL's own `=` and `ORDER BY` see a `tt:period` as a literal of a datatype they do not know:
+`"2020/2021"^^tt:period` is not `=` to its canonical form, and periods sort by their text.
+Compare them with `tt:periodEquals` and order by `tt:periodStart(?p)`; a value order of
+periods comes with the validity column of #303. The offset is the dataset's when a function is
+called, so SHACL constraints and rules, user-defined functions and queries all read at it.
+
 The relations and the two checks are tested against a truth table made from PostgreSQL's
 `tstzrange` operators (`crates/tripletrail/tests/data/period_relations.sql`).
 

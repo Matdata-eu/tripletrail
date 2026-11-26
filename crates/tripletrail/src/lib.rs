@@ -782,10 +782,10 @@ pub fn extension_functions() -> Vec<NamedNode> {
                         && !n.as_str().ends_with("#uriString")
                         && !n.as_str().ends_with("#splitParts")
                         && !n.as_str().ends_with("#splitPart")
-                        && !temporal::is_internal(n.as_str())
                 }),
         )
         .chain(ttfn::rewritten())
+        .chain(temporal::names())
         .collect()
 }
 
@@ -1386,7 +1386,12 @@ impl Engine {
             )
             .with_custom_aggregate_function(NamedNode::new_unchecked(MAKE_LINE), make_line);
             let mut evaluator = tripletrail_fx::register_functions(evaluator);
-            for (name, f) in xfn::functions().into_iter().chain(ttfn::functions()) {
+            let temporal = temporal::functions(Arc::clone(&self.time_offset));
+            for (name, f) in xfn::functions()
+                .into_iter()
+                .chain(ttfn::functions())
+                .chain(temporal)
+            {
                 evaluator = evaluator.with_custom_function(name, move |args| f(args));
             }
             for (name, make) in statagg::aggregates() {
@@ -1666,7 +1671,7 @@ impl Engine {
         base_iri: Option<&str>,
     ) -> Result<PreparedQuery, Error> {
         let hints = Hints::parse(query).map_err(Error::Request)?;
-        let query = self.with_time_offset(|| Self::parse_query_with_base(query, base_iri))?;
+        let query = Self::parse_query_with_base(query, base_iri)?;
         Ok(PreparedQuery { query, hints })
     }
 
@@ -1689,8 +1694,7 @@ impl Engine {
         query: &str,
         options: QueryOptions,
     ) -> Result<(QueryResults<'static>, CacheStatus), Error> {
-        let query = self
-            .with_time_offset(|| Self::parse_query_with_base(query, options.base_iri.as_deref()))?;
+        let query = Self::parse_query_with_base(query, options.base_iri.as_deref())?;
         self.query_parsed(query, options)
     }
 
@@ -2888,7 +2892,7 @@ impl Engine {
         query: &str,
         readable: Option<&ReadableGraphs>,
     ) -> Result<String, Error> {
-        let mut query = self.with_time_offset(|| Self::parse_query(query))?;
+        let mut query = Self::parse_query(query)?;
         if self.inline_functions(&mut query) && readable.is_some() {
             return Err(Error::Forbidden(FUNCTIONS_REFUSED.to_owned()));
         }
@@ -3233,9 +3237,7 @@ impl Engine {
     }
 
     fn update_hinted(&self, update: &str, options: &UpdateOptions) -> Result<(), Error> {
-        let mut update = self.with_time_offset(|| {
-            Self::parse_update_with_base(update, options.base_iri.as_deref())
-        })?;
+        let mut update = Self::parse_update_with_base(update, options.base_iri.as_deref())?;
         if let Some((default, named)) = &options.using {
             for operation in &mut update.operations {
                 if let spargebra::GraphUpdateOperation::DeleteInsert { using, .. } = operation {
@@ -3897,10 +3899,6 @@ impl Engine {
     /// The offset of [`Engine::set_time_offset`], in minutes.
     pub fn time_offset(&self) -> i64 {
         self.time_offset.load(Ordering::Relaxed)
-    }
-
-    fn with_time_offset<T>(&self, f: impl FnOnce() -> T) -> T {
-        temporal::with_offset(self.time_offset(), f)
     }
 
     /// Turns the spatial FILTER rewrite on or off (on by default; off is for comparisons).

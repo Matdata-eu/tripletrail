@@ -1340,7 +1340,6 @@ pub fn functions() -> Vec<(NamedNode, Func)> {
 
     out.into_iter()
         .map(|(n, f)| (NamedNode::new_unchecked(n), f))
-        .chain(crate::temporal::functions())
         .collect()
 }
 

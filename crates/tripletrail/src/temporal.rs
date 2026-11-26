@@ -8,26 +8,23 @@
 //!
 //! Values without a timezone are read at an offset: UTC unless the call gives another
 //! (`tt:period(x, "+01:00")`) or the engine has a default ([`crate::Engine::set_time_offset`]).
-//! Calls are rewritten before evaluation (see [`rewrite`]) to internal functions that take the
-//! offset first, and an unbound variable given for a side of `tt:period(start, end)` is passed
-//! as an open side.
+//! The functions read the engine's offset when they are called. A call is rewritten before
+//! evaluation (see [`rewrite`]) so that an unbound variable given for a side of
+//! `tt:period(start, end)` is passed as an open side.
 
 use crate::xfn::Func;
 use oxigraph::model::vocab::xsd;
 use oxigraph::model::{Literal, NamedNode, Term};
 use oxsdatatypes::{DayTimeDuration, Decimal};
 use spargebra::algebra::{Expression, Function};
-use spargebra::term::Literal as AlgebraLiteral;
-use std::cell::Cell;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 const TT: &str = crate::ttfn::MG;
 /// The datatype of periods: `http://w3id.org/tripletrail/fn#period`.
 pub const PERIOD: &str = "http://w3id.org/tripletrail/fn#period";
 /// What a rewritten call passes for an unbound side of `tt:period(start, end)`.
 const OPEN: &str = "http://w3id.org/tripletrail/fn#openSide";
-/// Internal functions are the public name with this prefix: `tt:_period` and so on.
-const INTERNAL: &str = "_";
 
 /// The largest year a period may name, before or after year 0.
 const MAX_YEAR: i64 = 999_999;
@@ -563,79 +560,40 @@ fn implementations() -> Vec<(&'static str, Implementation)> {
     out
 }
 
-/// Every function of this module by IRI: the public names (read at UTC) and the internal
-/// ones calls are rewritten to, which take the offset in minutes first.
-pub fn functions() -> Vec<(NamedNode, Func)> {
-    let mut out: Vec<(NamedNode, Func)> = Vec::new();
-    for (name, f) in implementations() {
-        let public = Arc::clone(&f);
-        out.push((
-            NamedNode::new_unchecked(format!("{TT}{name}")),
-            Arc::new(move |args: &[Term]| public(0, args)),
-        ));
-        out.push((
-            NamedNode::new_unchecked(format!("{TT}{INTERNAL}{name}")),
-            Arc::new(move |args: &[Term]| {
-                let (offset, args) = args.split_first()?;
-                let Term::Literal(o) = offset else {
-                    return None;
-                };
-                f(o.value().parse().ok()?, args)
-            }),
-        ));
-    }
-    out
+/// Every function of this module by IRI, reading a value without a timezone at `offset`
+/// (minutes east of UTC) as it is when the function is called: the engine's
+/// [`crate::Engine::set_time_offset`], so every way a query reaches the evaluator (SHACL
+/// constraints and rules, user-defined functions, prepared queries) reads at the same offset.
+pub fn functions(offset: Arc<AtomicI64>) -> Vec<(NamedNode, Func)> {
+    implementations()
+        .into_iter()
+        .map(|(name, f)| {
+            let offset = Arc::clone(&offset);
+            let func: Func = Arc::new(move |args: &[Term]| f(offset.load(Ordering::Relaxed), args));
+            (NamedNode::new_unchecked(format!("{TT}{name}")), func)
+        })
+        .collect()
 }
 
-/// Whether `iri` is one of the internal functions, which the service description leaves out.
-pub fn is_internal(iri: &str) -> bool {
-    iri.strip_prefix(TT)
-        .and_then(|n| n.strip_prefix(INTERNAL))
-        .is_some_and(|n| implementations().iter().any(|(name, _)| *name == n))
-}
-
-thread_local! {
-    /// The offset calls are rewritten with on this thread ([`with_offset`]).
-    static OFFSET: Cell<i64> = const { Cell::new(0) };
-}
-
-/// Runs `f` with `offset` (minutes east of UTC) as the default of the calls it rewrites.
-pub(crate) fn with_offset<T>(offset: i64, f: impl FnOnce() -> T) -> T {
-    let before = OFFSET.with(|o| o.replace(offset));
-    let out = f();
-    OFFSET.with(|o| o.set(before));
-    out
-}
-
-/// `tt:period…(args)` as the internal function with the default offset first. A variable
-/// given for a side of `tt:period(start, end)` is passed as an open side when unbound.
+/// `tt:period(start, end [, offset])` with each variable given for a side passed as an open
+/// side when it is unbound: `IF(BOUND(?v), ?v, tt:openSide)`. A function is not called with
+/// an unbound argument.
 pub(crate) fn rewrite(iri: &str, args: &mut Vec<Expression>) -> Option<Expression> {
-    let name = iri.strip_prefix(TT)?;
-    if !implementations().iter().any(|(n, _)| *n == name) {
+    if iri.strip_prefix(TT)? != "period" || args.len() < 2 {
         return None;
     }
     let mut args = std::mem::take(args);
-    if name == "period" && args.len() >= 2 {
-        for a in args.iter_mut().take(2) {
-            if let Expression::Variable(v) = a {
-                *a = Expression::If(
-                    Box::new(Expression::Bound(v.clone())),
-                    Box::new(Expression::Variable(v.clone())),
-                    Box::new(Expression::NamedNode(NamedNode::new_unchecked(OPEN))),
-                );
-            }
+    for a in args.iter_mut().take(2) {
+        if let Expression::Variable(v) = a {
+            *a = Expression::If(
+                Box::new(Expression::Bound(v.clone())),
+                Box::new(Expression::Variable(v.clone())),
+                Box::new(Expression::NamedNode(NamedNode::new_unchecked(OPEN))),
+            );
         }
     }
-    let offset = OFFSET.with(Cell::get);
-    args.insert(
-        0,
-        Expression::Literal(AlgebraLiteral::new_typed_literal(
-            offset.to_string(),
-            xsd::INTEGER,
-        )),
-    );
     Some(Expression::FunctionCall(
-        Function::Custom(NamedNode::new_unchecked(format!("{TT}{INTERNAL}{name}"))),
+        Function::Custom(NamedNode::new_unchecked(PERIOD)),
         args,
     ))
 }

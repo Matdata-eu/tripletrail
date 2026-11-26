@@ -365,3 +365,75 @@ fn the_service_description_lists_the_public_names_only() {
             .any(|n| n.contains("#_period") || n.contains("#_is"))
     );
 }
+
+/// The dataset's offset reaches every way a query is evaluated (#300 review): SHACL-SPARQL
+/// constraints and user-defined functions read dates at it as `/query` does, and an unbound
+/// side is open there too.
+#[test]
+fn constraints_and_user_functions_read_at_the_engines_offset() {
+    use oxigraph::model::{GraphNameRef, NamedNode, Triple};
+    let e = Engine::new_tripletrail();
+    e.load(
+        RdfFormat::Turtle,
+        br#"@prefix ex: <http://example.com/> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+        ex:d ex:day "2026-11-26"^^xsd:date ."#
+            .as_slice(),
+    )
+    .unwrap();
+    let shapes = NamedNode::new("http://example.com/shapes").unwrap();
+    let declarations = r#"
+        @prefix ex: <http://example.com/> .
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+        ex:prefixes sh:declare
+            [ sh:prefix "ex" ; sh:namespace "http://example.com/"^^xsd:anyURI ] ,
+            [ sh:prefix "tt" ; sh:namespace "http://w3id.org/tripletrail/fn#"^^xsd:anyURI ] ,
+            [ sh:prefix "xsd" ; sh:namespace "http://www.w3.org/2001/XMLSchema#"^^xsd:anyURI ] .
+    "#;
+    // In Brussels (+01:00), 23:30 UTC on the 25th is on the 26th.
+    let shapes_text = format!(
+        r#"{declarations}
+        ex:Late a sh:NodeShape ; sh:targetSubjectsOf ex:day ;
+            sh:sparql [ sh:prefixes ex:prefixes ; sh:select """
+                SELECT $this WHERE {{ $this ex:day ?d
+                    FILTER(tt:periodContains(tt:period(?d, ?none), "2026-11-25T23:30:00Z"^^xsd:dateTime)) }}""" ] .
+        "#
+    );
+    e.load_into(shapes.clone(), RdfFormat::Turtle, shapes_text.as_bytes())
+        .unwrap();
+    let conforms = |e: &Engine| {
+        e.validate(&shapes, GraphNameRef::DefaultGraph, &mut |_| {})
+            .unwrap()
+    };
+    assert!(conforms(&e));
+    e.set_time_offset(60);
+    assert!(!conforms(&e));
+
+    let functions = format!(
+        r#"{declarations}
+        ex:dayStart a sh:SPARQLFunction ; sh:prefixes ex:prefixes ;
+            sh:parameter [ sh:path ex:day ] ;
+            sh:select "SELECT (STR(tt:periodStart($day)) AS ?s) WHERE {{}}" .
+        ex:startOf a sh:SPARQLFunction ; sh:prefixes ex:prefixes ;
+            sh:parameter [ sh:path ex:node ] ;
+            sh:select "SELECT (STR(tt:periodStart(?d)) AS ?s) WHERE {{ $node ex:day ?d }}" .
+        "#
+    );
+    let triples: Vec<Triple> = oxigraph::io::RdfParser::from_format(RdfFormat::Turtle)
+        .for_slice(functions.as_bytes())
+        .map(|q| Triple::from(q.unwrap()))
+        .collect();
+    let e = e.with_functions_from(triples).unwrap();
+    for call in [
+        "<http://example.com/dayStart>(\"2026-11-26\"^^xsd:date)",
+        "<http://example.com/startOf>(ex:d)",
+    ] {
+        assert_eq!(one(&e, call), "\"2026-11-25T23:00:00Z\"", "{call}");
+    }
+    e.set_time_offset(0);
+    assert_eq!(
+        one(&e, "<http://example.com/startOf>(ex:d)"),
+        "\"2026-11-26T00:00:00Z\""
+    );
+}
