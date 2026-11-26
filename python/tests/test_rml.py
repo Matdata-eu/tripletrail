@@ -123,3 +123,29 @@ mappings:
     # Without a database, an R2RML mapping has nothing to read.
     with pytest.raises((ValueError, OSError)):
         Engine().run_mapping(R2RML, base_dir=str(tmp_path))
+
+
+OWN_DATABASE = """@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
+@prefix d2rq: <http://www.wiwiss.fu-berlin.de/suhl/bizer/D2RQ/0.1#> .
+@prefix ex: <http://example.com/> .
+<#DB> a d2rq:Database ; d2rq:jdbcDSN "jdbc:postgresql://127.0.0.1:1/x" ;
+  d2rq:jdbcDriver "org.postgresql.Driver" .
+<#Station> rml:logicalSource [ rml:source <#DB> ; rml:query "SELECT * FROM station" ;
+    rr:sqlVersion rr:SQL2008 ] ;
+  rr:subjectMap [ rr:template "http://example.com/station/{code}" ] .
+"""
+
+
+def test_a_mapping_inside_allowed_names_no_database(tmp_path):
+    """With `allowed`, a database the mapping names itself is refused before connecting."""
+    e = Engine()
+    with pytest.raises(ValueError, match="names its own database"):
+        e.run_mapping(OWN_DATABASE, base_dir=str(tmp_path), allowed=[str(tmp_path)])
+    # Allowed by the caller, it connects (and here finds nothing listening).
+    with pytest.raises(OSError):
+        e.run_mapping(OWN_DATABASE, base_dir=str(tmp_path), allowed=[str(tmp_path)], databases=True)
+    # Without `allowed`, as `tripletrail lift`.
+    with pytest.raises(OSError):
+        e.run_mapping(OWN_DATABASE, base_dir=str(tmp_path))
+    assert len(e) == 0

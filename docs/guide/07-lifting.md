@@ -380,6 +380,10 @@ A mapping that reads PostgreSQL tables or queries reads them from Python too: fr
 made = e.run_mapping(path="assets.r2rml.ttl", database="postgresql://reader@db/assets")
 ```
 
+A mapping that names its own database connects to the host it names. To run a mapping you
+did not write, give `allowed` (the folders it may read): it then may not name a database of
+its own unless you also pass `databases=True`.
+
 See [the Python package](../../python/README.md#rml-mappings).
 
 For a lift that is one step of a larger job (lift, load, update, validate, export), use a

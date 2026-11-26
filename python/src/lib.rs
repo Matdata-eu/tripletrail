@@ -47,6 +47,38 @@ fn rml_err(e: tripletrail_rml::RmlError) -> PyErr {
     }
 }
 
+/// A loader that refuses the databases a mapping names itself (`d2rq:Database`, YARRRML
+/// `access:`) unless `allowed`, before connecting: the caller's `database` is still read.
+#[cfg(feature = "postgres")]
+struct OwnDatabases<L> {
+    loader: L,
+    allowed: bool,
+}
+
+#[cfg(feature = "postgres")]
+impl<L: tripletrail_rml::Loader> tripletrail_rml::Loader for OwnDatabases<L> {
+    fn load(
+        &self,
+        source: &tripletrail_rml::LogicalSource,
+    ) -> Result<Vec<u8>, tripletrail_rml::RmlError> {
+        self.loader.load(source)
+    }
+
+    fn table(
+        &self,
+        source: &tripletrail_rml::LogicalSource,
+    ) -> Result<tripletrail_rml::Table, tripletrail_rml::RmlError> {
+        if !self.allowed && source.database.is_some() {
+            return Err(tripletrail_rml::RmlError::Mapping(
+                "the mapping names its own database: with allowed, pass databases=True to let \
+                 it connect, or give the database as database="
+                    .to_owned(),
+            ));
+        }
+        self.loader.table(source)
+    }
+}
+
 fn io_err(e: impl std::fmt::Display) -> PyErr {
     PyIOError::new_err(e.to_string())
 }
@@ -684,10 +716,12 @@ impl PyEngine {
     /// directory, as `tripletrail lift` does; with `allowed` (a list of directories) only files
     /// inside them are read. Quads in the default graph go to `to_graph` when given; a
     /// mapping's own graph maps are kept. PostgreSQL tables and queries are read as sources
-    /// (#21): from the `d2rq:Database` a mapping names, else from `database` (a connection
-    /// string, `postgresql://user:password@host:port/name`), as `tripletrail lift --database`
-    /// does. Logical targets are refused: use `tripletrail lift` for them.
-    #[pyo3(signature = (mapping = None, *, path = None, yarrrml = false, base_dir = None, allowed = None, to_graph = None, database = None))]
+    /// (#21): from `database` (a connection string,
+    /// `postgresql://user:password@host:port/name`), as `tripletrail lift --database` does, or
+    /// from the `d2rq:Database` a mapping names itself. With `allowed`, a mapping may not name
+    /// its own database (it would connect to any host it names) unless `databases` is true.
+    /// Logical targets are refused: use `tripletrail lift` for them.
+    #[pyo3(signature = (mapping = None, *, path = None, yarrrml = false, base_dir = None, allowed = None, to_graph = None, database = None, databases = None))]
     #[allow(clippy::too_many_arguments)]
     fn run_mapping(
         &self,
@@ -699,7 +733,10 @@ impl PyEngine {
         allowed: Option<Vec<PathBuf>>,
         to_graph: Option<&Bound<'_, PyAny>>,
         database: Option<String>,
+        databases: Option<bool>,
     ) -> PyResult<usize> {
+        // A mapping run inside `allowed` reaches no host it names itself, unless asked for.
+        let own_databases = databases.unwrap_or(allowed.is_none());
         let to_graph = to_graph.map(graph_from_py).transpose()?;
         let base = match base_dir {
             Some(b) => b,
@@ -748,9 +785,13 @@ impl PyEngine {
                 },
             };
             #[cfg(feature = "postgres")]
-            let loader = tripletrail_rml::DatabaseLoader::new(files, database);
+            let loader = OwnDatabases {
+                loader: tripletrail_rml::DatabaseLoader::new(files, database),
+                allowed: own_databases,
+            };
             #[cfg(not(feature = "postgres"))]
             let loader = {
+                let _ = own_databases;
                 if database.is_some() {
                     return Err(PyValueError::new_err(
                         "this build reads no databases: build it with the postgres feature",

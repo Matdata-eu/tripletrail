@@ -115,6 +115,10 @@ with TLS as its `sslmode` says):
 made = e.run_mapping(path="assets.r2rml.ttl", database="postgresql://reader@db/assets")
 ```
 
+A mapping can name its own database, so running one connects to the host it names. With
+`allowed`, for mappings you did not write, that is refused (a `ValueError`, before any
+connection) unless you pass `databases=True`; the `database` you give is still read.
+
 A mapping error is a `ValueError`, a source that cannot be read an `OSError`. Mappings with
 logical targets are refused: use `tripletrail lift` for them. See
 [docs/rml.md](../docs/rml.md).
