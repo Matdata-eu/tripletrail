@@ -207,6 +207,19 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
             reply.headers.push(("Cache-Control", "no-cache".to_owned()));
             return Ok(reply);
         }
+        ["brand", "custom.css"] => {
+            return match &brand.css {
+                Some(css) => {
+                    let mut reply = page("text/css; charset=utf-8", css);
+                    reply.headers.push(("Cache-Control", "no-cache".to_owned()));
+                    reply
+                        .headers
+                        .push(("X-Content-Type-Options", "nosniff".to_owned()));
+                    Ok(reply)
+                }
+                None => Err(HttpError(404, "No --ui-css stylesheet".to_owned())),
+            };
+        }
         ["brand", which] => {
             return match brand.image(which) {
                 Some(Image::File {
@@ -294,6 +307,11 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
                 .replace(
                     "{{CONTACT}}",
                     &html_attribute(brand.contact_email.as_deref().unwrap_or_default()),
+                )
+                .replace("{{CUSTOM_CSS}}", brand.css_link())
+                .replace(
+                    "{{MAP_VIEWS}}",
+                    &html_attribute(&brand.map_views_json().to_string()),
                 )
                 .replace("{{UI_HOME}}", brand.defaults.home.unwrap_or("datasets"))
                 .replace("{{UI_THEME}}", brand.defaults.theme.unwrap_or("auto"))

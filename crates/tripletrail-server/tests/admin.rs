@@ -3495,11 +3495,12 @@ fn banner_footer_links_and_contact_reach_the_pages() {
     );
 }
 
-/// `--default-dataset`, `--ui-home`, `--ui-theme` and `--map-view` (#262) reach the web UI's
-/// page for its scripts, and `/$/ui/config.json`; without them the page keeps its defaults.
+/// `--default-dataset`, `--ui-home`, `--ui-theme`, `--map-view` and `--ui-css` (#262) reach
+/// the web UI's page for its scripts, and `/$/ui/config.json`; without them the page keeps its
+/// defaults. `--hide-version` leaves the version out of the `Server` header.
 #[test]
 fn viewer_defaults_reach_the_web_ui() {
-    let start = |branding| {
+    let start = |branding, hide_version| {
         let server = Server::bind(
             "127.0.0.1:0",
             [
@@ -3508,6 +3509,7 @@ fn viewer_defaults_reach_the_web_ui() {
             ],
             Options {
                 branding,
+                hide_version,
                 ..Options::default()
             },
         )
@@ -3523,10 +3525,21 @@ fn viewer_defaults_reach_the_web_ui() {
             .into_string()
             .unwrap()
     };
+    let dir = temp_dir("ui-css");
+    let css = dir.path().join("custom.css");
+    std::fs::write(&css, ".topbar { border-bottom: 3px solid #00634f; }\n").unwrap();
     let base = start(
         tripletrail_server::branding::Branding::default()
-            .with_defaults(Some("rail"), Some("map"), Some("dark"), Some("7/50.8/4.4"))
+            .with_defaults(
+                Some("rail"),
+                Some("map"),
+                Some("dark"),
+                &["7/50.8/4.4", "a=12/59.9/10.7"],
+            )
+            .unwrap()
+            .with_css(Some(css.to_str().unwrap()))
             .unwrap(),
+        true,
     );
     let page = get(&base, "/$/ui/");
     for attribute in [
@@ -3534,24 +3547,57 @@ fn viewer_defaults_reach_the_web_ui() {
         "data-ui-theme=\"dark\"",
         "data-default-dataset=\"rail\"",
         "data-map-view=\"7/50.8/4.4\"",
+        "data-map-views=\"{&quot;a&quot;:&quot;12/59.9/10.7&quot;}\"",
         "<a class=\"brand\" data-route href=\"/$/ui/map\">",
+        "<link rel=\"stylesheet\" href=\"/$/ui/brand/custom.css\">",
     ] {
         assert!(page.contains(attribute), "{attribute} in {page}");
     }
     let config: Value = serde_json::from_str(&get(&base, "/$/ui/config.json")).unwrap();
     assert_eq!(
         config["site"]["defaults"],
-        serde_json::json!({ "dataset": "rail", "home": "map", "theme": "dark", "mapView": "7/50.8/4.4" })
+        serde_json::json!({
+            "dataset": "rail", "home": "map", "theme": "dark", "mapView": "7/50.8/4.4",
+            "mapViews": { "a": "12/59.9/10.7" }
+        })
     );
+    let sheet = ureq::get(&format!("{base}/$/ui/brand/custom.css"))
+        .call()
+        .unwrap();
+    assert_eq!(sheet.content_type(), "text/css");
+    assert_eq!(sheet.header("Server"), Some("TripleTrail"));
+    assert!(sheet.into_string().unwrap().contains("#00634f"));
 
-    let base = start(tripletrail_server::branding::Branding::default());
+    let base = start(tripletrail_server::branding::Branding::default(), false);
     let page = get(&base, "/$/ui/");
     for attribute in [
         "data-ui-home=\"datasets\"",
         "data-ui-theme=\"auto\"",
         "data-default-dataset=\"\"",
         "data-map-view=\"\"",
+        "data-map-views=\"{}\"",
     ] {
         assert!(page.contains(attribute), "{attribute} in {page}");
     }
+    assert!(!page.contains("custom.css"));
+    let answer = ureq::get(&format!("{base}/$/ui/config.json"))
+        .call()
+        .unwrap();
+    assert!(
+        answer
+            .header("Server")
+            .is_some_and(|s| s.starts_with("TripleTrail/")),
+        "{:?}",
+        answer.header("Server")
+    );
+    assert_eq!(
+        ureq::get(&format!("{base}/$/ui/brand/custom.css"))
+            .call()
+            .map_err(|e| match e {
+                ureq::Error::Status(code, _) => code,
+                _ => 0,
+            })
+            .unwrap_err(),
+        404
+    );
 }
