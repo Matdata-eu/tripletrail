@@ -919,8 +919,7 @@ A reference is an object: ask for its keys, and TripleTrail reads the records it
 one query per level however many records the list has. Open
 [http://localhost:7878/ds/graphql](http://localhost:7878/ds/graphql) in a browser for the
 playground: the schema on the left, where **Use as query** writes a query for a list or a
-record, an editor, and the answer (**Run**, or Ctrl+Enter). GraphQL only reads: write with
-the REST API. A request has the query timeout as a whole and reads at most 500,000 values,
+record, an editor, and the answer (**Run**, or Ctrl+Enter). A request has the query timeout as a whole and reads at most 500,000 values,
 so a query that follows references back and forth many levels deep gets an error rather than
 a huge answer: ask for fewer records or levels.
 
@@ -933,6 +932,42 @@ curl -s -o /dev/null -D - -H 'Accept: text/html' http://localhost:7878/ds/graphq
 ```text
 /$/ui/graphql/ds
 ```
+
+### Write records with mutations
+
+Each class also has three mutations, which write as the REST API does: `createStation`,
+`updateStation` (only the keys you give; `null` removes a key's values) and `deleteStation`.
+A record is a `JSON` value with the REST API's keys, so a key that is not a GraphQL name
+still works. A mutation is sent with `POST`, and needs the same rights as a SPARQL update:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/ds/graphql -H 'Content-Type: application/json' -d '{
+  "query": "mutation($r: JSON!) { createStation(record: $r) { id label code } }",
+  "variables": {"r": {"id": "https://example.org/rail#LUX", "label": "Luxembourg", "code": "LUX"}}}'
+```
+
+<!-- test: output -->
+```text
+{"data":{"createStation":{"id":"https://example.org/rail#LUX","label":"Luxembourg","code":"LUX"}}}
+```
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/ds/graphql -H 'Content-Type: application/json' \
+  -d '{"query": "mutation { deleteStation(id: \"https://example.org/rail#LUX\") }"}'
+```
+
+<!-- test: output -->
+```text
+{"data":{"deleteStation":"https://example.org/rail#LUX"}}
+```
+
+Create and update answer the record as it now is, with the keys you ask for. Before anything is
+written, the record is checked against the dataset's own shapes (see
+[Make it yours](#make-it-yours-shapes)): one that breaks them changes nothing, and the error
+names each key and what is wrong with it (`tracks: A station has at least one track`), with
+the full violations under `extensions.violations`.
 
 ## From JavaScript
 
@@ -1796,7 +1831,7 @@ rows that rinf-describe shows, in the same order.
 - `clients/js` is a JavaScript client for queries, updates, graphs and the admin API.
 - `--mcp` serves each dataset to AI agents at `/ds/mcp`, read-only and under the caller's access.
 - `/ds/graphql` answers GraphQL queries over the same records, with a playground at
-  `/$/ui/graphql/ds`.
+  `/$/ui/graphql/ds`, and writes them with mutations checked against the shapes.
 - The dataset's shapes decide what they show, and can be customised, or come from a shape
   pack shared between datasets; `?dry=true` and `tripletrail shapes check` say what a new
   release of a pack would change first.
