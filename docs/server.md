@@ -170,7 +170,11 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   dataset's warm-up at most five minutes in all: the collections left then are made by the
   first request that needs them. The log says `{ds}: map ready: N collections and their facets
   in S s`, or which collections ran out of time, with the facets that failed (a computed facet
-  that times out). `--no-warm-up`
+  that times out). After a load, an update or a change of the shapes, it makes the map again
+  once the dataset has kept still for 30 s (#258), and logs `{ds}: after a change, map ready:
+  …`, so the first visitor after a nightly load does not wait for the facet counts either
+  (on RINF's eight countries, 0.13 s instead of 68 s for the facets of all 31 collections).
+  `--no-warm-up`
   (`TRIPLETRAIL_NO_WARM_UP`) leaves both to the first query or map request that needs them. A dataset that is not on
   TripleTrail's store keeps no such caches and is skipped.
 - `--cors <origin>` (repeatable) allows cross-origin requests from those origins, `--cors`
@@ -695,7 +699,10 @@ curl -X PUT -H "Authorization: Bearer $ADMIN" http://localhost:7878/$/datasets/r
   its labels too; `atlas:geometryPath` (each branch of an alternative) and `atlas:geometryFrom P`
   (each geometry path of the set behind `P`) become one `tts:geometry`, an
   `sh:alternativePath` when there are several, so a feature with a geometry on two branches
-  has both (RINF Atlas takes the first); `atlas:lineBetween ( A B )` becomes a second way
+  has both (RINF Atlas takes the first); then, as RINF Atlas derives a geometry round after
+  round, a way for each of two more rounds, behind `P` and one (two) more
+  `atlas:geometryFrom` links of the set, for the features the ways before gave none (a
+  detector takes its track's section's); `atlas:lineBetween ( A B )` becomes a last way
   with `tts:lineBetween`, each end every geometry path of the set behind `A` or `B`, for the
   features without a geometry of their own; `atlas:enabled false` becomes `sh:deactivated`;
   facets of kind `terms` and `boolean`, `range` and `text` get `tts:facet`
@@ -3112,12 +3119,18 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   give one per class with a geometry; a dataset's own shapes choose the classes, their ids and
   properties, and hide one with `tts:hiddenFrom tts:Reader-OgcFeatures`.
 - **Features** are the class's instances. The geometry is the first way's (by `sh:order`)
-  value as GeoJSON in CRS84.
+  value as GeoJSON in CRS84; an instance with no value on it takes the next way's, and so on
+  (#259). When the collections are made (again after each write), each later way is narrowed
+  to the instances the ways before it leave without a geometry, when there are at most 1,000
+  (and dropped when none of them has a value on it), so that a tile does not look for every
+  instance on it. The narrowing is decided on the whole dataset: a caller who may read only
+  some graphs gets a later way's geometry for those instances alone, even where an earlier
+  way's geometry is in a graph it cannot read.
 - **A line between two features.** A geometry way with `tts:lineBetween ( A B )` in place of
   `sh:path` (two SHACL paths, each to a geometry literal) gives the straight line from the
   geometry at the end of `A` to the one at the end of `B` (`st:ST_MakeLine`), such as a
   section of line between its two operational points. The map, OGC API Features, the REST
-  API and search take it for the instances that have no value on the first way with
+  API and search take it for the instances that have no value on any way with
   `sh:path`, and filter on it as on any geometry. Such lines have no spatial index: the
   server reads the box of every line once per store generation (and per caller's access), in
   the background, and a tile, `bbox` or search area builds only the lines whose box meets it.
