@@ -1663,12 +1663,16 @@ impl Snapshot {
                 .unwrap_or(n)
         };
         let parts = crate::par::chunks(n, |range| {
+            // Chunks are copied into one table at the end: their rows may take half the
+            // limit, so that the copy fits in the rest (#234).
+            let merged = range.len() < n;
             let (lo, hi) = (edge(range.start), edge(range.end));
             self.seek_run(
                 rows,
                 &slots,
                 at,
                 open(),
+                merged,
                 lo..hi,
                 &key,
                 &row_at,
@@ -1709,6 +1713,7 @@ impl Snapshot {
         slots: &[IdSlot; 3],
         at: usize,
         scan: crate::index::Scan,
+        merged: bool,
         range: Range<usize>,
         key: &(dyn Fn(usize) -> u64 + Sync),
         row_at: &(dyn Fn(usize) -> usize + Sync),
@@ -1727,8 +1732,9 @@ impl Snapshot {
         let n = range.end;
         // About one output row per row is the common case (a star on the subject).
         let mut out = Out::new(rows, if count { 0 } else { range.len() }, cancelled);
-        let max = out.max.saturating_add(rows.ids.len());
-        // The ids of this chunk already added to `made`; false once past the limit.
+        let max = if merged { out.max / 2 } else { out.max }.saturating_add(rows.ids.len());
+        // The ids of this chunk already added to `made` (its capacity: a `Vec`'s room is
+        // memory too); false once past the limit.
         let mut counted = 0;
         let within = |now: usize, counted: &mut usize| {
             let more = now - *counted;
@@ -1754,7 +1760,9 @@ impl Snapshot {
             let Some(q) = cur else { break };
             steps += 1;
             // The other chunks' rows count against the same limit.
-            if steps.is_multiple_of(1024) && (cancelled() || !within(out.ids.len(), &mut counted)) {
+            if steps.is_multiple_of(1024)
+                && (cancelled() || !within(out.ids.capacity(), &mut counted))
+            {
                 return None;
             }
             let a = key(i);
@@ -1790,7 +1798,7 @@ impl Snapshot {
             }
             i = i2;
         }
-        within(out.ids.len(), &mut counted).then(|| (out.rows(), matched))
+        within(out.ids.capacity(), &mut counted).then(|| (out.rows(), matched))
     }
 
     /// Joins `rows` with `t` on the one variable `var` they share: both sides sorted by it

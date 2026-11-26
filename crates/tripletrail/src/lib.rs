@@ -15,6 +15,8 @@ mod cosine_order;
 mod direct;
 pub use cache::{CacheStatus, ResultCacheStats};
 pub use direct::IdSolutions;
+#[doc(hidden)]
+pub use direct::with_answer_cells;
 pub use hints::{Hints, without_defines};
 pub mod bind_join;
 mod count;
