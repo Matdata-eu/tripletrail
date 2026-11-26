@@ -596,10 +596,20 @@ not the store. Two things to fix next, neither of which blocks the switch:
 - **Stream the bulk load.** A load read its whole chunk and parsed every quad before
   interning them, so peak memory during a load (11.6 GB for all of RINF in 1 GB chunks) was three
   times what the store keeps afterwards. Done since: N-Triples and N-Quads are read and parsed
-  64 MB at a time, with each block's terms looked up in the dictionary by the parsing threads
-  (only new terms are added one by one), and the index permutations are built one after
+  64 MB at a time on every core, while one thread adds each block's terms to the dictionary,
+  and the index permutations are built one after
   another in one buffer. Loading the generated 60x60 grid (2.5 M triples, 359 MB of N-Triples)
   with `tripletrail load` now peaks at 350 MB instead of 1,267 MB, and takes 3.7 s instead of 4.0 s.
+
+Once a load's dictionary keys are in mapped files (past an eighth of `--memory-limit`), a term
+seen before is read back from those files at random. The thread that adds the terms did those
+reads one at a time, each one waiting for the disk alone, so a load of 5B triples on a network
+volume ran 39 hours at about 560 reads a second with a third of a core busy (#232). Now the
+terms of each block are first looked up on the lookup threads (`TRIPLETRAIL_LOOKUP_THREADS`),
+as the quad loads already did, and the adding thread only adds the new ones. On 48.9M synthetic
+triples (6.7 GB of N-Triples) with `--memory-limit 256M` and the process's memory capped at
+1.2 GB, 4 cores, the load takes 75 instead of 97 s and reads 15 instead of 38 GB from disk, with
+the same answers.
 
 ### Streaming bulk load on all of RINF
 

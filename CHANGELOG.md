@@ -51,6 +51,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- A bulk load of N-Triples or N-Quads whose dictionary had outgrown `--memory-limit` looked up the terms it had seen before one at a time, each waiting alone for its read from the mapped key files (#232). A load of 5B triples on a network volume ran 39 hours with a third of a core busy. The terms of each block are now looked up on the lookup threads first, as quad loads already did. On 48.9M synthetic triples with `--memory-limit 256M` and 1.2 GB of memory for the process, the load takes 75 instead of 97 s and reads 15 instead of 38 GB.
 - With `#pragma tt.id-rewrites off`, `SAMPLE` gives the stored term as it is written in the data (`"-92"^^xsd:int`, `2.50`), as Jena does and as the other executors already did, not the canonical number (`-92`).
 - `COUNT(DISTINCT *)` over a pattern with a blank node and a filter counted the solutions on term ids without the blank node's values, which the evaluator tells them apart by (3,000 instead of 15,000 in the test). Such a count is now left to the evaluator.
 - On term ids, a `NaN` double or float compared with itself (`FILTER(?m = ?m)`, `?m IN (?m)`, or two variables holding the same `NaN`) was equal, so the row was kept. `NaN` now equals nothing, itself included, as the evaluator and Jena have it, under `=`, `!=` and `IN` (#11).
