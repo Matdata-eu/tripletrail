@@ -878,6 +878,25 @@ impl Sum {
         Some(())
     }
 
+    /// Adds the values `other` summed (a part of the rows summed on another core, #10).
+    /// `None` when the total overflows, as [`Sum::add`].
+    pub(crate) fn merge(&mut self, other: &Sum) -> Option<()> {
+        self.add(match other.exact {
+            Exact::Integer(i) => Value::Integer(i),
+            Exact::Decimal(d) => Value::Decimal(d),
+        })?;
+        if let Some(f) = &other.doubles {
+            let mine = self.doubles.get_or_insert_with(Fsum::default);
+            for &x in &f.partials {
+                mine.add(x)?;
+            }
+            if let Some(x) = f.special {
+                mine.add(x)?;
+            }
+        }
+        Some(())
+    }
+
     /// The value of the sum, as a double once a double came in.
     fn total(&self) -> Option<Total> {
         Some(match (&self.doubles, self.exact) {

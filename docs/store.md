@@ -192,6 +192,9 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   (one sort of the strings, about 80 ms for 250 k terms); `MIN` and `MAX` compare texts
   until they are ready (without waiting on the build), and build them in place only after
   2^18 text comparisons, or wait for them after 2^12 when another query started the build.
+  `SUM` and `AVG` (without `DISTINCT`) of one group of more than 16,384 rows (an aggregate
+  without `GROUP BY`) are summed in parts on several cores, the parts added up exactly:
+  `SUM(DAY(?d))` over 93 k dates 7.6 → 4.1 ms on 4 cores.
   `SUM` and `AVG` of a condition (`SUM(?o > 0)`, `AVG(BOUND(?v))`) are answered on ids
   without evaluating it: a condition is a boolean, not a number, so the aggregate is
   unbound over any row and 0 over none, as in the evaluator.
