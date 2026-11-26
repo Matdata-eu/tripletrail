@@ -17,6 +17,7 @@
 //! | `atlas:unit` of a facet (a QUDT unit's local name) | `qudt:hasUnit` |
 //! | `atlas:colorBy` of a facet | `tts:colorBy` (suggested first in the map's "Colour by") |
 //! | `atlas:geometryFrom P` of a running track or track, with a `section-of-line` shape | `tts:rollsUpTo [ sh:path P ; sh:class ]` the section's class: the section takes its tracks' facets on the map, as RINF Atlas's `ROLLUP` |
+//! | the validity period RINF Atlas takes out of labels (`_VALIDITY` in `worker/atlas/extract.py`) | `tts:labelStrip` on every node shape |
 //! | a view (`atlas:view`, in `views/`) | an `tts:MapView`: `tts:key`, `rdfs:label`, `rdfs:comment`, `sh:order` |
 //! | `atlas:viewClass` of a view | `tts:showsClass`: the class of the node shape with that `atlas:key` |
 //! | `atlas:filter [ atlas:facet ; sh:in ]` of a view | `tts:filter [ tts:key ; sh:in ]` |
@@ -57,6 +58,11 @@ fn is_unit_name(name: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
+
+/// The validity period RINF writes at the end of its labels, which RINF Atlas takes out of
+/// them (`_VALIDITY` in `worker/atlas/extract.py`): "Brussel-West (from 2022-12-11 until
+/// 2078-12-31)" is shown "Brussel-West" (#260).
+pub const VALIDITY: &str = r"\s*\(from \d{4}-\d{2}-\d{2} until \d{4}-\d{2}-\d{2}\)$";
 
 /// The namespace of the RINF Atlas annotations.
 pub const ATLAS: &str = "https://rinf-atlas.matdata.eu/ns#";
@@ -129,6 +135,11 @@ pub fn from_atlas(shapes: &Graph, hidden_from: &[Reader]) -> (Graph, Vec<String>
         };
         let subject = NamedOrBlankNodeRef::from(iri.as_ref());
         out.insert(TripleRef::new(subject, rdf::TYPE, &sh("NodeShape")));
+        out.insert(TripleRef::new(
+            subject,
+            &tts("labelStrip"),
+            &Literal::new_simple_literal(VALIDITY),
+        ));
         for t in shapes.triples_for_subject(node_ref) {
             let p = t.predicate.as_str();
             if let Some(local) = p.strip_prefix(ATLAS) {
@@ -911,6 +922,16 @@ ex:op a sh:NodeShape ; atlas:key "op" ; sh:targetClass era:OperationalPoint ;
             &set,
             "ex:op tts:key \"op\" ; tts:color \"#d62728\" ; tts:minZoom 4 ; sh:targetClass era:OperationalPoint ; tts:hiddenFrom tts:Reader-Describe"
         ));
+        // RINF's validity period, which RINF Atlas takes out of labels (#260).
+        assert!(ask(
+            &set,
+            "ex:op tts:labelStrip ?p FILTER(CONTAINS(?p, \"until\"))"
+        ));
+        let strip = regex::Regex::new(VALIDITY).unwrap();
+        assert_eq!(
+            strip.replace("Brussel-West (from 2022-12-11 until 2078-12-31)", ""),
+            "Brussel-West"
+        );
         // Its facets too, so a subclass's describe shape does not inherit them.
         assert!(!ask(
             &set,

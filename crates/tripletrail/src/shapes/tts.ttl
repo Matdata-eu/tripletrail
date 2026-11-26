@@ -161,6 +161,11 @@ tts:labelPath a rdf:Property ;
     rdfs:comment "The SHACL path from an instance to its label."@en ;
     rdfs:domain sh:NodeShape .
 
+tts:labelStrip a rdf:Property ;
+    rdfs:label "label strip"@en ;
+    rdfs:comment "A regular expression (Rust regex syntax) whose matches are taken out of every label the map shows: facet values, search results and features. For example \\s*\\(from \\d{4}-\\d{2}-\\d{2} until \\d{4}-\\d{2}-\\d{2}\\)$ for the validity periods RINF writes into its labels. On any node shape of a set; the patterns of all the sets apply."@en ;
+    rdfs:range xsd:string .
+
 tts:iriTemplate a rdf:Property ;
     rdfs:label "IRI template"@en ;
     rdfs:comment "How the IRI of a new instance is made when the REST API or the Records page creates one without an IRI: {uuid} becomes a random UUID and {key} the new record's value of that key, percent-encoded. Without it, the IRI is urn:uuid: and a random UUID."@en ;

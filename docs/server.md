@@ -439,7 +439,12 @@ percent-encoded, so a customised set can override it by IRI) with:
   says nothing about the others);
 - reader annotations in the `tts:` vocabulary (`http://w3id.org/tripletrail/shapes#`,
   [`crates/tripletrail/src/shapes/tts.ttl`](../crates/tripletrail/src/shapes/tts.ttl)): `tts:key` (a short name
-  for APIs), `tts:labelPath`, `tts:searchable`, `tts:iriTemplate` (never generated: the IRI of a new
+  for APIs), `tts:labelPath`, `tts:labelStrip` (never generated: a regular expression, Rust
+  `regex` syntax, whose matches the map takes out of every label it shows: facet values,
+  search results and the features it lists; the patterns of all the sets apply, and the
+  style's `metadata` gives them to the Map page as `tripletrail:labelStrip`; the page reads
+  them as a JavaScript `RegExp`, so keep to what both read the same, as inline flags such as
+  `(?i)` or `\z` are not: then the page strips nothing while the server does), `tts:searchable`, `tts:iriTemplate` (never generated: the IRI of a new
   record, see [writes](#rest-api-json-ld)), `tts:geometry` (each path to a geometry with
   its types), map `tts:color` and `tts:minZoom`, `tts:facet` (`tts:Facet-Values` for a code
   list, `tts:Facet-Range` for numbers and dates, `tts:Facet-Text` for other strings), `tts:time` (never generated: the OGC API's
@@ -685,7 +690,9 @@ curl -X PUT -H "Authorization: Bearer $ADMIN" http://localhost:7878/$/datasets/r
   [RINF Atlas](https://rinf-atlas.matdata.eu) (SHACL node shapes with `atlas:` annotations,
   the `.ttl` files of `FOLDER`) as a shape set, one file per node shape, to start a pack from.
   `atlas:key`, `color`, `minZoom`, `drawOrder` and `labelPath` become the `tts:` terms of the
-  same name; `atlas:geometryPath` (each branch of an alternative) and `atlas:geometryFrom P`
+  same name; every node shape gets the `tts:labelStrip` of RINF's validity period
+  (` (from YYYY-MM-DD until YYYY-MM-DD)` at the end of a label), which RINF Atlas takes out of
+  its labels too; `atlas:geometryPath` (each branch of an alternative) and `atlas:geometryFrom P`
   (each geometry path of the set behind `P`) become one `tts:geometry`, an
   `sh:alternativePath` when there are several, so a feature with a geometry on two branches
   has both (RINF Atlas takes the first); `atlas:lineBetween ( A B )` becomes a second way
@@ -3344,7 +3351,9 @@ contain (generated for other plain and language-tagged strings, such as names):
 
 - `/{ds}/tiles/facets/{collection}` answers the number of features the filters keep
   (`features`; only those with a geometry, which the map draws and the OGC API serves) and per facet its 50 most frequent values (`value`, the IRI or text; `label`,
-  from `rdfs:label` or `skos:prefLabel`; `count`), with `more` when it has others. A facet's
+  from `rdfs:label` or `skos:prefLabel`: the one in the request's language, `lang=…` or else
+  the first of `Accept-Language`, then English, then one without a language, then any, without
+  what the shapes' `tts:labelStrip` matches (#260); `count`), with `more` when it has others. A facet's
   counts are under the filters of the other facets only, so they show what choosing another of
   its values gives. A range facet instead has `range: true` and the `min` and `max` of its
   values, with `count`, the features that have one, `unit` (the symbol of its property
@@ -3373,7 +3382,8 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   [full-text index](full-text-search.md): those with a label holding every word of `q` (the
   last as a prefix, so it works while typing; case and Latin accents aside), labels with the
   fewest other words first, then by score, at most 5 of a class and 20 in all. Each result has
-  `iri`, `label`, `collection` and `bbox` (CRS84, around its geometries). The first search
+  `iri`, `label` (the label that matched, without what `tts:labelStrip` matches), `collection`
+  and `bbox` (CRS84, around its geometries). The first search
   builds the index (about 4 s on RINF DE+FR); a search then takes milliseconds. As
   `tt:search`, a caller limited to some graphs or rows searches only what it can read.
 - `color.{collection}={key}` on the `all` tiles (`color={key}` on a collection's own) gives
