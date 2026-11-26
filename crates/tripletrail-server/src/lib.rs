@@ -2409,7 +2409,7 @@ fn route(
             return reply;
         }
         "graphql" => {
-            // Queries only, so a POST reads as a GET does.
+            // A query by GET or POST; a mutation (#27) by POST only.
             let body = match method {
                 Method::Get | Method::Head => None,
                 Method::Post => Some(read_bytes(request, state.options.max_body)?),
@@ -2433,17 +2433,38 @@ fn route(
             let timeout = context
                 .limits
                 .timeout(params.get("timeout").map(parse_timeout).transpose()?);
-            let view = View::of(context);
             let kind = request_header(request, "Content-Type").unwrap_or("application/json");
-            return rest::graphql::answer(
-                state,
-                entry,
-                &params,
-                body.as_deref().map(|b| (kind, b)),
-                &base,
-                timeout,
-                &view,
-            );
+            let graphql = rest::graphql::read_request(&params, body.as_deref().map(|b| (kind, b)))?;
+            // A mutation writes as the REST API does: the same rights, quotas and read-only.
+            let writes = match rest::graphql::mutates(&graphql) {
+                None => None,
+                Some(adds) => {
+                    context.operation = Some(Operation::Update);
+                    if body.is_none() {
+                        return Err(HttpError(405, "Send a mutation with POST".to_owned()));
+                    }
+                    if read_only {
+                        return Err(HttpError(405, "The dataset is read-only".to_owned()));
+                    }
+                    if adds {
+                        may_write(state, request, context)?;
+                    } else {
+                        may_write_as(state, request, context)?;
+                    }
+                    Some(rest::graphql::Writes {
+                        state: Arc::clone(state),
+                        options: tripletrail::UpdateOptions {
+                            base_iri: None,
+                            using: None,
+                            readable: context.readable.clone(),
+                            writable: context.writable.clone(),
+                            row_rules: context.row_rules.clone(),
+                        },
+                    })
+                }
+            };
+            let view = View::of(context);
+            return rest::graphql::answer(state, entry, graphql, &base, timeout, &view, writes);
         }
         "search" => {
             let what = match segments.get(2..) {

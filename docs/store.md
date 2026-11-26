@@ -233,6 +233,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   of two alternatives can't meet (an IRI and a literal object, say) no row is checked twice
   (#11; 133k orders, `?o ex:placedBy|ex:qty ?n` 175 → 85 ms, joined with a filter on another
   property 115 → 70 ms).
+  The parts of a join with a path are joined each through a variable it shares with those
+  before it, where one does: triples that share no variable (`?f a ex:Section . ?t ex:speed
+  ?v` beside `?t (ex:isPartOf|^ex:hasPart) ?f`) are taken as separate parts with the path
+  between them, not joined first as the product of their rows (#257; RINF, one country, the
+  map's facets of sections of line filtered on a rolled-up ETCS level 4.4 → 0.4 s, 151
+  queries 17.8 → 1.9 s).
   `<p>?` and `^<p>?` from a constant end, or from the values a joined pattern gives an end,
   are each start and the nodes one edge away, once each (#11; 133k orders, under
   `--executor ids`, a count over orders with a quantity under 50 and `ex:placedBy?` 125 →

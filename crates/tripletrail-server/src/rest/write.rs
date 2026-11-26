@@ -695,7 +695,7 @@ fn problem(status: u16, title: &str, errors: Vec<Value>) -> Reply {
 }
 
 /// Every character but the unreserved ones percent-encoded, slashes too.
-fn percent_encode(s: &str) -> String {
+pub(crate) fn percent_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {

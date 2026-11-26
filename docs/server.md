@@ -3564,7 +3564,7 @@ curl http://localhost:7878/kg/api/openapi.json
 
 `/{ds}/graphql` answers GraphQL queries over the records of the [REST API](#rest-api-json-ld),
 made from the shapes the `graphql` reader reads (`/$/datasets/{ds}/shapes?reader=graphql`; the
-generated shapes unless the dataset has its own). It only reads: write with the REST API.
+generated shapes unless the dataset has its own), and writes them with mutations.
 
 - **Requests.** `POST` with a JSON body (`query`, `variables`, `operationName`) or an
   `application/graphql` body, or `GET` with `query`, `variables` (JSON) and `operationName`
@@ -3598,6 +3598,18 @@ generated shapes unless the dataset has its own). It only reads: write with the 
   query** writes a query for a list or a record), a query editor with variables, and the
   answer. `/{ds}/api/v1` links to the endpoint as `graphql` and to the playground as
   `playground`.
+- **Mutations** (#27). Each type has `createStation(record: JSON!, graph: String)`,
+  `updateStation(id: ID!, record: JSON!)` and `deleteStation(id: ID!)`, which are the REST
+  API's `POST`, `PATCH` and `DELETE` of the record: the same keys (a `JSON` object, as the REST
+  body: references as IRIs or `{"id": …}`, language maps, embedded objects), the same IRIs for
+  new records, the same check against the dataset's own shapes before anything is written, and
+  the same rights, quotas and refusals as a SPARQL update (401 or 403 for the whole request,
+  405 on a read-only dataset; row-level rules refuse writes). A mutation is sent with `POST`;
+  by `GET` it is a 405. Create and update answer the record as it now is, delete its id. A
+  write the shapes refuse changes nothing and fails with a GraphQL error whose message names
+  each key and problem, with `extensions.violations` (the REST API's `errors`: `key`, `constraint`, `message`,
+  `shape`). Every refused write has the REST API's status in `extensions.status` (422, 409
+  for a new record whose id exists, 403). The fields of one mutation run one after the other, each its own transaction.
 - Queries run under the caller's access like SPARQL queries, with the dataset's query timeout
   (`timeout=` too). The schema is kept until the data, the shapes or the caller's view change.
 
