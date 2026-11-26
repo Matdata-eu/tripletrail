@@ -62,7 +62,9 @@ approach; to work on an open issue, say so in a comment on it.
 2. Rename `## [Unreleased]` in `CHANGELOG.md` to `## 1.2.3` and start a new, empty
    `## [Unreleased]` above it.
 3. Add the release's entry at the top of `crates/tripletrail-server/ui/whats-new.json` (the web
-   UI's "What's new"; a test checks that its newest entry is the crate version).
+   UI's "What's new"; a test checks that its newest entry is the crate version), and set the
+   same version in `python/Cargo.toml` (then `cargo update --manifest-path python/Cargo.toml -w`)
+   and `clients/js/package.json`.
 4. Check with `.github/scripts/release-notes.sh --check 1.2.3`, merge, then tag `v1.2.3`
    on main and push the tag. The tag is `v` and the version exactly as `Cargo.toml` has it: a
    release candidate is `v0.1.0-rc.2`, with the dot, not `v0.1.0-rc2`.
@@ -79,6 +81,19 @@ type. Starting the workflow by hand does a dry run that keeps everything as a wo
 artifact. The tag also starts "Docker image", which publishes the image as `1.2.3`, `1.2` and
 `latest` (a pre-release tag such as `v0.1.0-rc.3` publishes only `0.1.0-rc.3`, so `latest` stays
 on the last release), and "Helm chart" with "publish" ticked publishes the chart.
+
+The same run builds the Python wheels (each with `THIRD_PARTY_LICENSES.md` for `python/Cargo.lock`; there
+is no source package, which would need the workspace and `vendor/` around `python/`) and packs
+the JavaScript client.
+After the GitHub release, it publishes them to PyPI (`tripletrail`) and npm
+(`@matdata/tripletrail-client`, a pre-release under the `next` tag), each only while the repository
+variable `PUBLISH_PYPI` or `PUBLISH_NPM` is `true`. Both use trusted publishing (no token):
+the publisher on pypi.org and npmjs.com names `Matdata-eu/tripletrail`, the workflow
+`release.yml` and the environment `pypi` or `npm`. PyPI takes a "pending" publisher before the
+project exists. npm does not, so the client's first version is published once by hand, by a
+member of the `matdata` npm organisation (`cd clients/js && cp ../../LICENSE ../../NOTICE . &&
+npm publish --access public`), and its trusted publisher is added after that. The Rust crates are not published to crates.io: they
+build on the patched Oxigraph crates in `vendor/`, which a published crate cannot use.
 
 ## Security issues
 

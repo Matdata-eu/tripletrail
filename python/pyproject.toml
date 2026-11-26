@@ -1,14 +1,29 @@
 [build-system]
-requires = ["maturin>=1.5,<2"]
+requires = ["maturin>=1.9,<2"]
 build-backend = "maturin"
 
 [project]
 name = "tripletrail"
 description = "TripleTrail in Python: a knowledge graph store with GeoSPARQL, PostGIS-style ST_* functions and pgRouting-style routing, built on Oxigraph"
+readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+authors = [{ name = "MatData BV", email = "info@matdata.eu" }]
+keywords = ["rdf", "sparql", "geosparql", "knowledge-graph", "routing"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: GIS",
+]
 dependencies = []
 dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://tripletrail.eu"
+Repository = "https://github.com/Matdata-eu/tripletrail"
+Documentation = "https://github.com/Matdata-eu/tripletrail/tree/main/docs/guide"
+Changelog = "https://github.com/Matdata-eu/tripletrail/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 rdflib = ["rdflib>=7"]

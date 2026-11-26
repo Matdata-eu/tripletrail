@@ -16,6 +16,16 @@ name: Release
 #
 # The binaries are not signed yet: cosign keyless signing would write the repository's name
 # and commits to Sigstore's public log, so it waits until the repository is public (#150).
+#
+# The same run builds the Python package (wheels for Linux, macOS and Windows; no source
+# package, as it would need the workspace and vendor/ around python/)
+# and packs the JavaScript client. After the GitHub release, a tag publishes them to PyPI
+# (`tripletrail`) and npm (`@matdata/tripletrail-client`), each only while its repository variable is
+# `true`: PUBLISH_PYPI, PUBLISH_NPM. Both log in with trusted publishing (OIDC, no token).
+# npm can only give an existing package a trusted publisher, so its first version is
+# published once by hand (CONTRIBUTING.md, "Releasing"). A pre-release (`v1.2.3-rc.1`) goes to
+# npm under the `next` tag, so `latest` stays on the last release. The Rust crates are not
+# published: they need the patched Oxigraph crates in vendor/, which crates.io cannot use.
 
 on:
   push:
@@ -28,6 +38,10 @@ on:
         default: true
       windows:
         description: Build for Windows (GitHub runner, 2x minutes)
+        type: boolean
+        default: true
+      python:
+        description: Build the Python wheels
         type: boolean
         default: true
 
@@ -73,10 +87,22 @@ jobs:
         run: |
           cargo fetch --locked
           python3 .github/scripts/third-party-licenses.py -o THIRD_PARTY_LICENSES.md
+      # The Python package links its own set (python/Cargo.lock), shipped in each wheel.
+      - name: Third-party licenses of the Python package
+        run: |
+          cargo fetch --locked --manifest-path python/Cargo.toml
+          mkdir -p python-third-party
+          python3 .github/scripts/third-party-licenses.py --package tripletrail-python \
+            --manifest-path python/Cargo.toml --product '`tripletrail` Python package' \
+            -o python-third-party/THIRD_PARTY_LICENSES.md
       - uses: actions/upload-artifact@v4
         with:
           name: third-party
           path: THIRD_PARTY_LICENSES.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: third-party-python
+          path: python-third-party/THIRD_PARTY_LICENSES.md
 
   # Both Linux binaries from the Dockerfile's build stage, cross-compiled on one machine and
   # linked against Debian 12's glibc (2.36), so they run on most current distributions.
@@ -186,6 +212,90 @@ jobs:
           name: windows
           path: dist/*
 
+  # Python wheels: one per platform (abi3, so every Python from 3.9), with on-disk stores
+  # (RocksDB) and GeoParquet, as `pip install ./python` builds them. Linux wheels are built in
+  # manylinux_2_28 containers (glibc 2.28), aarch64 natively on GitHub's Arm runner.
+  python-wheels:
+    needs: check
+    if: github.event_name == 'push' || inputs.python
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: "2_28" }
+          - { os: ubuntu-24.04-arm, target: aarch64, manylinux: "2_28" }
+          - { os: macos-latest, target: universal2-apple-darwin, manylinux: "" }
+          - { os: windows-latest, target: x64, manylinux: "" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      # RocksDB needs C++17 aligned allocation, which macOS has from 10.14 (maturin's default
+      # target is 10.12). Only read on macOS.
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: third-party-python
+          path: python-third-party
+      # LICENSE and NOTICE go into the wheel's metadata (maturin picks up LICENSE* and
+      # NOTICE*); all three, with the third-party list, into the package folder too.
+      - name: License files
+        shell: bash
+        run: |
+          cp LICENSE NOTICE python/
+          cp LICENSE NOTICE python-third-party/THIRD_PARTY_LICENSES.md python/tripletrail/
+      # Pinned by commit: it runs in the release workflow. v1.51.0.
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        with:
+          working-directory: python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --locked --out dist
+          # RocksDB's bindings are generated with bindgen, which needs libclang.
+          before-script-linux: dnf install -y clang-devel
+      - name: The wheel imports
+        shell: bash
+        run: |
+          python -m pip install --no-index --find-links python/dist tripletrail
+          python -c "import tripletrail; e = tripletrail.Engine(); print(e.query('ASK {}'))"
+          python - python/dist/*.whl <<'EOF'
+          import sys, zipfile
+          names = zipfile.ZipFile(sys.argv[1]).namelist()
+          for f in ("LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.md"):
+              assert f"tripletrail/{f}" in names, f"{f} is not in the wheel"
+          print("license files in the wheel")
+          EOF
+          ls -l python/dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: python/dist/*.whl
+
+  # The JavaScript client as npm would publish it, kept as `matdata-tripletrail-client-<version>.tgz`.
+  npm-pack:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Pack
+        working-directory: clients/js
+        run: |
+          cp ../../LICENSE ../../NOTICE .
+          npm pack --json | tee pack.json
+          ls -l ./*.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm
+          path: clients/js/*.tgz
+
   release:
     needs: [check, linux, macos, windows]
     # macOS and Windows may be skipped on a dry run; a tag needs them all.
@@ -237,3 +347,56 @@ jobs:
           path: |
             dist/*
             notes.md
+
+  # PyPI with trusted publishing: the project's publisher on pypi.org names this repository,
+  # this workflow (release.yml) and the environment `pypi`. Only after the GitHub release.
+  publish-pypi:
+    needs: [release, python-wheels]
+    if: github.event_name == 'push' && vars.PUBLISH_PYPI == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tripletrail/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: python-wheels-*
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      # Pinned by commit: it runs with id-token: write. v1.14.3.
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
+        with:
+          packages-dir: dist
+
+  # npm with trusted publishing (npm 11.5 or later; the package's publisher on npmjs.com names
+  # this repository, release.yml and the environment `npm`). The provenance statement links
+  # the package to this run.
+  publish-npm:
+    needs: [check, release, npm-pack]
+    if: github.event_name == 'push' && vars.PUBLISH_NPM == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@matdata/tripletrail-client
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm
+      - name: Publish
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          npm install -g npm@11
+          case "$VERSION" in *-*) tag=next ;; *) tag=latest ;; esac
+          npm publish ./matdata-tripletrail-client-*.tgz --access public --provenance --tag "$tag"
