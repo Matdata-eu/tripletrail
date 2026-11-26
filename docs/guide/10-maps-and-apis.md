@@ -971,6 +971,59 @@ origin can call the server only when it was started with `--cors <origin>` (the 
 origin, such as `--cors https://app.example`). See
 [the JavaScript client](../library.md#javascript-client).
 
+## AI agents: MCP
+
+An AI agent or assistant that speaks the [Model Context Protocol](https://modelcontextprotocol.io)
+can read a dataset through tools instead of guessing SPARQL endpoints. Start the server with
+`--mcp`, and each dataset answers MCP at `/ds/mcp` (streamable HTTP, JSON-RPC over `POST`):
+
+<!-- test: serve -->
+```sh
+tripletrail serve --load network.ttl --mcp
+```
+
+Give your MCP client that URL, `http://localhost:7878/ds/mcp`, with an API key or token header
+when the dataset needs one. It lists the tools:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/ds/mcp -H 'Content-Type: application/json' \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | grep -o '"name":"[a-z_]*"'
+```
+
+<!-- test: output -->
+```text
+"name":"sparql_query"
+"name":"describe"
+"name":"search"
+"name":"list_shapes"
+"name":"shape"
+"name":"list_datasets"
+```
+
+`list_shapes` and `shape` tell the agent what the data looks like (the dataset's shapes, or the
+ones TripleTrail generated), `search` finds resources by their labels, `describe` gives the
+triples about one resource, and `sparql_query` runs a query:
+
+<!-- test: run -->
+```sh
+curl -s http://localhost:7878/ds/mcp -H 'Content-Type: application/json' -d '{
+  "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "sparql_query",
+  "arguments": {"query": "PREFIX ex: <https://example.org/rail#> SELECT ?code { ?s ex:code ?code } ORDER BY ?code LIMIT 2"}}}' \
+  | grep -o '\\"value\\":\\"[A-Z]*\\"'
+```
+
+<!-- test: output -->
+```text
+\"value\":\"ANT\"
+\"value\":\"BXC\"
+```
+
+The tools only read: an update is refused. They keep to what the caller may read, as a query
+does (the [graphs and rows](12-access-control.md) of their key or token), with the server's
+query timeout. An answer holds at most 1,000 rows, and says so when there were more. The
+endpoint is off unless you ask for it. See [MCP](../server.md#mcp).
+
 ## Make it yours: shapes
 
 The map, the describe pages and both APIs read the dataset's shapes:
@@ -1741,6 +1794,7 @@ rows that rinf-describe shows, in the same order.
   with its docs page at `/$/ui/api/ds`; the API also writes records, checked against the
   dataset's own shapes.
 - `clients/js` is a JavaScript client for queries, updates, graphs and the admin API.
+- `--mcp` serves each dataset to AI agents at `/ds/mcp`, read-only and under the caller's access.
 - `/ds/graphql` answers GraphQL queries over the same records, with a playground at
   `/$/ui/graphql/ds`.
 - The dataset's shapes decide what they show, and can be customised, or come from a shape
