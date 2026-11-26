@@ -35,6 +35,9 @@ pub(crate) struct Call<'a> {
     pub(crate) engine: &'a Engine,
     /// The server's origin (`https://host`), for the endpoints of other datasets.
     pub(crate) origin: String,
+    /// The last query a tool ran: recorded as the request's query, in the slow-query log, the
+    /// request log, the audit record and traces, as a query to `/{ds}/sparql` is.
+    pub(crate) ran: std::cell::RefCell<Option<String>>,
 }
 
 /// Answers one JSON-RPC message posted to the endpoint.
@@ -239,6 +242,7 @@ fn query(call: &Call<'_>, text: &str, max: usize) -> Result<String, String> {
     spargebra::SparqlParser::new()
         .parse_query(text)
         .map_err(|e| format!("Not a SPARQL query (updates are not allowed): {e}"))?;
+    *call.ran.borrow_mut() = Some(text.to_owned());
     let max = call.context.limits.max_rows.map_or(max, |m| m.min(max));
     let timeout: Option<Duration> = call.context.limits.timeout(None);
     let (engine, _deadline) = with_deadline(call.engine, timeout);

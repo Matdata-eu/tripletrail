@@ -312,3 +312,78 @@ fn tools_keep_to_the_callers_graphs() {
     assert!(!error, "{text}");
     assert_eq!(values(&text, "resource"), ["urn:a"]);
 }
+
+/// A query a tool runs is recorded as a query to `/{ds}/sparql` is: in the slow-query log
+/// with its text and hash, and the request log with its hash.
+#[test]
+fn tool_queries_land_in_the_slow_query_log() {
+    use std::io::Read;
+    let dir = tripletrail_testdir::tempdir("mcp-slow-query");
+    std::fs::write(dir.join("kg.ttl"), DATA).unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_tripletrail"))
+        .args(["serve", "--bind", &format!("127.0.0.1:{port}")])
+        .args([
+            "--dataset",
+            "kg",
+            "--mcp",
+            "--slow-query-ms",
+            "0",
+            "--log-requests",
+        ])
+        .arg("--load")
+        .arg(dir.join("kg.ttl"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let base = format!("http://127.0.0.1:{port}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while ureq::get(&format!("{base}/$/ready")).call().is_err() {
+        assert!(std::time::Instant::now() < deadline, "not ready");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let query = "SELECT ?s WHERE { ?s a <http://example.com/Station> }";
+    let (text, error) = tool(
+        &format!("{base}/kg/mcp"),
+        None,
+        "sparql_query",
+        json!({ "query": query }),
+    );
+    assert!(!error, "{text}");
+    let _ = child.kill();
+    let _ = child.wait();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    let slow: Value = stderr
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|l| l["event"] == "slow_query")
+        .unwrap_or_else(|| panic!("{stderr}"));
+    assert_eq!(slow["text"], query);
+    assert_eq!(slow["operation"], "query");
+    assert_eq!(slow["dataset"], "kg");
+    let hash = slow["query_hash"].as_str().unwrap();
+    let logged: Value = stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|l| l["path"] == "/kg/mcp")
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert_eq!(logged["query_hash"], hash);
+}

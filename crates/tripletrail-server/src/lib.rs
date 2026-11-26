@@ -2343,8 +2343,17 @@ fn route(
                 entry: &entry,
                 engine,
                 origin: origin(state, request),
+                ran: std::cell::RefCell::new(None),
             };
-            return mcp::answer(&call, &body);
+            let reply = mcp::answer(&call, &body);
+            if let Some(text) = call.ran.into_inner() {
+                context.operation = Some(Operation::Query);
+                context.text_hash = Some(text_hash(&text));
+                if state.options.slow_query.is_some() || context.keep_text {
+                    context.text = Some(text);
+                }
+            }
+            return reply;
         }
         "graphql" => {
             // Queries only, so a POST reads as a GET does.

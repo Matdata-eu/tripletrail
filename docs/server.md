@@ -3608,6 +3608,10 @@ with one dataset). It is off by default: without `--mcp` the path is a 404.
   when lower), and ends with a note when there were more. A tool's failure (a syntax error, a
   timeout) is a result with `isError`, which the agent sees; a wrong method or tool is a
   JSON-RPC error.
+- **Records.** The query a tool runs (the query of `sparql_query`, and the `DESCRIBE` or
+  `tt:search` query that `describe` and `search` make) is recorded as a query to
+  `/{ds}/sparql` is: operation `query`, with its text in the slow-query log
+  (`--slow-query-ms`) and its hash in the request log, audit records and traces.
 - **Browsers.** A request with an `Origin` header (a web page) is refused with 403 unless
   `--cors` allows that origin, against DNS rebinding. MCP clients send none.
 
