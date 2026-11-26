@@ -78,7 +78,8 @@ header. A workbook may hold at most 1,000,000 non-empty cells and
 unpack to at most 1 GiB, as Facade-X's default spreadsheet limits.
 
 Tables and SQL queries (R2RML logical tables, or RML sources on a `d2rq:Database`) are read
-from PostgreSQL: from the source's `d2rq:Database`, or, for R2RML, from `--database`.
+from PostgreSQL: from the source's `d2rq:Database`, or, for R2RML, from `--database`
+(`database=` in Python's `Engine.run_mapping`).
 PostGIS `geometry` and `geography` columns are `geo:wktLiteral`s with their SRID's CRS IRI
 first (none for SRID 0 and 4326, which PostGIS stores longitude first, so CRS84).
 

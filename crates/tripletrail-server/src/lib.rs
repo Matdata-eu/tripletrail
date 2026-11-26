@@ -1167,6 +1167,58 @@ fn header(name: &str, value: &str) -> Header {
     Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("valid header")
 }
 
+/// Answers smaller than this go as they are: gzip would save little on them.
+const GZIP_FROM: usize = 1024;
+
+/// `reply` gzipped, for a client that accepts it (#261): the map's tiles, facets and searches
+/// and the OGC API's answers, which a browser fetches by the hundred. RINF Atlas sends its
+/// tiles gzipped too: a quarter to a fifth of their bytes. A body of unknown length (a
+/// stream) or one already encoded goes as it is.
+pub(crate) fn gzipped(request: &Request, mut reply: Reply) -> Reply {
+    reply.headers.push(("Vary", "Accept-Encoding".to_owned()));
+    let accepts = request_header(request, "Accept-Encoding").is_some_and(|v| {
+        v.split(',').any(|e| {
+            let mut parts = e.split(';');
+            let coding = parts.next().unwrap_or_default().trim();
+            let refused = parts.any(|p| {
+                p.trim()
+                    .strip_prefix("q=")
+                    .and_then(|q| q.trim().parse::<f32>().ok())
+                    == Some(0.0)
+            });
+            (coding.eq_ignore_ascii_case("gzip") || coding == "*") && !refused
+        })
+    });
+    let encoded = reply
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("Content-Encoding"));
+    if !accepts || encoded || reply.length.is_none_or(|n| n < GZIP_FROM) {
+        return reply;
+    }
+    let mut data = Vec::with_capacity(reply.length.unwrap_or_default());
+    if reply.body.read_to_end(&mut data).is_err() {
+        return Reply::bytes(500, "text/plain", b"The answer could not be read".to_vec());
+    }
+    // Level 3: RINF's nine z6 tiles (1,239 KB) take 14 ms and come to 488 KB. Level 1 (the
+    // `fast` one) gives 659 KB, level 6 482 KB in 25 ms; a tile from the cache is sent in a
+    // few milliseconds.
+    let mut gz = flate2::write::GzEncoder::new(
+        Vec::with_capacity(data.len() / 4),
+        flate2::Compression::new(3),
+    );
+    let body = match gz.write_all(&data).and_then(|()| gz.finish()) {
+        Ok(zipped) if zipped.len() < data.len() => {
+            reply.headers.push(("Content-Encoding", "gzip".to_owned()));
+            zipped
+        }
+        _ => data,
+    };
+    reply.length = Some(body.len());
+    reply.body = Box::new(std::io::Cursor::new(body));
+    reply
+}
+
 /// Answers `value` as JSON.
 pub(crate) fn json_reply(status: u16, value: &serde_json::Value) -> Reply {
     Reply::bytes(status, "application/json", value.to_string().into_bytes())
@@ -2611,7 +2663,8 @@ fn route(
                     timeout,
                     &view,
                     &lang,
-                );
+                )
+                .map(|reply| gzipped(request, reply));
             }
             // A browser (`text/html` before any JSON type in `Accept`) gets the HTML pages.
             context.vary_accept = true;
@@ -2634,7 +2687,8 @@ fn route(
                 html_first,
                 fg_first,
                 &view,
-            );
+            )
+            .map(|reply| gzipped(request, reply));
         }
         "shacl" => return shacl_service(state, request, &params, &method, context, engine),
         "void" => {

@@ -2362,10 +2362,24 @@ fn group_tiles(
             } else {
                 None
             };
-            let mut properties = vec![(
-                "iri".to_owned(),
-                Literal::new_simple_literal(f.as_str()).into(),
-            )];
+            let mut properties = if low {
+                // The IRI in two: its namespace, which the layer keeps once for all the
+                // features that share it, and the rest (#261). Most of a generalised tile's
+                // bytes were IRIs: RINF's z6 tiles were 2.5 times RINF Atlas's.
+                let (ns, local) = split_iri(f.as_str());
+                vec![
+                    ("ns".to_owned(), Literal::new_simple_literal(ns).into()),
+                    (
+                        "local".to_owned(),
+                        Literal::new_simple_literal(local).into(),
+                    ),
+                ]
+            } else {
+                vec![(
+                    "iri".to_owned(),
+                    Literal::new_simple_literal(f.as_str()).into(),
+                )]
+            };
             if let Some(value) = colored.get(f) {
                 properties.push((
                     "value".to_owned(),
@@ -2390,9 +2404,26 @@ fn group_tiles(
     Ok(out)
 }
 
+/// An IRI as its namespace (up to its last `/` or `#`) and the rest: `ns` and `local` of a
+/// generalised tile's features.
+fn split_iri(iri: &str) -> (&str, &str) {
+    let at = iri.rfind(['/', '#']).map_or(0, |i| i + 1);
+    iri.split_at(at)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_iri_splits_after_its_last_slash_or_hash() {
+        assert_eq!(
+            split_iri("http://data.europa.eu/949/tunnel/0fc55bc6a3"),
+            ("http://data.europa.eu/949/tunnel/", "0fc55bc6a3")
+        );
+        assert_eq!(split_iri("http://ex.org/a#b"), ("http://ex.org/a#", "b"));
+        assert_eq!(split_iri("urn:x:y"), ("", "urn:x:y"));
+    }
 
     #[test]
     fn the_cache_is_capped_in_bytes() {

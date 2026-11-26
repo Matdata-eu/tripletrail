@@ -2351,7 +2351,7 @@ version.
   - `timeout`: the timeout of a request that asks for none; `maxTimeout`: the most a request
     may ask for with `?timeout=` (the dataset's `timeout` when not set). Setting either
     replaces `--timeout` for the dataset.
-  - `maxRows` and `maxUpload`: as `--max-rows` and `--max-upload`, for this dataset.
+  - `maxRows` and `maxUpload`: as `--max-rows` and `--max-upload`, for this dataset; `maxUpload` also takes a size such as `"64MiB"`.
   - `queryMemory`: the memory one query of this dataset may hold in its joins, as a size such
     as `"256MiB"` (see **Query memory** above). A request's `query-memory=` may ask for less.
   - `maxDisk` and `maxMemory`: quotas, in bytes or as a size such as `"10GB"` or `"512MiB"`
@@ -2363,15 +2363,22 @@ version.
     counted). The sizes are estimates, and an index is counted once it is built: the first
     geometry a query reads also allocates a 6 MB table of parsed geometries.
 
-    A read can therefore take a dataset over its memory quota: the first `tt:search`,
-    spatial query or numeric range FILTER builds an index that stays, and from then on
-    writes get 507 although no writer added anything. Size `maxMemory` for the data plus
-    the indexes your queries use. On 470,000 triples with 150,000 geometries, labels and
-    numbers, the store took 57 MB and the full-text, spatial (with its parsed geometries)
-    and range indexes another 28, 31 and 19 MB: about twice the data with all three.
-    `memory` in `/$/stats/{name}` shows the parts. Writes come back once data is removed,
-    the quota is raised, or the server restarts (the indexes are then built again only
-    when a query needs them). While a dataset is at or over a quota, writes that may add data
+    A read can take a dataset over its memory quota: the first `tt:search`, spatial query
+    or numeric range FILTER builds an index that stays. The next write that finds the
+    dataset over its memory quota first drops the indexes and caches queries built
+    (#18), largest first, until it is under: the full-text, spatial, vector and range
+    indexes and the result cache, with their views for callers who see some graphs. The
+    next query that needs one builds it again, slower that once. The data, its
+    dictionary, the parsed geometries and the routing networks (which have a budget of
+    their own) stay. Each time, the log says what was dropped, and `quotaEvictions` in
+    `/$/stats/{name}` and `tripletrail_dataset_quota_evictions_total` in `/$/metrics`
+    count it. On 470,000 triples with 150,000 geometries, labels and numbers, the store
+    took 57 MB and the full-text, spatial (with its parsed geometries) and range indexes
+    another 28, 31 and 19 MB: about twice the data with all three, so size `maxMemory`
+    for the data plus the indexes your queries use, or they will be built again and again.
+    `memory` in `/$/stats/{name}` shows the parts. When the data alone is over the quota,
+    writes stay refused until data is removed or the quota is raised. While a dataset is at
+    or over a quota, writes that may add data
     (uploads, `PUT`, updates with `INSERT`, `LOAD` or `CREATE`, RDF4J `ADD` and commits)
     are answered with `507 Insufficient Storage`. Reads, Graph Store `DELETE`, and updates
     that only remove data (`DELETE DATA`, `DELETE WHERE`, `DELETE` without `INSERT`, `CLEAR`,
@@ -3294,7 +3301,17 @@ https://tripletrail.example.org/kg/tiles/all/{z}/{x}/{y}.mvt
 - Below zoom 8, a layer of more than 1,000 features in one tile is generalised, as RINF Atlas
   does (#92): a 512 extent (and an 8-unit buffer) instead of 4096, and one feature per
   position, the one drawn on top (the last by IRI). Lines and polygons smaller than a unit are
-  left out. A layer of fewer features keeps them all at every zoom.
+  left out. Such a layer's features carry their IRI in two attributes in place of `iri`: `ns`,
+  the IRI up to its last `/` or `#`, which the layer holds once for all the features that
+  share it, and `local`, the rest (#261); the IRI is `ns` followed by `local`. On RINF's eight
+  countries this halves nine z6 tiles of every class around Brussels (1,239 instead of 2,481 KB). A
+  layer of fewer features keeps them all at every zoom, with `iri`.
+- A client whose `Accept-Encoding` takes gzip gets tiles gzipped (level 3), as it does the
+  styles, facets, counts and searches under `/{ds}/tiles/` and every answer of the OGC API
+  (`/{ds}/ogc/`); answers under 1 KB and streamed ones go as they are, and these answers say
+  `Vary: Accept-Encoding`. On RINF's eight countries the nine tiles of every class around
+  Brussels come to 488 KB at z6, 113 KB at z9 and 34 KB at z12 (RINF Atlas, gzipped too: 431,
+  228 and 82 KB).
 - Collections that read their geometry through the same path are fetched with one query
   (the spatial index is asked once per tile), and those queries run on up to four threads.
 - Tiles are kept in memory, 256 MiB at most over all datasets (oldest out first; a layer tile
