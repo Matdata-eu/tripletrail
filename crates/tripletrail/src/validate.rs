@@ -5,8 +5,8 @@ use crate::{Engine, Error};
 use oxigraph::model::{GraphNameRef, NamedNode, Triple};
 use oxigraph::sparql::SparqlEvaluator;
 use tripletrail_shacl::{
-    DataGraph, Inference, Inferred, ReportWriter, ShapeCount, Shapes, StoreGraph, Union,
-    ValidationResult, Validator,
+    DataGraph, FailingFocusNodes, Inference, Inferred, ReportWriter, ShapeCount, Shapes,
+    StoreGraph, Union, ValidationResult, Validator,
 };
 
 /// An error of the shapes graph or of a SHACL-SPARQL query.
@@ -298,17 +298,30 @@ impl Engine {
             (false, true) => v.with_focus_graph(&data),
             (false, false) => v.with_focus_graph(&focus_graph),
         };
+        let mut failing = FailingFocusNodes::default();
+        let mut tally = |r: ValidationResult<'_>| {
+            if counts {
+                failing.add(&r);
+            }
+            emit(r)
+        };
         match focus {
-            None => v.report(emit),
+            None => v.report(&mut tally),
             Some(node) => {
                 for &s in compiled.targeted() {
                     if v.is_target(node, s) {
-                        v.report_focus(node, s, emit);
+                        v.report_focus(node, s, &mut tally);
                     }
                 }
             }
         }
-        let counts = if counts { v.shape_counts() } else { Vec::new() };
+        let counts = if counts {
+            let mut c = v.shape_counts();
+            failing.fill(&mut c);
+            c
+        } else {
+            Vec::new()
+        };
         match v.take_error() {
             Some(e) => Err(ShaclError::from(e).into()),
             None => Ok(counts),

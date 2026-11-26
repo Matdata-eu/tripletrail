@@ -226,6 +226,8 @@ class RemoteValidationReport:
                 "property": c.get("property"),
                 "focus_nodes": c.get("focusNodes"),
                 "value_nodes": c.get("valueNodes"),
+                "distinct_focus_nodes": c.get("distinctFocusNodes"),
+                "failing_focus_nodes": c.get("failingFocusNodes"),
             }
             for c in answer.get("shapes", [])
         ]

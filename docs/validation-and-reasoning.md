@@ -52,18 +52,27 @@ For a non-conformance rate per shape, `--stats` (`statistics=True` in Python,
 `Engine::validate_counted` in Rust) also counts the focus and value nodes each shape was
 checked against, conforming shapes and targeted shapes with no focus nodes included. A shape
 reached through `sh:property`, `sh:node`, `sh:and`, `sh:or`, ... counts the value nodes of
-its parent, once per parent focus node. The report gets one IRI node per shape (no blank
-nodes, for pipelines that skolemise):
+its parent, once per parent focus node, so `ttsh:focusNodes` counts a node reached from two
+parents twice. `ttsh:distinctFocusNodes` counts each focus node once, however it was reached
+and however many targets select it, and `ttsh:failingFocusNodes` the distinct focus nodes of
+the results whose `sh:sourceShape` is the shape (those in `sh:detail`s included), so their
+ratio is the shape's failure rate. Both are counted by a 64-bit hash of each node, 8 bytes a
+node; two nodes count as one with a probability under one in a million below six million
+nodes. The report gets one IRI node per shape (no blank nodes, for pipelines that
+skolemise):
 
 ```turtle
 [] a sh:ValidationReport ;
   ttsh:shapeStatistics <urn:tripletrail:shape-statistics:...:0> .
 <urn:tripletrail:shape-statistics:...:0> ttsh:shape ex:PersonShape ;
-  ttsh:focusNodes 1200 ; ttsh:valueNodes 1200 .
+  ttsh:focusNodes 1200 ; ttsh:valueNodes 1200 ;
+  ttsh:distinctFocusNodes 1200 ; ttsh:failingFocusNodes 37 .
 ```
 
 `ttsh:` is `http://w3id.org/tripletrail/shacl#`; in Python, `report.shape_counts` holds one dict
-per shape (`shape`, `property`, `focus_nodes`, `value_nodes`).
+per shape (`shape`, `property`, `focus_nodes`, `value_nodes`, `distinct_focus_nodes`,
+`failing_focus_nodes`); the server's JSON answer has `distinctFocusNodes` and
+`failingFocusNodes`.
 
 ## SHACL-AF rules
 

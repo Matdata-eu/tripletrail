@@ -429,8 +429,9 @@ enum Command {
         #[arg(long)]
         report: Option<PathBuf>,
         /// Add to the report how many focus and value nodes each shape was checked against
-        /// (`ttsh:shapeStatistics`, `ttsh:focusNodes`, `ttsh:valueNodes`), conforming shapes
-        /// included.
+        /// (`ttsh:shapeStatistics`, `ttsh:focusNodes`, `ttsh:valueNodes`), its distinct focus
+        /// nodes and those of its results (`ttsh:distinctFocusNodes`,
+        /// `ttsh:failingFocusNodes`), conforming shapes included.
         #[arg(long)]
         stats: bool,
     },

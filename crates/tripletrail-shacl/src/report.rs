@@ -84,8 +84,55 @@ pub struct ShapeCount {
     pub shape: Term,
     /// Whether it is a property shape (with `sh:path`).
     pub property: bool,
+    /// Checks against a focus node: a node reached from two parents counts twice.
     pub focus_nodes: usize,
     pub value_nodes: usize,
+    /// Distinct focus nodes it was checked against: each node once, however it was reached
+    /// and however many targets selected it.
+    pub distinct_focus_nodes: usize,
+    /// Distinct focus nodes of the results whose `sh:sourceShape` it is, so that
+    /// `failing_focus_nodes / distinct_focus_nodes` is the shape's failure rate. Filled in by
+    /// [`FailingFocusNodes::fill`]; 0 until then.
+    pub failing_focus_nodes: usize,
+}
+
+/// A 64-bit hash of a term, the same in every run: sets of nodes keep hashes, not terms, so
+/// that counting the focus nodes of a large graph costs 8 bytes a node (two different
+/// nodes count as one with a probability of about n²/2⁶⁵, under one in a million below
+/// six million nodes).
+pub(crate) fn term_hash(t: &Term) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = rustc_hash::FxHasher::default();
+    t.hash(&mut h);
+    h.finish()
+}
+
+/// The distinct focus nodes of the results of each source shape, gathered while the results
+/// are given (see [`ShapeCount::failing_focus_nodes`]).
+#[derive(Default)]
+pub struct FailingFocusNodes(rustc_hash::FxHashSet<(u64, u64)>);
+
+impl FailingFocusNodes {
+    /// Counts the focus node of `r` for its source shape, and those of its `sh:detail`s (a
+    /// value node that fails a shape reached through `sh:node`, ...) for theirs.
+    pub fn add(&mut self, r: &ValidationResult<'_>) {
+        self.0
+            .insert((term_hash(r.source_shape), term_hash(&r.focus_node)));
+        for d in &r.details {
+            self.add(d);
+        }
+    }
+
+    /// Sets [`ShapeCount::failing_focus_nodes`] of each count.
+    pub fn fill(&self, counts: &mut [ShapeCount]) {
+        let mut per_shape: rustc_hash::FxHashMap<u64, usize> = Default::default();
+        for (shape, _) in &self.0 {
+            *per_shape.entry(*shape).or_default() += 1;
+        }
+        for c in counts {
+            c.failing_focus_nodes = per_shape.get(&term_hash(&c.shape)).copied().unwrap_or(0);
+        }
+    }
 }
 
 pub struct ReportWriter {
@@ -116,7 +163,8 @@ impl ReportWriter {
 
     /// Writes the counts of [`crate::Validator::shape_counts`] on the report:
     /// `ttsh:shapeStatistics` to one IRI node per shape (not a blank node, for pipelines that
-    /// skolemise), with `ttsh:shape`, `ttsh:focusNodes` and `ttsh:valueNodes`.
+    /// skolemise), with `ttsh:shape`, `ttsh:focusNodes`, `ttsh:valueNodes`,
+    /// `ttsh:distinctFocusNodes` and `ttsh:failingFocusNodes`.
     pub fn statistics(&mut self, counts: &[ShapeCount], sink: &mut dyn FnMut(Triple)) {
         use crate::vocab::ttsh;
         let run = BlankNode::default();
@@ -137,9 +185,19 @@ impl ReportWriter {
                 Literal::from(c.focus_nodes as i64),
             ));
             sink(Triple::new(
-                node,
+                node.clone(),
                 ttsh::VALUE_NODES,
                 Literal::from(c.value_nodes as i64),
+            ));
+            sink(Triple::new(
+                node.clone(),
+                ttsh::DISTINCT_FOCUS_NODES,
+                Literal::from(c.distinct_focus_nodes as i64),
+            ));
+            sink(Triple::new(
+                node,
+                ttsh::FAILING_FOCUS_NODES,
+                Literal::from(c.failing_focus_nodes as i64),
             ));
         }
     }
