@@ -322,6 +322,7 @@ pub(crate) fn route(
     base: &str,
     timeout: Option<Duration>,
     view: &View,
+    lang: &str,
 ) -> Result<Reply, HttpError> {
     let (rest, previewed, base) = match rest {
         // A preview's id is 32 hex digits, which no tile's zoom is: a collection whose id is
@@ -430,6 +431,14 @@ pub(crate) fn route(
                 version,
             )?);
         }
+        label_values(
+            entry,
+            &mut each,
+            lang,
+            chosen.first().and_then(|c| c.label_strip.as_ref()),
+            deadline.map(|d| d.saturating_duration_since(std::time::Instant::now())),
+            view,
+        )?;
         let counts = combine_facets(each);
         let mut reply = Reply::bytes(200, "application/json", counts.to_string().into_bytes());
         reply.headers.push(("Cache-Control", "no-cache".to_owned()));
@@ -443,7 +452,7 @@ pub(crate) fn route(
             .ok_or_else(|| HttpError(404, format!("No collection {id}")))?;
         let (_, made_for) = shown()?;
         let version = made_for.filter(|v| Some(*v) == data_version(state, entry));
-        let counts = facet_counts(
+        let mut counts = facet_counts(
             entry,
             collection,
             &collections,
@@ -451,6 +460,14 @@ pub(crate) fn route(
             timeout,
             view,
             version,
+        )?;
+        label_values(
+            entry,
+            std::slice::from_mut(&mut counts),
+            lang,
+            collection.label_strip.as_ref(),
+            timeout,
+            view,
         )?;
         let mut reply = Reply::bytes(200, "application/json", counts.to_string().into_bytes());
         reply.headers.push(("Cache-Control", "no-cache".to_owned()));
@@ -556,6 +573,91 @@ const RANGE_CLASSES: usize = 8;
 
 const LABELS: &str =
     "<http://www.w3.org/2000/01/rdf-schema#label>|<http://www.w3.org/2004/02/skos/core#prefLabel>";
+/// IRIs one query for facet values' labels names at most.
+const LABEL_BATCH: usize = 500;
+
+/// How well a label in `lang` suits a reader of `wanted` (lower is better, #260): the
+/// reader's language, then its primary language (`en` for `en-GB`, either way round), then
+/// English, then no language, then any other.
+pub(crate) fn label_rank(lang: Option<&str>, wanted: &str) -> u8 {
+    let primary = |t: &str| t.split('-').next().unwrap_or(t).to_ascii_lowercase();
+    match lang {
+        Some(l) if l.eq_ignore_ascii_case(wanted) => 0,
+        Some(l) if primary(l) == primary(wanted) => 1,
+        Some(l) if primary(l) == "en" => 2,
+        None => 3,
+        Some(_) => 4,
+    }
+}
+
+/// Labels the IRI values of the facets of `answers` (each one collection's
+/// [`facet_counts`]): the `rdfs:label` or `skos:prefLabel` that suits a reader of `lang`
+/// best ([`label_rank`]), without what `strip` matches (#260). The counts are kept for the
+/// data version whatever the language; the labels are looked up for each request.
+fn label_values(
+    entry: &Entry,
+    answers: &mut [serde_json::Value],
+    lang: &str,
+    strip: Option<&regex::Regex>,
+    timeout: Option<Duration>,
+    view: &View,
+) -> Result<(), HttpError> {
+    let mut iris: Vec<String> = answers
+        .iter()
+        .filter_map(|a| a["facets"].as_array())
+        .flatten()
+        .filter_map(|f| f["values"].as_array())
+        .flatten()
+        .filter_map(|v| v["value"].as_str())
+        .filter(|v| NamedNode::new(*v).is_ok())
+        .map(str::to_owned)
+        .collect();
+    iris.sort_unstable();
+    iris.dedup();
+    let mut best: HashMap<String, (u8, String)> = HashMap::new();
+    for batch in iris.chunks(LABEL_BATCH) {
+        let values: Vec<String> = batch.iter().map(|i| format!("<{i}>")).collect();
+        let rows = run(
+            entry,
+            &format!(
+                "SELECT ?v ?l WHERE {{ VALUES ?v {{ {} }} ?v {LABELS} ?l FILTER(isLiteral(?l)) }}",
+                values.join(" ")
+            ),
+            timeout,
+            view,
+        )?;
+        for row in rows {
+            let (Some(Term::NamedNode(v)), Some(Term::Literal(l))) = (&row[0], &row[1]) else {
+                continue;
+            };
+            let rank = label_rank(l.language(), lang);
+            let label = l.value();
+            match best.get(v.as_str()) {
+                // Of two labels as good, the least, so that every answer is the same.
+                Some((r, known)) if (*r, known.as_str()) <= (rank, label) => {}
+                _ => {
+                    best.insert(v.as_str().to_owned(), (rank, label.to_owned()));
+                }
+            }
+        }
+    }
+    for answer in answers {
+        // `get_mut`, not indexing, which would add the keys an answer has not.
+        let Some(facets) = answer.get_mut("facets").and_then(|f| f.as_array_mut()) else {
+            continue;
+        };
+        for value in facets
+            .iter_mut()
+            .filter_map(|f| f.get_mut("values").and_then(|v| v.as_array_mut()))
+            .flatten()
+        {
+            if let Some((_, label)) = value["value"].as_str().and_then(|v| best.get(v)) {
+                value["label"] = crate::ogc::stripped(label, strip).into();
+            }
+        }
+    }
+    Ok(())
+}
 
 /// A collection's facet filters, as SPARQL over `?f`, and a signature of them for the cache.
 #[derive(Default)]
@@ -1094,7 +1196,7 @@ fn search(
             if let Some(bbox) = bbox {
                 results.push(json!({
                     "iri": f.as_str(),
-                    "label": label,
+                    "label": crate::ogc::stripped(&label, c.label_strip.as_ref()),
                     "collection": c.id,
                     "bbox": bbox,
                 }));
@@ -1310,10 +1412,9 @@ fn facet_counts(
         // Ties at the cut are kept in the store's order: a second sort key costs a second on
         // RINF's 130,000 track ids.
         let query = format!(
-            "SELECT ?v ?n (SAMPLE(?l) AS ?label) WHERE {{ \
+            "SELECT ?v ?n WHERE {{ \
                {{ SELECT ?v (COUNT(DISTINCT ?f) AS ?n) WHERE {{ ?f a <{class}> .{}{}{drawn} }} \
-                 GROUP BY ?v ORDER BY DESC(?n) LIMIT {} }} \
-               OPTIONAL {{ ?v {LABELS} ?l }} }} GROUP BY ?v ?n ORDER BY DESC(?n) STR(?v)",
+                 GROUP BY ?v ORDER BY DESC(?n) LIMIT {} }} }} ORDER BY DESC(?n) STR(?v)",
             facet.bind("?f", "?v"),
             other.sparql,
             FACET_VALUES + 1,
@@ -1329,11 +1430,8 @@ fn facet_counts(
                     Term::Literal(l) => l.value().to_owned(),
                     _ => return None,
                 };
-                let label = match &r[2] {
-                    Some(Term::Literal(l)) => Some(l.value().to_owned()),
-                    _ => None,
-                };
-                Some(json!({ "value": value, "label": label, "count": number(&r[1]) }))
+                // Labelled for the reader's language by `label_values` (#260).
+                Some(json!({ "value": value, "label": null, "count": number(&r[1]) }))
             })
             .collect();
         let mut out = json!({
@@ -1744,6 +1842,10 @@ fn style(
     let views = map_views(collections);
     if !views.is_empty() {
         metadata["tripletrail:views"] = views.into();
+    }
+    // What the map page takes out of the labels it looks up itself (#260).
+    if let Some(strip) = collections.first().and_then(|c| c.label_strip.as_ref()) {
+        metadata["tripletrail:labelStrip"] = strip.as_str().into();
     }
     json!({
         "version": 8,
