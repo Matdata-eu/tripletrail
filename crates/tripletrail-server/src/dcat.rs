@@ -343,7 +343,10 @@ mod tests {
         let text: Vec<String> = triples.iter().map(ToString::to_string).collect();
         // --site-name titles the catalog when the file does not (#262).
         let named = describe("http://h", &["kg"], &["kg"], &[], None, Some("Rail KG")).unwrap();
-        assert!(named.iter().any(|t| t.to_string().ends_with("<http://purl.org/dc/terms/title> \"Rail KG\"")));
+        assert!(named.iter().any(|t| {
+            t.to_string()
+                .ends_with("<http://purl.org/dc/terms/title> \"Rail KG\"")
+        }));
         for want in [
             "<http://h/#catalog> <http://purl.org/dc/terms/title> \"TripleTrail at h\"",
             "<http://h/kg/void#dataset> <http://purl.org/dc/terms/title> \"kg\"",

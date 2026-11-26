@@ -3322,7 +3322,13 @@ fn branded_pages_carry_the_operators_name_logo_and_colour() {
     .unwrap();
     let base = format!("http://{}", server.address());
     server.spawn();
-    let text = |p: &str| ureq::get(&format!("{base}{p}")).call().unwrap().into_string().unwrap();
+    let text = |p: &str| {
+        ureq::get(&format!("{base}{p}"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap()
+    };
     let page = text("/$/ui/");
     assert!(page.contains("<title>Rail &lt;KG&gt;</title>"), "{page}");
     assert!(page.contains("data-site-name=\"Rail &lt;KG&gt;\""));
@@ -3337,14 +3343,27 @@ fn branded_pages_carry_the_operators_name_logo_and_colour() {
         assert!(page.contains("--brand:#00634f"), "{p}");
         assert!(!page.contains("{{"), "{p}");
     }
-    let favicon = ureq::get(&format!("{base}/$/ui/brand/favicon")).call().unwrap();
+    let favicon = ureq::get(&format!("{base}/$/ui/brand/favicon"))
+        .call()
+        .unwrap();
     assert_eq!(favicon.content_type(), "image/svg+xml");
-    assert!(favicon.header("Content-Security-Policy").unwrap().contains("sandbox"));
+    assert!(
+        favicon
+            .header("Content-Security-Policy")
+            .unwrap()
+            .contains("sandbox")
+    );
     let r = ureq::AgentBuilder::new().redirects(0).build();
     let logo = r.get(&format!("{base}/$/ui/brand/logo")).call().unwrap();
     assert_eq!(logo.status(), 302);
-    assert_eq!(logo.header("Location"), Some("https://example.org/logo.png"));
-    assert_eq!(status(ureq::get(&format!("{base}/$/ui/brand/logo-dark")).call()), 404);
+    assert_eq!(
+        logo.header("Location"),
+        Some("https://example.org/logo.png")
+    );
+    assert_eq!(
+        status(ureq::get(&format!("{base}/$/ui/brand/logo-dark")).call()),
+        404
+    );
     let config: Value = serde_json::from_str(&text("/$/ui/config.json")).unwrap();
     assert_eq!(config["site"]["name"], "Rail <KG>");
     assert_eq!(config["site"]["color"], "#00634f");
@@ -3356,12 +3375,18 @@ fn branded_pages_carry_the_operators_name_logo_and_colour() {
     let server = Server::bind("127.0.0.1:0", Vec::new(), Options::default()).unwrap();
     let plain = format!("http://{}", server.address());
     server.spawn();
-    let page = ureq::get(&format!("{plain}/$/ui/")).call().unwrap().into_string().unwrap();
+    let page = ureq::get(&format!("{plain}/$/ui/"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
     assert!(page.contains("<title>TripleTrail</title>"));
     assert!(page.contains("<b>TripleTrail</b> server"));
     assert!(page.contains("<span class=\"logo\" aria-hidden=\"true\"></span>"));
     assert!(page.contains("<link rel=\"icon\" href=\"/$/ui/icon.svg\">"));
     assert!(!page.contains("--yasgui-brand:"));
-    let favicon = ureq::get(&format!("{plain}/$/ui/brand/favicon")).call().unwrap();
+    let favicon = ureq::get(&format!("{plain}/$/ui/brand/favicon"))
+        .call()
+        .unwrap();
     assert_eq!(favicon.content_type(), "image/svg+xml");
 }

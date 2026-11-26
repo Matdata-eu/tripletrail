@@ -2706,6 +2706,32 @@ number of triples and the first 40, or the error) and `get_shapes` (`GET
 one for **Back to the previous query**, and previews it. Requests go from the browser to the
 AI service only; the server only answers the previews and the shapes, under the user's token.
 
+### Branding
+
+These options give the pages an operator's name and look (#262). Each is also an environment
+variable and a key of the `--config` file. Values are plain text, files or checked `http(s)`
+URLs, never HTML.
+
+| Option | Environment variable | What it sets |
+|---|---|---|
+| `--site-name NAME` | `TRIPLETRAIL_SITE_NAME` | The web UI's tab titles (`Query · NAME`) and top bar, the REST API and GraphQL pages' header, the map export's caption and citation, and the DCAT catalog's `dct:title` when `--catalog` gives none. At most 80 characters on one line. Default: TripleTrail ("TripleTrail server" in the top bar). |
+| `--site-favicon FILE\|URL` | `TRIPLETRAIL_SITE_FAVICON` | The pages' icon, served at `/$/ui/brand/favicon`. |
+| `--site-logo FILE\|URL` | `TRIPLETRAIL_SITE_LOGO` | The top bar's logo in place of TripleTrail's mark, 28 px high at its own width (at most 200 px), served at `/$/ui/brand/logo`. |
+| `--site-logo-dark FILE\|URL` | `TRIPLETRAIL_SITE_LOGO_DARK` | The logo in the dark theme, at `/$/ui/brand/logo-dark`. |
+| `--site-color #RRGGBB` | `TRIPLETRAIL_SITE_COLOR` | The accent colour of buttons, links, tabs and MatGUI (its `--yasgui-brand*` variables), with darker and lighter shades derived for each theme. White text must read on it: a contrast under 4.5:1 (WCAG AA) stops the server with an error. |
+
+An image file is SVG, PNG, ICO, WebP or JPEG, at most 256 KB, read when the server starts, and
+served with its type, `X-Content-Type-Options: nosniff` and a sandboxing
+`Content-Security-Policy` (an SVG runs no script). An image given as a URL is a redirect from
+the same path, so the pages always name the server's path. `/$/ui/brand/favicon` without
+`--site-favicon` is TripleTrail's icon.
+
+`GET /$/ui/config.json` gives the settings to scripts: `{"site": {"name", "named", "favicon",
+"logo", "logoDark", "color"}, "version"}` (`named` is false without `--site-name`; `logo`,
+`logoDark` and `color` are null when unset). It and `/$/ui/brand/…` need no credentials, also
+with [authentication](#authentication) on: they hold no data. The About dialog keeps naming
+TripleTrail, its version and the licences of what it ships, whatever the name.
+
 ## Linked Data
 
 With `--base-iri DATASET=PREFIX`, the IRIs of a dataset dereference: a `GET` of a URL that

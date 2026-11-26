@@ -674,6 +674,52 @@ description in the file gets its name and a short sentence, since DCAT-AP requir
 two `X-Forwarded-` headers are what a reverse proxy sends: the IRIs are then the public
 ones, here `https://data.example.org/`. Each caller sees only the datasets it may list.
 
+## Branding your server
+
+A server you run for a team, a customer or the public can carry that service's name and look
+instead of TripleTrail's. Four options set it: `--site-name` names the server in the web
+UI's tab titles and top bar, on the REST API and GraphQL pages, in map exports and as the
+catalog's title (unless `--catalog` gives one). `--site-logo` replaces the mark in the top
+bar (`--site-logo-dark` for the dark theme). `--site-favicon` sets the browser tab's icon, and
+`--site-color` sets the colour of buttons, links and tabs. Images are SVG, PNG, ICO, WebP or
+JPEG files of at most 256 KB, or `http(s)` URLs. Save a logo as `logo.svg`:
+
+<!-- test: file logo.svg -->
+```xml
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="24"><rect width="24" height="24" rx="5" fill="#00634f"/></svg>
+```
+
+<!-- test: serve -->
+```sh
+tripletrail serve --location data --dataset rail_v1 \
+  --site-name "Rail Knowledge Graph" --site-logo logo.svg --site-color "#00634f"
+```
+
+The web UI now shows "Rail Knowledge Graph" with your logo, in green. Scripts read the same
+settings from `/$/ui/config.json`, which needs no credentials:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/$/ui/config.json' | jq -c .site
+```
+
+<!-- test: output -->
+```text
+{"color":"#00634f","favicon":"/$/ui/icon.svg","logo":"/$/ui/brand/logo","logoDark":null,"name":"Rail Knowledge Graph","named":true}
+```
+
+White text must read on the colour (a contrast of at least 4.5:1, as WCAG AA asks), so a
+light colour is refused when the server starts:
+
+<!-- test: run fails -->
+```sh
+tripletrail serve --location data --dataset rail_v1 --site-color "#f5d000"
+```
+
+The About dialog still names TripleTrail, its version and the licences of what it ships.
+Every option also works as an environment variable (`TRIPLETRAIL_SITE_NAME`, ...) and as a key
+of the `--config` file. See [the web UI](../server.md#web-ui).
+
 ## What you learnt
 
 - Backups are one admin request, run on a schedule; store backups restore fastest.
@@ -683,6 +729,8 @@ ones, here `https://data.example.org/`. Each caller sees only the datasets it ma
 - Replicas, limits, metrics and HTTPS are options of the same `tripletrail serve`.
 - `/.well-known/dcat` is a DCAT-AP catalog for data portals; `--catalog` adds titles,
   publisher and licence.
+- `--site-name`, `--site-logo`, `--site-favicon` and `--site-color` give the pages your
+  service's name and look.
 - The enterprise edition is a separate build that reads an offline licence and never stops
   the server when it expires; its audit log records who changed what, in a chain that shows
   tampering.

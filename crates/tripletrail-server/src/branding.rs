@@ -158,9 +158,11 @@ impl Branding {
             (Some(_), None) => {
                 "<img class=\"logo-img\" src=\"/$/ui/brand/logo\" alt=\"\">".to_owned()
             }
-            (Some(_), Some(_)) => "<img class=\"logo-img logo-light\" src=\"/$/ui/brand/logo\" alt=\"\">\
+            (Some(_), Some(_)) => {
+                "<img class=\"logo-img logo-light\" src=\"/$/ui/brand/logo\" alt=\"\">\
                  <img class=\"logo-img logo-dark\" src=\"/$/ui/brand/logo-dark\" alt=\"\">"
-                .to_owned(),
+                    .to_owned()
+            }
         }
     }
 
@@ -235,9 +237,7 @@ fn parse_color(value: &str) -> Result<Color, String> {
     let v = value.trim();
     let hex = v.strip_prefix('#').unwrap_or(v);
     let rgb = (hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()))
-        .then(|| {
-            [0, 2, 4].map(|i| f64::from(u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0)))
-        })
+        .then(|| [0, 2, 4].map(|i| f64::from(u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0))))
         .ok_or_else(|| format!("--site-color takes a colour as #rrggbb, not {v}"))?;
     let ratio = contrast(rgb, [255.0; 3]);
     if ratio < 4.5 {
@@ -311,7 +311,11 @@ mod tests {
         // The default brand blue passes; a light yellow does not.
         let c = Branding::new(None, None, None, None, Some("#0563BB")).unwrap();
         assert_eq!(c.color.as_ref().unwrap().hex, "#0563bb");
-        assert!(c.style().contains("--yasgui-brand:#0563bb"), "{}", c.style());
+        assert!(
+            c.style().contains("--yasgui-brand:#0563bb"),
+            "{}",
+            c.style()
+        );
         let e = Branding::new(None, None, None, None, Some("#f5d000")).unwrap_err();
         assert!(e.contains("contrast"), "{e}");
         for bad in ["blue", "#12345", "#zzzzzz", "rgb(0,0,0)"] {
@@ -334,8 +338,8 @@ mod tests {
             })
         ));
         assert_eq!(b.favicon_href(), "/$/ui/brand/favicon");
-        let b = Branding::new(None, None, Some("https://example.org/logo.png"), None, None)
-            .unwrap();
+        let b =
+            Branding::new(None, None, Some("https://example.org/logo.png"), None, None).unwrap();
         assert_eq!(
             b.logo,
             Some(Image::Url("https://example.org/logo.png".to_owned()))
