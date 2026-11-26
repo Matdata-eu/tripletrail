@@ -517,7 +517,8 @@ stations
 
 A flag or a `TRIPLETRAIL_*` variable wins over the file, so one file can serve several
 environments. A dataset takes `name`, and optionally `path` (a dataset directory to attach),
-`read-only`, `union-default-graph`, `rdfs`, `owl-rl`, `aliases` and `text-properties`; see
+`read-only`, `union-default-graph`, `rdfs`, `owl-rl`, `aliases`, `text-properties`,
+`examples`, `default-query`, `map-view` and `time-offset`; see
 [the configuration file](../server.md#configuration-file).
 
 A Fuseki `config.ttl` becomes such a file with `tripletrail config import-fuseki`. Given this
