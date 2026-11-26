@@ -2367,6 +2367,12 @@ version.
   An invalid file or entry is refused with 400 and changes nothing. Without `--limits`,
   these answer 409.
 
+  The dialog of a dataset on the web UI's Datasets page has a **Limits** section that reads
+  and sets the dataset's entry through these (#18): each field the entry's value, the applied
+  value greyed when it has none, and the dataset's memory and disk use next to its quotas.
+  **Save limits** puts the entry (a refused value is shown and changes nothing), **Use the
+  defaults** deletes it. Without `--limits` it says how to get one.
+
   `/$/stats/{name}` shows each dataset's limits as applied (`limits`), its `running` and
   `queued` requests, the totals `queuedTotal`, `rejectedBusy` and `rejectedQuota`, and its
   `memoryBytes` and `sizeOnDisk`. `memory` splits `memoryBytes` by part: `dictionary`,

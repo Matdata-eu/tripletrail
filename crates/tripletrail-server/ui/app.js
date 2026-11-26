@@ -366,6 +366,8 @@
       actions.push(btn("Detach…", () => detach(ds), "danger"));
     }
     $("#ds-actions").replaceChildren(...actions);
+    $("#ds-limits").hidden = true;
+    if (!ds.alias) showLimits(ds);
     $("#ds-swap").hidden = !ds.alias;
     $("#ds-upload").hidden = ds.alias || ds.mode !== "read-write";
     $("#upload-msg").textContent = "";
@@ -376,6 +378,68 @@
     if (/\/datasets\/./.test(location.pathname)) history.replaceState(null, "", UI + "datasets");
     current = null;
     if (page === "datasets") renderDatasets();
+  });
+
+  // ---------- a dataset's limits (#18), as the limits file holds them ----------
+  const LIMIT_KEYS = ["maxConcurrent", "maxQueued", "queueTimeout", "timeout", "maxTimeout", "maxRows", "maxUpload", "queryMemory", "maxDisk", "maxMemory"];
+  let limitsWritten = null;
+  async function showLimits(ds) {
+    const box = $("#ds-limits"), form = $("#limits-form"), note = $("#limits-note");
+    let mine;
+    try {
+      // Without a limits file the server answers 409: the limits are read-only here.
+      await api("GET", "/$/limits");
+      mine = await api("GET", "/$/limits/" + encodeURIComponent(ds.name));
+    } catch (e) {
+      if (e.status === 409) {
+        box.hidden = false;
+        form.hidden = true;
+        note.textContent = "Start the server with --limits FILE to set this dataset's limits here.";
+      }
+      return;
+    }
+    if (!current || current.name !== ds.name) return;
+    limitsWritten = mine.written || {};
+    const applied = mine.applied || {};
+    for (const k of LIMIT_KEYS) {
+      const input = form.elements[k];
+      const v = limitsWritten[k];
+      input.value = v == null ? "" : String(v);
+      input.placeholder = applied[k] == null ? "none" : String(applied[k]);
+    }
+    const s = allStats["/" + ds.name] || {};
+    const used = [];
+    if (s.memoryBytes != null) used.push(`memory ${fmtBytes(s.memoryBytes)}` + (applied.maxMemory ? ` of ${fmtBytes(applied.maxMemory)}` : ""));
+    if (s.sizeOnDisk != null) used.push(`disk ${fmtBytes(s.sizeOnDisk)}` + (applied.maxDisk ? ` of ${fmtBytes(applied.maxDisk)}` : ""));
+    note.textContent = "Empty fields take the server's default (shown greyed). Sizes take units, such as 512MiB or 10GB. Changes apply at once and are written to the limits file."
+      + (used.length ? " Now: " + used.join(", ") + "." : "");
+    form.hidden = false;
+    box.hidden = false;
+  }
+  $("#limits-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!current) return;
+    // Keys the form doesn't show stay as written.
+    const entry = Object.assign({}, limitsWritten || {});
+    for (const k of LIMIT_KEYS) {
+      const v = e.target.elements[k].value.trim();
+      if (v === "") delete entry[k];
+      else entry[k] = /^\d+(\.\d+)?$/.test(v) ? Number(v) : v;
+    }
+    try {
+      await api("PUT", "/$/limits/" + encodeURIComponent(current.name), { body: JSON.stringify(entry), type: "application/json" });
+      toast("Limits of " + current.name + " saved", "ok");
+      await loadDatasets().catch(() => {});
+      showLimits(current);
+    } catch (err) { fail(err); }
+  });
+  $("#limits-clear").addEventListener("click", async () => {
+    if (!current) return;
+    try {
+      await api("DELETE", "/$/limits/" + encodeURIComponent(current.name));
+      toast(current.name + " takes the default limits", "ok");
+      showLimits(current);
+    } catch (err) { fail(err); }
   });
 
   async function backup(ds) {

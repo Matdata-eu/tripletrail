@@ -254,6 +254,24 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:7878/rail_v1/query \
 - `--limits limits.json` sets, per dataset, how many requests run at once, a queue, timeouts
   and disk and memory quotas, and per caller a request rate. See
   [operations](../server.md#operations).
+- With a limits file, the **Limits** section of a dataset's dialog on the Datasets page of
+  the web UI sets that dataset's limits: requests at once, the queue, timeouts, rows, upload
+  size, query memory and the disk and memory quotas, with the dataset's memory and disk use
+  next to its quotas. Saving writes the file and applies at once; **Use the defaults** removes
+  the dataset's entry. It does what `PUT /$/limits/{name}` does, which this server, started
+  without `--limits`, refuses:
+
+<!-- test: run -->
+```sh
+curl -s -X PUT -H 'Authorization: Bearer adm1n' 'http://localhost:7878/$/limits/rail_v1' \
+  -d '{"maxConcurrent": 2}'
+```
+
+<!-- test: output -->
+```text
+The server has no limits file: start it with --limits FILE (the file may hold {})
+```
+
 - A query can carry its own hints in `#pragma tt.…` comment lines: `#pragma tt.timeout 5s`
   stops it sooner than the server's timeout. When the planner gets a query wrong,
   `#pragma tt.optimizer off` keeps the written join order. `/explain` shows the hints it
