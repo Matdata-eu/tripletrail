@@ -36,7 +36,66 @@ pub struct ValidationResult<'a> {
     pub details: Vec<ValidationResult<'a>>,
 }
 
+/// The most results whose [finding keys](ValidationResult::key) a comparison holds: each takes
+/// about 40 bytes in a hash map (the 16-byte key, a count and a shape index, and the map's own
+/// overhead), so 4 million take about 160 MB. Past it, a comparison gives counts by shape only.
+pub const FINDING_KEYS_HELD: usize = 4_000_000;
+
+/// 128-bit FNV-1a, fed as text: fixed by its definition, so a key is the same in every build
+/// and run, and can be stored to compare with a later run.
+struct Fnv128(u128);
+
+impl Fnv128 {
+    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+
+    fn bytes(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 ^= u128::from(*b);
+            self.0 = self.0.wrapping_mul(Self::PRIME);
+        }
+    }
+
+    /// One field: its text, then a byte that no N-Triples term or SPARQL path holds, so that
+    /// fields cannot run into each other.
+    fn field(&mut self, f: impl std::fmt::Display) {
+        use std::fmt::Write;
+        let _ = write!(self, "{f}");
+        self.bytes(&[0xff]);
+    }
+}
+
+impl std::fmt::Write for Fnv128 {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.bytes(s.as_bytes());
+        Ok(())
+    }
+}
+
 impl ValidationResult<'_> {
+    /// The finding key: one result told apart from every other by its focus node, path, value,
+    /// source shape (by its [stable IRI](crate::Shape::iri)), constraint component and
+    /// severity, as a 128-bit FNV-1a hash of them written out (terms in N-Triples, the path in
+    /// SPARQL syntax). The same result in two runs, or with two sets of shapes in which its
+    /// shape says the same thing, has the same key; messages and `sh:detail`s do not count.
+    /// Proposal validation and quality runs compare results by it; see
+    /// [`FINDING_KEYS_HELD`] for what holding them costs.
+    pub fn key(&self) -> u128 {
+        let mut h = Fnv128(Fnv128::OFFSET);
+        h.field(&self.focus_node);
+        match &self.result_path {
+            Some(p) => h.field(p.to_sparql()),
+            None => h.field(""),
+        }
+        match &self.value {
+            Some(v) => h.field(v),
+            None => h.field(""),
+        }
+        h.field(self.source_shape_iri);
+        h.field(&self.source_constraint_component);
+        h.field(self.severity);
+        h.0
+    }
     /// Writes the result as triples, with `node` as its subject.
     pub fn write(&self, node: &BlankNode, sink: &mut dyn FnMut(Triple)) {
         let mut t = |p: oxigraph::model::NamedNodeRef<'_>, o: Term| {

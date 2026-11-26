@@ -502,8 +502,8 @@ const VALIDATION_TIME: Duration = Duration::from_secs(60 * 60);
 /// New results a validation lists, at most.
 const NEW_LISTED: usize = 20;
 /// Distinct results a validation tells apart, at most: past it, it gives counts by shape and
-/// not which results are new or gone. Each takes some 30 bytes.
-const RESULTS_COMPARED: usize = 4_000_000;
+/// not which results are new or gone.
+const RESULTS_COMPARED: usize = tripletrail::shacl::FINDING_KEYS_HELD;
 
 /// One background validation at a time on the server: the others wait, `queued`.
 static VALIDATING: Mutex<()> = Mutex::new(());
@@ -549,8 +549,9 @@ fn path_text(p: &tripletrail::shacl::Path) -> String {
 
 /// The dataset's data validated with `before` and with `after` (the validation reader's
 /// shapes as they are and as proposed), both in one read of the store so that they see the
-/// same data. Results are told apart by focus node, path, value, shape, component and
-/// severity, and folded as they come: a count per result (by a 64-bit hash) and per shape,
+/// same data. Results are told apart by their finding key (focus node, path, value, shape,
+/// component and severity: `ValidationResult::key`), and folded as they come: a count per
+/// result and per shape,
 /// and the first [`NEW_LISTED`] new ones in full. Gives how many results each set gives,
 /// how many are new and gone, the new ones by shape, and the first new ones; past
 /// [`RESULTS_COMPARED`] distinct results, the counts by shape only (`compared: false`).
@@ -561,11 +562,10 @@ fn validation(
     timeout: Option<Duration>,
 ) -> Value {
     use std::collections::HashMap;
-    use std::hash::{Hash, Hasher};
     let started = std::time::Instant::now();
     let (engine, _deadline) = crate::with_deadline(engine, timeout);
     // Per result: after's count less before's, and its shape (an index into `shapes`).
-    let mut found: HashMap<u64, (i64, u32)> = HashMap::new();
+    let mut found: HashMap<u128, (i64, u32)> = HashMap::new();
     let mut shapes: Vec<String> = Vec::new();
     let mut shape_index: HashMap<String, u32> = HashMap::new();
     let mut by_shape: Vec<[u64; 3]> = Vec::new(); // before, after, new
@@ -597,17 +597,7 @@ fn validation(
         if !compared {
             return;
         }
-        let fields = [
-            text_of(&r.focus_node),
-            r.result_path.as_deref().map(path_text).unwrap_or_default(),
-            r.value.as_ref().map(text_of).unwrap_or_default(),
-            shapes[index as usize].clone(),
-            text_of(&r.source_constraint_component),
-            text_of(r.severity),
-        ];
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        fields.hash(&mut hasher);
-        let key = hasher.finish();
+        let key = r.key();
         if found.len() >= RESULTS_COMPARED && !found.contains_key(&key) {
             compared = false;
             found = HashMap::new();
@@ -623,7 +613,14 @@ fn validation(
                 new += 1;
                 by_shape[index as usize][2] += 1;
                 if listed.len() < NEW_LISTED {
-                    let [focus, path, value, shape, component, severity] = fields;
+                    let [focus, path, value, shape, component, severity] = [
+                        text_of(&r.focus_node),
+                        r.result_path.as_deref().map(path_text).unwrap_or_default(),
+                        r.value.as_ref().map(text_of).unwrap_or_default(),
+                        shapes[index as usize].clone(),
+                        text_of(&r.source_constraint_component),
+                        text_of(r.severity),
+                    ];
                     let mut one = json!({ "focus": focus, "shape": shape, "component": component, "severity": severity });
                     if !path.is_empty() {
                         one["path"] = json!(path);

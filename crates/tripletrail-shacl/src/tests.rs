@@ -627,3 +627,51 @@ fn blank_shapes_get_stable_iris() {
     let anonymous = shape_iris("[] sh:targetNode ex:a ; sh:class ex:Car .");
     assert!(anonymous[0].starts_with("urn:x-tripletrail-shacl:shape:"));
 }
+
+/// The finding keys of validating `data` with `shapes`, sorted.
+fn finding_keys(shapes: &str, data: &str) -> Vec<u128> {
+    let shapes = Shapes::compile(&graph(shapes)).unwrap();
+    let data = graph(data);
+    let mut keys = Vec::new();
+    Validator::new(&shapes, &data).report(&mut |r| keys.push(r.key()));
+    keys.sort_unstable();
+    keys
+}
+
+#[test]
+fn finding_keys_are_stable() {
+    let shapes = "ex:S sh:targetClass ex:Car ;
+        sh:property [ sh:path ex:p ; sh:maxInclusive 1 ] ;
+        sh:property [ sh:path ex:q ; sh:minCount 1 ] .";
+    let data = "ex:a a ex:Car ; ex:p 2, 3 . ex:b a ex:Car ; ex:p 1 ; ex:q 1 .";
+    let keys = finding_keys(shapes, data);
+    // ex:a: two values over 1 and no ex:q; each result has its own key.
+    assert_eq!(keys.len(), 3);
+    assert!(keys.windows(2).all(|w| w[0] != w[1]));
+    // A new read of the shapes (new blank node labels) gives the same keys.
+    assert_eq!(finding_keys(shapes, data), keys);
+    // Keys are stored to compare with later runs: they must not change between builds.
+    // This one is 128-bit FNV-1a of `<http://example.com/a>`, ``, `<http://example.com/a>`,
+    // `<http://example.com/S>`, `<…shacl#ClassConstraintComponent>` and `<…shacl#Violation>`,
+    // each followed by the byte 0xff.
+    assert_eq!(
+        finding_keys("ex:S sh:targetNode ex:a ; sh:class ex:Car .", ""),
+        [0x07793a455b8420e67a437da11447b4a7]
+    );
+    let with_message = shapes.replace("sh:minCount 1", "sh:minCount 1 ; sh:message \"no q\"");
+    let changed = finding_keys(&with_message, data);
+    // The message changes the ex:q shape's IRI (its triples changed), so only its key moves.
+    assert_eq!(changed.iter().filter(|k| keys.contains(k)).count(), 2);
+    // A severity is part of the key.
+    let warning = shapes.replace(
+        "sh:maxInclusive 1",
+        "sh:maxInclusive 1 ; sh:severity sh:Warning",
+    );
+    assert_eq!(
+        finding_keys(&warning, data)
+            .iter()
+            .filter(|k| keys.contains(k))
+            .count(),
+        1
+    );
+}

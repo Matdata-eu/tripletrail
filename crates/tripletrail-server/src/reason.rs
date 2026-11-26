@@ -666,6 +666,7 @@ fn result_json(r: &tripletrail::shacl::ValidationResult<'_>) -> Value {
         "resultPath": r.result_path.as_ref().map(|p| p.to_sparql()),
         "value": r.value.as_ref().map(term),
         "sourceShape": term(r.source_shape),
+        "shapeIri": r.source_shape_iri.as_str(),
         "sourceConstraintComponent": term(&r.source_constraint_component),
         "sourceConstraint": r.source_constraint.as_ref().map(term),
         "severity": term(r.severity),
@@ -673,6 +674,7 @@ fn result_json(r: &tripletrail::shacl::ValidationResult<'_>) -> Value {
             Term::Literal(l) => Value::String(l.value().to_owned()),
             other => Value::String(other.to_string()),
         }).collect::<Vec<_>>(),
+        "key": format!("{:032x}", r.key()),
     });
     if !r.details.is_empty() {
         v["details"] = Value::Array(r.details.iter().map(result_json).collect());

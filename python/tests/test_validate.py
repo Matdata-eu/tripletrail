@@ -34,6 +34,11 @@ def test_validate(store):
     assert rows[0]["message"] == ox.Literal("too fast", language="en")
     assert rows[0]["result_path"] == "<http://example.com/speed>"
     assert rows[1]["value"] is None
+    # Finding keys: one per result, the same in a second validation.
+    assert len({r["key"] for r in rows}) == 2 and all(len(r["key"]) == 32 for r in rows)
+    again = sorted(e.validate(shapes).results, key=lambda r: r["focus_node"].value)
+    assert [r["key"] for r in again] == [r["key"] for r in rows]
+    assert all(r["shape_iri"].startswith("http://example.com/Car#") for r in rows)
     parsed = list(ox.parse(report.serialize(), ox.RdfFormat.TURTLE))
     assert len(parsed) == len(report.triples())
     asked = e.query(

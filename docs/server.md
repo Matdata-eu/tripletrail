@@ -810,9 +810,10 @@ curl -X POST -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/jso
   at a time on the server, at most an hour; the others wait. `validation` has `status`
   (`queued`, `running`, `done`, `failed` with an `error`, or `interrupted` when the server
   stopped before it was done), `before` and `after` (how many results each set gives), and
-  `new` and `gone`: results told apart by focus node, path, value, source shape (a blank one
-  written out), constraint component and severity, IRIs as they are and other terms as in
-  N-Triples. With them come `newByShape` (the 20 shapes with the most new results) and
+  `new` and `gone`: results told apart by their
+  [finding key](validation-and-reasoning.md#finding-keys) (focus node, path, value, source
+  shape by its stable IRI, constraint component and severity). In the answer, a blank source
+  shape is written out, IRIs are as they are and other terms as in N-Triples. With them come `newByShape` (the 20 shapes with the most new results) and
   `newResults` (the first 20), and `ms`. Results are counted as they are found, some 40 bytes
   for each distinct one (about 75 MB for 3 million results on 1 million nodes); past 4 million
   distinct results, `compared` is `false` and `moreByShape` gives the shapes with more results
@@ -1037,8 +1038,9 @@ scratch store (#401):
 - `…/validate` checks the data, plus what the rules of `rules/` infer (`rules=false` for the
   data alone), against `shapes/`. JSON: `conforms`, `resultCount`, `results` (the first
   10,000, `limit=` for more: `focusNode`, `resultPath` as a SPARQL path, `value`,
-  `sourceShape`, `sourceConstraintComponent`, `severity`, `messages`, and for a failure
-  of `sh:node`, `sh:and`, `sh:or`, `sh:xone` or `sh:qualifiedValueShape` its `details`: the
+  `sourceShape`, `shapeIri` (its stable IRI), `sourceConstraintComponent`, `severity`,
+  `messages`, `key` (the [finding key](validation-and-reasoning.md#finding-keys), 32
+  hexadecimal digits), and for a failure of `sh:node`, `sh:and`, `sh:or`, `sh:xone` or `sh:qualifiedValueShape` its `details`: the
   value node's results against the nested shapes, as `sh:detail` gives them), `shapes` (focus and
   value nodes each shape was checked against) and `coverage`: `untargetedClasses`, the
   classes with instances that no shape targets, directly or through a superclass, and
