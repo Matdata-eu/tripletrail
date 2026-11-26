@@ -6,7 +6,7 @@
   "author": "MatData BV",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Matdata-eu/tripletrail",
+    "url": "git+https://github.com/Matdata-eu/tripletrail.git",
     "directory": "clients/js"
   },
   "homepage": "https://tripletrail.eu",

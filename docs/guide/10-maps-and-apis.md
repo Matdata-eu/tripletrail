@@ -1010,9 +1010,10 @@ the full violations under `extensions.violations`.
 
 For a web page or a Node service that speaks SPARQL, the repository has a small client in
 `clients/js`, with no dependencies: queries (`select`, `ask`, `construct`), updates, the
-Graph Store Protocol (`graphs.get`, `put`, `post`, `delete`) and the admin API. It is not on
-npm yet: copy `clients/js/src` into your project, or import it by its path. This script lists
-the stations with their codes, as plain values:
+Graph Store Protocol (`graphs.get`, `put`, `post`, `delete`) and the admin API. It is on npm:
+`npm install @matdata/tripletrail-client`, then import from `"@matdata/tripletrail-client"`.
+This script, run from a checkout, imports it by its path instead, and lists the stations with
+their codes, as plain values:
 
 <!-- test: file stations.mjs -->
 ```js

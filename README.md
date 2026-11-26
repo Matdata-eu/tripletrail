@@ -39,6 +39,7 @@ docker run -p 7878:7878 -v tripletrail-data:/data tripletrail
 
 For Python, `pip install ./python` builds the `tripletrail` package (it needs Rust too); see
 [python/README.md](python/README.md).
+The JavaScript client is on npm: `npm install @matdata/tripletrail-client`.
 
 ## Quick start
 
