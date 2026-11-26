@@ -1405,13 +1405,12 @@ fn facet_counts(
             }
             result
         };
+        let facet_where = facet_last(facet, &other.sparql, &drawn);
         if facet.range {
             // The span of the values, under the other facets' filters; numbers as numbers.
             let query = format!(
                 "SELECT (MIN(?v) AS ?min) (MAX(?v) AS ?max) (COUNT(DISTINCT ?f) AS ?n) WHERE {{ \
-                   ?f a <{class}> .{}{}{drawn} FILTER(isLiteral(?v)) }}",
-                facet.bind("?f", "?v"),
-                other.sparql,
+                   ?f a <{class}> .{facet_where} FILTER(isLiteral(?v)) }}",
             );
             let rows = run(&query)?;
             let bound = |t: &Option<Term>| match t {
@@ -1443,10 +1442,9 @@ fn facet_counts(
                 // Each feature in the class of its highest number, as its tiles colour it.
                 let query = format!(
                     "SELECT {} WHERE {{ {{ SELECT ?f (MAX(?v) AS ?m) WHERE {{ \
-                       ?f a <{class}> .{}{}{drawn} FILTER(isNumeric(?v)) }} GROUP BY ?f }} }}",
+                       ?f a <{class}> .{} FILTER(isNumeric(?v)) }} GROUP BY ?f }} }}",
                     class_sums(&classes),
-                    facet.bind("?f", "?v"),
-                    all.sparql,
+                    facet_last(facet, &all.sparql, &drawn),
                 );
                 let rows = run(&query)?;
                 let counts: Vec<u64> = (0..classes.len())
@@ -1470,10 +1468,8 @@ fn facet_counts(
         // RINF's 130,000 track ids.
         let query = format!(
             "SELECT ?v ?n WHERE {{ \
-               {{ SELECT ?v (COUNT(DISTINCT ?f) AS ?n) WHERE {{ ?f a <{class}> .{}{}{drawn} }} \
+               {{ SELECT ?v (COUNT(DISTINCT ?f) AS ?n) WHERE {{ ?f a <{class}> .{facet_where} }} \
                  GROUP BY ?v ORDER BY DESC(?n) LIMIT {} }} }} ORDER BY DESC(?n) STR(?v)",
-            facet.bind("?f", "?v"),
-            other.sparql,
             FACET_VALUES + 1,
         );
         let rows = run(&query)?;
@@ -1572,6 +1568,16 @@ fn facet_counts(
         kept.insert(key, counts.clone());
     }
     Ok(counts)
+}
+
+/// A facet's pattern after the filters of the others and the check that a feature is drawn,
+/// in the order a facet query joins them, so that the facet's value (a computed facet's
+/// `BIND` above all) is read only for the features they keep, not for every feature of the
+/// class (#256: an ERTMS check over all 40,000 running tracks for the 1,258 of one country
+/// above a speed). A computed facet's variables are its own (renamed by `inline_select`), and
+/// `drawn` names only `?f`, so the order changes no answer.
+fn facet_last(facet: &Facet, filters: &str, drawn: &str) -> String {
+    format!("{filters}{drawn}{}", facet.bind("?f", "?v"))
 }
 
 /// Collections one request for facets takes at most.

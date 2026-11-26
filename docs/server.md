@@ -3393,7 +3393,10 @@ filter and data version: until the data or the shapes change, the same request a
 same error at once. Other failures (a memory limit) are tried again on the next request. Facets are counted
   in parallel, a query each; values tied at the 50th place come in the store's order. On RINF's DE+FR running
   tracks (234,811, 44 facets) this takes about 0.5 s unfiltered and 0.8 to 1.7 s under a
-  filter, and repeats come from the result cache in milliseconds.
+  filter, and repeats come from the result cache in milliseconds. A facet's own pattern
+  comes after the other facets' filters and the check that a feature is drawn, so that it
+  (a computed facet's above all) is evaluated only for the features they keep (#256; RINF FR+BE running tracks, 40,143, RINF Atlas's shapes, a country
+  and a minimum speed, first request: 1.0 to 1.1 s → 0.1 to 0.45 s).
 - `/{ds}/tiles/search?q=…` finds the map's features by name, with the
   [full-text index](full-text-search.md): those with a label holding every word of `q` (the
   last as a prefix, so it works while typing; case and Latin accents aside), labels with the
