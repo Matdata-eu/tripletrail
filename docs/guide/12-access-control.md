@@ -314,6 +314,10 @@ seq,station,km
 
 A `SERVICE` other than these is refused to him, as is one of them called inside another.
 
+RDF 1.2 statements about statements keep to his view as well: a triple term `<<( s p o )>>`
+whose triple he may not see is hidden from him, and so is every reifier or annotation that
+names it.
+
 Now Bob raises the speed of section S03 (line 25), then of S05 (line 36), then tries to move
 S03 to another line:
 

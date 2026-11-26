@@ -77,7 +77,9 @@ fn hidden() -> String {
          ex:sec1 a ex:Secret ; geo:hasGeometry ex:sec1g . ex:sec1g geo:asWKT \"POINT(1 1)\"^^geo:wktLiteral .\n\
          ex:rel3 ex:part [ ex:name \"hidden blank\" ] .\n\
          ex:sec1 ex:emb \"[1, 0]\"^^<http://w3id.org/tripletrail/fn#vector> .\n\
-         ex:rel1 ex:emb \"[1, 0.1]\"^^<http://w3id.org/tripletrail/fn#vector> .\n}}\n",
+         ex:rel1 ex:emb \"[1, 0.1]\"^^<http://w3id.org/tripletrail/fn#vector> .\n\
+         ex:badg geo:asWKT \"POINT(not a secret\"^^geo:wktLiteral .\n\
+         ex:rel2 ex:n \"not-a-secret-number\"^^xsd:integer .\n}}\n",
         features("dft", 10, ""),
         features("wip", 30, " ex:hiddenprop \"hp\" ; ex:owner ex:p1 ;"),
     )
@@ -258,7 +260,7 @@ const Q: &str = "PREFIX geo: <http://www.opengis.net/ont/geosparql#> \
     PREFIX geof: <http://www.opengis.net/def/function/geosparql/> \
     PREFIX uom: <http://www.opengis.net/def/uom/OGC/1.0/> PREFIX ex: <urn:x:> \
     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> \
-    PREFIX tt: <http://w3id.org/tripletrail/fn#> PREFIX text: <http://jena.apache.org/text#> ";
+    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> PREFIX tt: <http://w3id.org/tripletrail/fn#> PREFIX text: <http://jena.apache.org/text#> ";
 
 const QUERIES: &[&str] = &[
     "SELECT * { ?s ?p ?o }",
@@ -285,6 +287,22 @@ const QUERIES: &[&str] = &[
     "SELECT DISTINCT ?c { ?s a ?c } ORDER BY ?c",
     "SELECT ?s ?o { ?s ex:n ?o } ORDER BY DESC(?o) LIMIT 3",
     "SELECT (MAX(?n) AS ?m) (SUM(?n) AS ?t) { ?s ex:n ?n }",
+    // HAVING (enterprise #9): groups kept or dropped by what is hidden.
+    "SELECT ?s (COUNT(?o) AS ?n) { ?s ?p ?o } GROUP BY ?s HAVING (COUNT(?o) > 5) ORDER BY ?s",
+    "SELECT ?k { ?s ex:kind ?k } GROUP BY ?k HAVING (COUNT(?s) > 20) ORDER BY ?k",
+    "SELECT ?s { ?s ex:n ?n } GROUP BY ?s HAVING (SUM(?n) > 7) ORDER BY ?s",
+    // Blank nodes (enterprise #9): hidden ones are not counted, matched or reached.
+    "SELECT ?b ?p ?o { ?b ?p ?o FILTER(isBlank(?b)) } ORDER BY ?p ?o",
+    "SELECT (COUNT(*) AS ?n) { ?s ?p ?o FILTER(isBlank(?o)) }",
+    "SELECT ?n { [] ex:name ?n } ORDER BY ?n",
+    "ASK { ?s ?p [ ex:name \"hidden blank\" ] }",
+    "SELECT ?s { ?s ?p ?b . ?b ?q ?o FILTER(isBlank(?b)) } ORDER BY ?s",
+    // Error messages and errors in expressions (enterprise #9): a hidden literal that is not
+    // valid for its datatype must neither fail the query nor be named in an answer.
+    "SELECT ?g (geof:area(?w) AS ?a) { ?g geo:asWKT ?w } ORDER BY ?g",
+    "SELECT (COUNT(*) AS ?n) { ?g geo:asWKT ?w FILTER(geof:isEmpty(?w) || !geof:isEmpty(?w)) }",
+    "SELECT ?s ?i { ?s ?p ?o BIND(xsd:integer(?o) AS ?i) FILTER(BOUND(?i)) } ORDER BY ?s ?i",
+    "SELECT (SUM(?o) AS ?t) { ?s ?p ?o FILTER(DATATYPE(?o) = xsd:integer) }",
     "SELECT ?s { ?s ex:kind ?k FILTER NOT EXISTS { ?s ex:secret ?x } } ORDER BY ?s",
     "SELECT ?s { ?s ex:kind ?k MINUS { ?s ex:owner ?o } } ORDER BY ?s",
     "SELECT ?s ?o { ?s ex:kind ?k OPTIONAL { ?s ex:owner ?o } } ORDER BY ?s",
@@ -748,7 +766,9 @@ fn row_hidden() -> String {
          ex:rel3 ex:owner [ a ex:Person ; ex:name \"hidden blank\" ] .\n\
          ex:sec1 a ex:Secret ; geo:hasGeometry ex:sec1g ;\
            ex:emb \"[1, 0]\"^^<http://w3id.org/tripletrail/fn#vector> .\n\
-         ex:rel0 ex:part ex:sec1 .\n}}\n\
+         ex:rel0 ex:part ex:sec1 .\n\
+         ex:sec2 a ex:Secret ; geo:asWKT \"POINT(not a secret\"^^geo:wktLiteral ;\
+           ex:n \"not-a-secret-number\"^^xsd:integer .\n}}\n\
          <urn:wip> {{\n{}}}\n",
         drafts(
             "wip",
@@ -759,14 +779,27 @@ fn row_hidden() -> String {
     )
 }
 
+/// The servers of the row rule tests: with and without what the rules hide.
+#[cfg(feature = "enterprise")]
+fn row_rules(union_default_graph: bool, name: &str) -> Pair {
+    start(
+        name,
+        ROW_RULES,
+        union_default_graph,
+        &[release(), row_visible(), row_hidden()],
+        &[release(), row_visible()],
+    )
+}
+
 #[cfg(feature = "enterprise")]
 #[test]
 fn row_rules_hide_rows_from_every_reader() {
-    compare(&start(
-        "rows",
-        ROW_RULES,
-        false,
-        &[release(), row_visible(), row_hidden()],
-        &[release(), row_visible()],
-    ));
+    compare(&row_rules(false, "rows"));
+}
+
+/// The same under a union default graph, where the queries without `GRAPH` see the rows too.
+#[cfg(feature = "enterprise")]
+#[test]
+fn row_rules_hide_rows_from_every_reader_under_a_union_default_graph() {
+    compare(&row_rules(true, "rows-union"));
 }

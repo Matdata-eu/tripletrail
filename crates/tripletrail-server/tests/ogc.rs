@@ -3054,3 +3054,130 @@ fn select_by_location_outside_a_layer_is_one_join() {
     assert_eq!(code, 200, "{page}");
     assert_eq!(page["numberReturned"], 1000);
 }
+
+/// Facets of parts rolled up to their parent (#248): a section of line matches, counts and is
+/// coloured by its tracks' facets that it lacks, through `tts:rollsUpTo` on the tracks' shape.
+#[test]
+fn part_facets_roll_up_to_the_parent() {
+    let dir = tripletrail_testdir::tempdir("ogc-rollup");
+    let ttl = "@prefix ex: <http://example.com/> .\n\
+               @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+               ex:s1 a ex:Section ; ex:name \"S1\" ; geo:hasGeometry [ geo:asWKT \"LINESTRING(1 1, 2 2)\"^^geo:wktLiteral ] .\n\
+               ex:s2 a ex:Section ; ex:name \"S2\" ; geo:hasGeometry [ geo:asWKT \"LINESTRING(3 3, 4 4)\"^^geo:wktLiteral ] .\n\
+               ex:t1 a ex:Track ; ex:isPartOf ex:s1 ; ex:etcs \"2\" ; ex:speed 160 ; ex:name \"T1\" .\n\
+               ex:t2 a ex:Track ; ex:isPartOf ex:s1 ; ex:etcs \"1\" ; ex:speed 100 ; ex:name \"T2\" .\n\
+               ex:t3 a ex:Track ; ex:isPartOf ex:s2 ; ex:etcs \"1\" ; ex:speed 80 ; ex:name \"T3\" .\n";
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 4,
+            admin_token: Some("t".to_owned()),
+            location: Some(dir.join("data")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let shapes = "@prefix ex: <http://example.com/> .\n\
+                  @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+                  @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                  @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+                  ex:SectionShape a sh:NodeShape ; sh:targetClass ex:Section ; tts:key \"section\" ;\n\
+                    tts:geometry [ sh:path ( geo:hasGeometry geo:asWKT ) ] ;\n\
+                    sh:property [ sh:path ex:name ; tts:key \"name\" ; tts:facet tts:Facet-Text ] .\n\
+                  ex:TrackShape a sh:NodeShape ; sh:targetClass ex:Track ; tts:key \"track\" ;\n\
+                    tts:geometry [ sh:path ( ex:isPartOf geo:hasGeometry geo:asWKT ) ] ;\n\
+                    tts:rollsUpTo [ sh:path ex:isPartOf ; sh:class ex:Section ] ;\n\
+                    sh:property [ sh:path ex:etcs ; tts:key \"etcs\" ; tts:facet tts:Facet-Values ] ,\n\
+                      [ sh:path ex:speed ; tts:key \"speed\" ; tts:facet tts:Facet-Range ] ,\n\
+                      [ sh:path ex:name ; tts:key \"name\" ; tts:facet tts:Facet-Text ] .\n";
+    let r = ureq::put(&format!("{base}/$/datasets/kg/shapes/files/rail.ttl"))
+        .set("Authorization", "Bearer t")
+        .send_string(shapes)
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let facets = |query: &str| {
+        let (status, _, out) = get(&format!("{base}/kg/tiles/facets/section{query}"));
+        assert_eq!(status, 200, "{query}: {out}");
+        out
+    };
+    let facet = |out: &Value, key: &str| -> Value {
+        out["facets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["key"] == key)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let all = facets("");
+    assert_eq!(all["features"], 2, "{all}");
+    // Each section counts once per value of its tracks: s1 has "1" and "2", s2 "1".
+    let counts: Vec<(String, u64)> = facet(&all, "etcs")["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            (
+                v["value"].as_str().unwrap().to_owned(),
+                v["count"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(counts, [("1".to_owned(), 2), ("2".to_owned(), 1)], "{all}");
+    // Its own facet of the same key stays its own: the section's name, not its tracks'.
+    assert_eq!(facets("?name.text=t1")["features"], 0);
+    assert_eq!(facets("?name.text=s1")["features"], 1);
+    // A plain filter keeps the sections with a matching track.
+    assert_eq!(facets("?etcs=2")["features"], 1);
+    assert_eq!(facets("?speed.min=90")["features"], 1);
+    let (_, tile2) = tile(&format!("{base}/kg/tiles/section/0/0/0.mvt?etcs=2"));
+    assert!(holds(&tile2, "http://example.com/s1") && !holds(&tile2, "http://example.com/s2"));
+    // A filter scoped to the tracks leaves the sections alone.
+    let scoped = get(&format!(
+        "{base}/kg/tiles/facets?collection=section&collection=track&track.etcs=2"
+    ))
+    .2;
+    assert_eq!(scoped["collections"][0]["features"], 2, "{scoped}");
+    assert_eq!(scoped["collections"][1]["features"], 1, "{scoped}");
+    // Coloured by speed: each section by its fastest track (s1 160, s2 80).
+    let speed = facet(&facets("?color=speed"), "speed");
+    let total: u64 = speed["classes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["count"].as_u64().unwrap())
+        .sum();
+    assert_eq!(total, 2, "{speed}");
+    assert_eq!(
+        (speed["min"].as_f64(), speed["max"].as_f64()),
+        (Some(80.0), Some(160.0)),
+        "{speed}"
+    );
+    // Only the map reads it: the OGC API's sections have no etcs.
+    let queryables = get(&format!("{base}/kg/ogc/collections/section/queryables")).2;
+    assert!(
+        queryables["properties"].get("etcs").is_none(),
+        "{queryables}"
+    );
+    // The term needs a path and a class.
+    let wrong = shapes.replace(
+        "tts:rollsUpTo [ sh:path ex:isPartOf ; sh:class ex:Section ]",
+        "tts:rollsUpTo ex:Section",
+    );
+    let r = ureq::put(&format!("{base}/$/datasets/kg/shapes/files/rail.ttl"))
+        .set("Authorization", "Bearer t")
+        .send_string(&wrong);
+    match r {
+        Err(ureq::Error::Status(code, r)) => {
+            let body = r.into_string().unwrap();
+            assert_eq!(code, 422, "{body}");
+            assert!(body.contains("tts:rollsUpTo"), "{body}");
+        }
+        other => panic!("{other:?}"),
+    }
+}

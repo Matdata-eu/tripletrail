@@ -227,18 +227,28 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   180 MB of CSV), the whole answer 3 to 5 times sooner. Its memory counts against
   `--query-memory` (below) like the id joins'. An answer without an `ORDER BY` of more than
   about 8 million cells (rows times variables) streams from the evaluator instead, as under
-  `spareval`; a pattern of triples alone that may give that many is counted first, so it is
-  never built (100 million rows of a two-pattern join: 126 MB instead of 2.1 GB at the peak,
-  three at once 132 MB instead of 5 GB). An answer that is ordered, or whose pattern has
-  more than triples, is built first before it is handed over: without `--query-memory`
-  about 2 GB for one answer of 98 million rows (a `UNION`, `BIND` or `FILTER` over a join),
-  and 0.5 to 1.6 s before the first byte. A server with many concurrent exports sets
-  `--query-memory`, which keeps such answers flat (at `64MB`).
+  `spareval`; the patterns of triples that give its rows (alone, or under a `UNION`, `BIND`
+  or `FILTER`, #234) are counted first when they may give that many, so it is never built
+  (100 million rows of a two-pattern join: 126 MB instead of 2.1 GB at the peak, three at
+  once 132 MB instead of 5 GB; 98 million rows under a `UNION` 77 MB instead of 1.9 GB, under
+  a `BIND` 96 MB instead of 1.8 GB, with the first byte after 14 to 44 ms instead of 0.5 to
+  0.9 s). A `FILTER` is counted as the ids would run it (`FILTER(?s = ?x)` joins fewer rows
+  and stays on ids); over a large join it is handed over too, which for a filter keeping a
+  few rows is also faster (0.85 s instead of 1.5 s for 1% of 100 million rows), but the
+  evaluator holds the join's rows as well (1.4 GB instead of 2.0 GB). An ordered answer, or one under other
+  patterns (an `OPTIONAL`, a sub-select), is built first before it is handed over. A server
+  with many concurrent exports sets `--query-memory`, which keeps such answers flat (at
+  `64MB`). A parallel join on ids now stays within that budget: its parts take at most half,
+  so that their copy into one table fits in the rest (it took up to twice the budget).
 - `--memory-limit` (`TRIPLETRAIL_MEMORY_LIMIT`, e.g. `32G`; also on `tripletrail load`) is the
   memory a bulk load (`--load`, or a Graph Store upload) may use to sort its quads. A larger
   load sorts them on disk, under the dataset's directory, and writes the indexes straight to
   files, so a dataset larger than memory can be loaded. Without it everything is sorted in
   memory.
+- `tripletrail load` writes a progress line to standard error every minute while a file loads
+  (#232): the store's step (`reading`, `sorting`, `writing`, `entailing`), the triples read so
+  far, and how much of the file has been read. `Store::load_progress()` gives the same step
+  and count to code that loads through the store.
 - `tripletrail load` makes a new dataset that keeps a WKT literal only in binary form when
   its text can be written back from the geometry exactly (#152, from #370's `--render-wkt`):
   about the size of the text less on disk, and coordinates with at most 9 decimals are kept as
@@ -463,7 +473,14 @@ worst `sh:resultSeverity` of the report's results whose `sh:focusNode` is the fe
 out when a pack or the dataset's own set names the reader with `tts:hidesGenerated` (on a
 `tts:ShapeSet` node of its own, such as `<urn:my:set> a tts:ShapeSet ; tts:hidesGenerated
 tts:Reader-Map`: the map shows only the set's classes; a generated shape the set overrides or
-refines stays) (#92), and, for all readers but
+refines stays) (#92), the facets of parts rolled up to their parent for the map (a node shape
+with `tts:rollsUpTo [ sh:path P ; sh:class C ]` gives each node shape that targets `C` its
+facets that the parent has no facet of that key for, read through `( [ sh:inversePath P ]
+path )`, `tts:onlyFor tts:Reader-Map`, with `tts:rolledUpFrom` naming the part's shape: a
+parent matches a filter when one of its parts does, counts once per value of its parts, and is
+coloured by its parts' highest number; `tts:select` facets and those hidden from the map stay
+with the part; `import-atlas` writes it for RINF Atlas's running tracks and tracks to the
+section of line) (#248), and, for all readers but
 validation, the property shapes of the superclasses' node shapes added to each node shape that
 has none for that path (or key). A superclass's node shape hidden from the reader still lends its
 property shapes: an abstract `ex:AssetShape` `tts:hiddenFrom tts:Reader-Map` gives no asset
@@ -1877,7 +1894,10 @@ ex:NetworkWriters a sg:Policy ; sg:group "network-assets" ; sg:writeAllGraphs tr
   it: every resource an update, Graph Store or RDF4J write changes must conform before and
   after (so a writer cannot claim a resource, nor give one away), else 403 and nothing
   changes. `sg:requestingAgent` in `sh:hasValue`, `sh:in` or
-  `sh:targetNode` stands for the caller (`urn:sparql-guard:anonymous` when anonymous). The
+  `sh:targetNode` stands for the caller (`urn:sparql-guard:anonymous` when anonymous). An
+  RDF 1.2 triple term whose triple the rules hide is hidden too, with every triple that names
+  it (`rdf:reifies`, annotations), and under rules that hide anything a nested triple term
+  (one whose object is a triple term) is hidden whole, as in sparql-guard. The
   shapes are in the same policy files. Rules of every policy that applies are added up (deny
   wins); visibility is judged over the graphs the caller may read, not over a query's own
   dataset. A literal target (of `sh:targetObjectsOf`) is a value, not a resource, and is

@@ -211,6 +211,44 @@ impl RowFilter {
         }
     }
 
+    /// Hides the triple terms of `terms` ([`crate::Snapshot::triple_terms`]) whose triple this
+    /// hides, wherever it would be (the graph not counted), and with `nested` those whose
+    /// object is a triple term too: as subjects and objects, so `rdf:reifies` and any other
+    /// triple naming one is hidden with it. Nested triple terms are hidden rather than
+    /// judged part by part, as sparql-guard does. Returns how many it hid.
+    pub fn hide_triple_terms(&mut self, terms: &[crate::TripleTermIds], nested: bool) -> usize {
+        let mut hid = 0;
+        // Until nothing changes: a triple term may name another one this hides.
+        loop {
+            let before = hid;
+            for t in terms {
+                if self.objects.contains(&t.id) {
+                    continue;
+                }
+                if (nested && t.nested) || self.hides_triple(t.subject, t.predicate, t.object) {
+                    self.hide_resource(crate::TermId(t.id), true);
+                    hid += 1;
+                }
+            }
+            if hid == before {
+                return hid;
+            }
+        }
+    }
+
+    /// Whether a quad `[s, p, o, g]` would be hidden in any graph `g` for what it holds: the
+    /// hidden resources, references and properties, not the copies or graphs hidden.
+    fn hides_triple(&self, s: u64, p: u64, o: u64) -> bool {
+        self.subjects.contains(&s)
+            || self.objects.contains(&o)
+            || self.predicates.contains(&p)
+            || self.subject_predicates.contains(&(s, p))
+            || self
+                .shared
+                .iter()
+                .any(|sh| sh.hides(s) || (sh.references && sh.hides(o)))
+    }
+
     /// Hides the resources of `hidden` but those in `shown`, as subjects and, with
     /// `references`, as objects: what [`RowFilter::hide_resource`] of each would hide, with the
     /// set shared between filters instead of copied into each (enterprise #7).

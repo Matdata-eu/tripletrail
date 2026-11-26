@@ -265,7 +265,10 @@ impl Engine {
         let Dataset::TripleTrail(store) = self.store() else {
             return Err(need_tripletrail());
         };
-        compiler()?.compile(&store.snapshot(), rules, &|| self.is_cancelled())
+        let snapshot = store.snapshot();
+        let mut filter = compiler()?.compile(&snapshot, rules, &|| self.is_cancelled())?;
+        hide_triple_terms(&snapshot, rules, &mut filter);
+        Ok(filter)
     }
 
     /// Which of `rules` keep `resource` from the caller, on the data as it is now (#202,
@@ -347,9 +350,9 @@ impl Engine {
         rules: &RowRules,
     ) -> Result<Arc<RowFilter>, Error> {
         let Some(generation) = snapshot.generation() else {
-            return Ok(Arc::new(
-                compiler()?.compile(snapshot, rules, &|| self.is_cancelled())?,
-            ));
+            let mut filter = compiler()?.compile(snapshot, rules, &|| self.is_cancelled())?;
+            hide_triple_terms(snapshot, rules, &mut filter);
+            return Ok(Arc::new(filter));
         };
         let key = rules.key();
         let base = {
@@ -376,23 +379,35 @@ impl Engine {
         let incremental = match (&base, self.store()) {
             (Some((from, before)), Dataset::TripleTrail(store)) => {
                 match store.touched_between(*from, generation) {
-                    Some((resources, predicates)) => compiler()?.compile_incremental(
-                        snapshot,
-                        rules,
-                        before,
-                        &resources,
-                        &predicates,
-                        &cancelled,
-                    )?,
+                    Some((mut resources, predicates)) => {
+                        // The triple terms are judged again too: what hides them may have
+                        // changed with any write (hide_triple_terms adds them back).
+                        let terms = snapshot.triple_terms();
+                        if !terms.is_empty() {
+                            resources.extend(terms.iter().map(|t| t.id));
+                            resources.sort_unstable();
+                            resources.dedup();
+                        }
+                        compiler()?.compile_incremental(
+                            snapshot,
+                            rules,
+                            before,
+                            &resources,
+                            &predicates,
+                            &cancelled,
+                        )?
+                    }
                     None => None,
                 }
             }
             _ => None,
         };
-        let filter = Arc::new(match incremental {
+        let mut filter = match incremental {
             Some(filter) => filter,
             None => compiler()?.compile(snapshot, rules, &cancelled)?,
-        });
+        };
+        hide_triple_terms(snapshot, rules, &mut filter);
+        let filter = Arc::new(filter);
         let mut cache = self.spatial.row_filters.lock_unpoisoned();
         // Only a newer generation replaces what is kept: a query on an older snapshot does
         // not throw away the filters of the current one.
@@ -410,6 +425,20 @@ impl Engine {
             cache.filters.insert(key, Arc::clone(&filter));
         }
         Ok(filter)
+    }
+}
+
+/// Hides the RDF 1.2 triple terms whose triple `filter` hides (enterprise #9): a reader of
+/// `<<( s p o )>>`, of `rdf:reifies` or of an annotation would otherwise see a triple the rules
+/// hide. Under rules that hide anything, nested triple terms are hidden whole, as sparql-guard
+/// does.
+fn hide_triple_terms(snapshot: &Snapshot, rules: &RowRules, filter: &mut RowFilter) {
+    if rules.rules.is_empty() {
+        return;
+    }
+    let terms = snapshot.triple_terms();
+    if !terms.is_empty() {
+        filter.hide_triple_terms(&terms, true);
     }
 }
 

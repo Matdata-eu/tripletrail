@@ -1980,6 +1980,48 @@ fn copies_of_a_store_share_no_file_with_it() {
 }
 
 #[test]
+fn a_load_says_its_step_and_the_triples_it_has_read() {
+    use tripletrail_store::{LoadPhase, LoadProgress};
+    let store = Store::new();
+    let idle = |quads| LoadProgress {
+        phase: LoadPhase::Idle,
+        quads,
+    };
+    assert_eq!(store.load_progress(), idle(0));
+    let text: String = (0..1000)
+        .map(|i| {
+            format!(
+                "<http://example.com/s{i}> <http://example.com/p> \"{}\" .\n",
+                i % 7
+            )
+        })
+        .collect();
+    store
+        .bulk_load(RdfFormat::NTriples, text.as_bytes())
+        .unwrap();
+    // Read in parallel blocks, counted as the dictionary takes them; the step is over.
+    assert_eq!(store.load_progress(), idle(1000));
+    store
+        .bulk_load(
+            RdfFormat::Turtle,
+            "<http://example.com/a> <http://example.com/p> 1, 2 .".as_bytes(),
+        )
+        .unwrap();
+    assert_eq!(store.load_progress(), idle(2));
+    // A failed load ends its step too.
+    assert!(
+        store
+            .bulk_load(
+                RdfFormat::NTriples,
+                "<http://example.com/a> <x> .\n".as_bytes()
+            )
+            .is_err()
+    );
+    assert_eq!(store.load_progress().phase, LoadPhase::Idle);
+    assert_eq!(LoadPhase::Sorting.to_string(), "sorting");
+}
+
+#[test]
 fn bulk_loads_larger_than_the_memory_limit_sort_on_disk() {
     let dir = temp_dir("external-sort");
     let quad = |i: u64| {
@@ -3894,4 +3936,83 @@ fn a_term_committed_after_a_view_is_one_made_up_term_in_it() {
     assert_ne!(id.kind(), Kind::Ephemeral);
     assert_eq!(later.term_id(new.as_ref()), Some(id));
     assert_eq!(later.finish_ids(later.prepare_ids([new])), vec![id]);
+}
+
+/// Row filters hide the triple terms whose triple they hide (enterprise #9): the triple terms
+/// are found in the dictionary, also those added later, and hiding one hides the triples that
+/// name it, such as `rdf:reifies`.
+#[test]
+fn row_filters_hide_triple_terms_of_hidden_triples() {
+    use tripletrail_store::RowFilter;
+    let store = Store::new();
+    store
+        .bulk_load(
+            RdfFormat::TriG,
+            br#"@prefix ex: <http://example.com/> .
+            ex:a ex:name "A" ~ ex:r1 {| ex:source ex:x |} ; ex:salary 5 ~ ex:r2 {| ex:source ex:y |} .
+            ex:b ex:name "B" .
+            ex:n1 ex:about <<( ex:b ex:name "B" )>> .
+            ex:n2 ex:about <<( ex:c ex:says <<( ex:a ex:name "A" )>> )>> ."#
+                .as_slice(),
+        )
+        .unwrap();
+    let snapshot = store.snapshot();
+    let terms = snapshot.triple_terms();
+    // <<(a name A)>> (twice in the data, once in the dictionary), <<(a salary 5)>>,
+    // <<(b name B)>>, and the nested one.
+    assert_eq!(terms.len(), 4, "{terms:?}");
+    assert_eq!(terms.iter().filter(|t| t.nested).count(), 1);
+    assert!(Arc::ptr_eq(&terms, &snapshot.triple_terms()), "found once");
+    let id = |iri: &str| {
+        snapshot
+            .term_id(NamedNodeRef::new_unchecked(iri).into())
+            .unwrap()
+    };
+    let ex = |l: &str| format!("http://example.com/{l}");
+    let visible = |filter: RowFilter| {
+        let view = snapshot.clone().with_rows(Some(Arc::new(filter)));
+        let mut objects: Vec<String> = view
+            .quads_for_pattern(None, None, None, None)
+            .filter(|q| matches!(q.object, Term::Triple(_)))
+            .map(|q| format!("{} {}", q.subject, q.object))
+            .collect();
+        objects.sort();
+        objects
+    };
+    let all = visible(RowFilter::new());
+    assert_eq!(all.len(), 4, "{all:?}");
+    // ex:b hidden, a hidden property on ex:a, and nested terms hidden whole.
+    let mut filter = RowFilter::new();
+    filter.hide_resource(id(&ex("b")), true);
+    filter.hide_predicate_on(id(&ex("a")), id(&ex("salary")));
+    assert_eq!(filter.hide_triple_terms(&terms, true), 3);
+    assert_eq!(
+        visible(filter),
+        [r#"<http://example.com/r1> <<( <http://example.com/a> <http://example.com/name> "A" )>>"#]
+    );
+    // Without hiding nested ones, the nested term is judged by its outer triple only.
+    let mut filter = RowFilter::new();
+    filter.hide_resource(id(&ex("b")), true);
+    assert_eq!(filter.hide_triple_terms(&terms, false), 1);
+    assert_eq!(visible(filter).len(), 3);
+    // A triple term added later is found too.
+    store
+        .insert(QuadRef::new(
+            NamedNodeRef::new_unchecked("http://example.com/n3"),
+            NamedNodeRef::new_unchecked("http://example.com/about"),
+            &Term::Triple(Box::new(oxigraph::model::Triple::new(
+                NamedNodeRef::new_unchecked("http://example.com/b"),
+                NamedNodeRef::new_unchecked("http://example.com/age"),
+                Literal::from(3),
+            ))),
+            GraphNameRef::DefaultGraph,
+        ))
+        .unwrap();
+    let later = store.snapshot().triple_terms();
+    assert_eq!(later.len(), 5);
+    assert!(
+        later
+            .iter()
+            .any(|t| t.subject == id(&ex("b")).0 && !t.nested)
+    );
 }

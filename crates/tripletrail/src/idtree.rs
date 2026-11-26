@@ -2919,7 +2919,7 @@ fn string_prefix(e: &Expression) -> Option<(&Variable, String)> {
 /// over a `UNION`, the filter of each side (a filter tests each solution on its own); a
 /// conjunction with an equality of two variables (see [`equal_vars`]) as two filters, the
 /// equality inside.
-fn pushed_filter(e: &Expression, inner: &GraphPattern) -> Option<GraphPattern> {
+pub(crate) fn pushed_filter(e: &Expression, inner: &GraphPattern) -> Option<GraphPattern> {
     use GraphPattern as G;
     match inner {
         // A filter on the values of the triple patterns a path is joined with: on those
@@ -3001,7 +3001,7 @@ fn pushed_filter(e: &Expression, inner: &GraphPattern) -> Option<GraphPattern> {
 /// variable kept, the one dropped (a copy of the kept one in each solution) and the patterns.
 /// `=` is `sameTerm` when one of the two is a subject or predicate, an IRI or blank node,
 /// which equals no other term; between two literals `=` compares values, so it stays a filter.
-fn equal_vars(
+pub(crate) fn equal_vars(
     e: &Expression,
     patterns: &[spargebra::term::TriplePattern],
 ) -> Option<(Variable, Variable, Vec<spargebra::term::TriplePattern>)> {
@@ -4623,11 +4623,17 @@ impl<'a> Pick<'a> {
             }
             if self.ranks.is_none() {
                 self.by_text += 1;
+                // Looked for again now and then: the first look may have found another query
+                // holding them for a moment, or a build that has finished since.
+                if self.by_text.is_multiple_of(Self::RANK_AFTER_BUILDING) {
+                    self.ranks = self.snapshot.string_ranks_built();
+                }
                 // While another query has them built, wait for them sooner.
-                if self.by_text > Self::RANK_AFTER
-                    || (self.by_text > Self::RANK_AFTER_BUILDING
-                        && !self.building
-                        && self.snapshot.string_ranks_building())
+                if self.ranks.is_none()
+                    && (self.by_text > Self::RANK_AFTER
+                        || (self.by_text > Self::RANK_AFTER_BUILDING
+                            && !self.building
+                            && self.snapshot.string_ranks_building()))
                 {
                     self.ranks = Some(self.snapshot.string_ranks());
                 }
