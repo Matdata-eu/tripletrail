@@ -284,6 +284,16 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
                 .replace("{{BRAND_STYLE}}", &brand.style())
                 .replace("{{LOGO}}", &brand.logo_html())
                 .replace("{{TOPBAR_NAME}}", &topbar)
+                .replace("{{BANNER}}", &brand.banner_html())
+                .replace("{{FOOTER}}", &brand.footer_html())
+                .replace(
+                    "{{SUPPORT}}",
+                    &html_attribute(brand.support_url.as_deref().unwrap_or_default()),
+                )
+                .replace(
+                    "{{CONTACT}}",
+                    &html_attribute(brand.contact_email.as_deref().unwrap_or_default()),
+                )
                 .replace("{{SITE_NAME}}", &html_attribute(brand.name()));
             let mut reply = page("text/html; charset=utf-8", &html);
             reply.headers.push((
@@ -305,9 +315,11 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
             let mut reply = page("text/html; charset=utf-8", &html);
             reply.headers.push((
                 "Content-Security-Policy",
-                "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
-                 frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
-                    .to_owned(),
+                format!(
+                    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:{}; \
+                     frame-ancestors 'self'; base-uri 'self'; form-action 'self'",
+                    brand.image_origins()
+                ),
             ));
             reply
                 .headers
@@ -320,9 +332,11 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
             let mut reply = page("text/html; charset=utf-8", &html);
             reply.headers.push((
                 "Content-Security-Policy",
-                "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
-                 frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
-                    .to_owned(),
+                format!(
+                    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:{}; \
+                     frame-ancestors 'self'; base-uri 'self'; form-action 'self'",
+                    brand.image_origins()
+                ),
             ));
             reply
                 .headers

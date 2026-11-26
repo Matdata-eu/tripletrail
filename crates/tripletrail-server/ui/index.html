@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-site-name="{{SITE_NAME}}">
+<html lang="en" data-site-name="{{SITE_NAME}}" data-support-url="{{SUPPORT}}" data-contact-email="{{CONTACT}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -76,6 +76,7 @@
     </button>
   </div>
 </header>
+{{BANNER}}
 <div id="view-as-banner" class="view-as-banner" role="status" hidden></div>
 
 <main id="main">
@@ -141,6 +142,7 @@
     <p class="muted small">MatGUI is used under the MIT license (<a href="{{MATGUI}}LICENSE" target="_blank" rel="noopener">license</a>); the Workbench uses CodeMirror (<a href="/$/ui/vendor/codemirror/LICENSES.txt" target="_blank" rel="noopener">licenses</a>) and Tabulator (<a href="/$/ui/vendor/tabulator/LICENSE" target="_blank" rel="noopener">license</a>), both MIT. TripleTrail {{VERSION}}.</p>
   </section>
 </main>
+{{FOOTER}}
 
 <dialog class="dlg" id="ds-dialog">
   <div class="dlg-head"><h2 id="ds-title"></h2><button class="icon-btn close" type="button" data-close aria-label="Close">✕</button></div>

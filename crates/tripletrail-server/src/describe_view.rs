@@ -2515,6 +2515,8 @@ pub(crate) struct PageLinks<'a> {
     pub(crate) page: String,
     /// The resource's description for the RDF tab; none when it has no triples of its own.
     pub(crate) rdf: Option<page::PageRdf>,
+    /// The server's name, favicon and footer links (#262).
+    pub(crate) brand: &'a crate::branding::Branding,
 }
 
 fn html_link(out: &mut String, links: &PageLinks<'_>, l: &Link) {
@@ -6022,8 +6024,14 @@ pub(crate) fn html(view: &View, links: &PageLinks<'_>) -> String {
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <meta name=\"referrer\" content=\"strict-origin\">\
-         <title>{}</title><style>{STYLE}</style></head><body><main>",
+         <title>{}{}</title>{}<style>{STYLE}</style></head><body><main>",
         escape(title),
+        links
+            .brand
+            .name
+            .as_deref()
+            .map_or(String::new(), |n| format!(" · {}", escape(n))),
+        links.brand.favicon_link(),
     );
     page::header(&mut out, view, links, title);
     if !view.badges.is_empty() {
@@ -6158,6 +6166,7 @@ pub(crate) fn html(view: &View, links: &PageLinks<'_>) -> String {
         out.push_str("</section>");
     }
     out.push_str("</main>");
+    out.push_str(&links.brand.footer_html());
     if links.live_map {
         out.push_str("<script type=\"module\" src=\"/$/ui/describe.js\"></script>");
     }

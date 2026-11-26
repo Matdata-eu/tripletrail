@@ -2733,6 +2733,12 @@ URLs, never HTML.
 | `--site-logo FILE\|URL` | `TRIPLETRAIL_SITE_LOGO` | The top bar's logo in place of TripleTrail's mark, 28 px high at its own width (at most 200 px), served at `/$/ui/brand/logo`. |
 | `--site-logo-dark FILE\|URL` | `TRIPLETRAIL_SITE_LOGO_DARK` | The logo in the dark theme, at `/$/ui/brand/logo-dark`. |
 | `--site-color #RRGGBB` | `TRIPLETRAIL_SITE_COLOR` | The accent colour of buttons, links, tabs and MatGUI (its `--yasgui-brand*` variables), with darker and lighter shades derived for each theme. White text must read on it: a contrast under 4.5:1 (WCAG AA) stops the server with an error. |
+| `--banner TEXT` | `TRIPLETRAIL_BANNER` | One line of plain text (at most 200 characters) over every page of the web UI, such as "Public read-only demo: data is reset nightly". A viewer may dismiss it for the browser session, until its text changes. Never on the API. |
+| `--banner-level info\|warning` | `TRIPLETRAIL_BANNER_LEVEL` | The banner in the accent colour's light shade (`info`, the default) or in amber (`warning`). |
+| `--banner-link URL` | `TRIPLETRAIL_BANNER_LINK` | Where the banner's text links to. |
+| `--site-link "LABEL\|URL"` | `TRIPLETRAIL_SITE_LINKS` (one per line) | A link in the footer of the web UI and of the OGC API and describe pages, such as Privacy, Terms, Imprint or Contact. Repeatable. The label is plain text of at most 40 characters. |
+| `--support-url URL` | `TRIPLETRAIL_SUPPORT_URL` | Where the About dialog's "Found a bug, missing a feature or have a question?" points, in place of TripleTrail's GitHub issues. |
+| `--contact-email ADDRESS` | `TRIPLETRAIL_CONTACT_EMAIL` | Shown in the About dialog, and each dataset's `dcat:contactPoint` in the DCAT catalog (a `vcard:Kind` with `vcard:hasEmail`, named by `--site-name`) when `--catalog` gives none. |
 
 An image file is SVG, PNG, ICO, WebP or JPEG, at most 256 KB, read when the server starts, and
 served with its type, `X-Content-Type-Options: nosniff` and a sandboxing
@@ -2740,9 +2746,14 @@ served with its type, `X-Content-Type-Options: nosniff` and a sandboxing
 the same path, so the pages always name the server's path. `/$/ui/brand/favicon` without
 `--site-favicon` is TripleTrail's icon.
 
+With `--site-favicon`, the OGC API and describe pages link the favicon too, and their titles
+end with ` · NAME` under `--site-name`. A favicon or logo given as a URL is a redirect, so the
+REST API and GraphQL pages add its origin to their `img-src`.
+
 `GET /$/ui/config.json` gives the settings to scripts: `{"site": {"name", "named", "favicon",
-"logo", "logoDark", "color"}, "version"}` (`named` is false without `--site-name`; `logo`,
-`logoDark` and `color` are null when unset). It and `/$/ui/brand/…` need no credentials, also
+"logo", "logoDark", "color", "banner", "links", "supportUrl", "contactEmail"}, "version"}`
+(`named` is false without `--site-name`; what is not set is null, and `links` empty). The
+banner is `{"text", "level", "link"}`, and each link `{"label", "url"}`. It and `/$/ui/brand/…` need no credentials, also
 with [authentication](#authentication) on: they hold no data. The About dialog keeps naming
 TripleTrail, its version and the licences of what it ships, whatever the name.
 

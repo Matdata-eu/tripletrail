@@ -700,12 +700,12 @@ settings from `/$/ui/config.json`, which needs no credentials:
 
 <!-- test: run -->
 ```sh
-curl -s 'http://localhost:7878/$/ui/config.json' | jq -c .site
+curl -s 'http://localhost:7878/$/ui/config.json' | jq -c '.site | {name, logo, color}'
 ```
 
 <!-- test: output -->
 ```text
-{"color":"#00634f","favicon":"/$/ui/icon.svg","logo":"/$/ui/brand/logo","logoDark":null,"name":"Rail Knowledge Graph","named":true}
+{"name":"Rail Knowledge Graph","logo":"/$/ui/brand/logo","color":"#00634f"}
 ```
 
 White text must read on the colour (a contrast of at least 4.5:1, as WCAG AA asks), so a
@@ -716,7 +716,33 @@ light colour is refused when the server starts:
 tripletrail serve --location data --dataset rail_v1 --site-color "#f5d000"
 ```
 
-The About dialog still names TripleTrail, its version and the licences of what it ships.
+A public server often needs a notice and a few links of its own. `--banner` puts one line of
+text over every page of the web UI (`--banner-level warning` shows it in amber, and
+`--banner-link` makes it a link), `--site-link "LABEL|URL"` adds a link to the footer of the web
+UI and of the OGC API and describe pages (repeat it for more), `--support-url` is where the
+About dialog sends someone with a bug or a question, and `--contact-email` is shown there and
+given to data portals as each dataset's contact:
+
+<!-- test: serve -->
+```sh
+tripletrail serve --location data --dataset rail_v1 --site-name "Rail Knowledge Graph" \
+  --banner "Public read-only demo: data is reset nightly" \
+  --site-link "Privacy|https://example.org/privacy" --contact-email data@example.org
+```
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/$/ui/config.json' | jq -c '.site | {banner, links, contactEmail}'
+```
+
+<!-- test: output -->
+```text
+{"banner":{"level":"info","link":null,"text":"Public read-only demo: data is reset nightly"},"links":[{"label":"Privacy","url":"https://example.org/privacy"}],"contactEmail":"data@example.org"}
+```
+
+A viewer may close the banner; it stays closed for the browser session, until its text
+changes. The About dialog still names TripleTrail, its version and the licences of what it
+ships.
 Every option also works as an environment variable (`TRIPLETRAIL_SITE_NAME`, ...) and as a key
 of the `--config` file. See [the web UI](../server.md#web-ui).
 
@@ -730,7 +756,8 @@ of the `--config` file. See [the web UI](../server.md#web-ui).
 - `/.well-known/dcat` is a DCAT-AP catalog for data portals; `--catalog` adds titles,
   publisher and licence.
 - `--site-name`, `--site-logo`, `--site-favicon` and `--site-color` give the pages your
-  service's name and look.
+  service's name and look; `--banner`, `--site-link`, `--support-url` and `--contact-email`
+  its notices and links.
 - The enterprise edition is a separate build that reads an offline licence and never stops
   the server when it expires; its audit log records who changed what, in a chain that shows
   tampering.

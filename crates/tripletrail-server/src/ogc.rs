@@ -520,7 +520,7 @@ pub(crate) fn route(
     };
     let mut reply = answer(state, entry, rest, params, base, timeout, fg, view)?;
     if as_html {
-        reply = html::page(rest, params, base, reply)?;
+        reply = html::page(rest, params, base, reply, &state.options.branding)?;
     }
     reply.headers.push(("Vary", "Accept".to_owned()));
     Ok(reply)

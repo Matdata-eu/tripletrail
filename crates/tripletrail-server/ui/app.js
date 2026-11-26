@@ -668,6 +668,19 @@
     } catch (e) { fail(e); }
   }
 
+  // ---------- banner (--banner, #262) ----------
+  // Dismissed for the browser session, until its text changes.
+  const banner = document.getElementById("site-banner");
+  if (banner) {
+    let dismissed = null;
+    try { dismissed = sessionStorage.getItem("tripletrail-banner"); } catch { /* storage off */ }
+    if (dismissed === banner.dataset.text) banner.hidden = true;
+    banner.querySelector(".site-banner-close").addEventListener("click", () => {
+      banner.hidden = true;
+      try { sessionStorage.setItem("tripletrail-banner", banner.dataset.text); } catch { /* storage off */ }
+    });
+  }
+
   // ---------- routing ----------
   let page = null;
   function route() {

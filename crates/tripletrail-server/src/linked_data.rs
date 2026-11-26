@@ -283,6 +283,8 @@ pub(crate) struct Answer<'a> {
     pub(crate) ui: bool,
     /// The raster tiles under that map and their attribution (`--map-tiles`), if any.
     pub(crate) basemap: Option<(&'a str, &'a str)>,
+    /// The server's name, favicon and footer links (#262), for the HTML page.
+    pub(crate) brand: &'a crate::branding::Branding,
     /// The dataset's name, for the page's links to its map and Explore page.
     pub(crate) dataset: &'a str,
 }
@@ -421,6 +423,7 @@ fn page(
                 dataset: Some(answer.dataset),
                 page: answer.links.page(),
                 rdf,
+                brand: answer.brand,
             };
             crate::describe_view::html(&view, &links).into_bytes()
         }
