@@ -10,17 +10,28 @@
 //! a Relay-style connection with `edges { cursor node }`, `nodes` and `pageInfo`) and one
 //! record (`station(id:)`). A query runs as the REST API's reads: one for the records, then
 //! one batch per level of references the query follows, never one per record.
+//!
+//! Mutations (#27) write records as the REST API's writes do, with the same keys and checks:
+//! `createStation(record:, graph:)`, `updateStation(id:, record:)` (only the keys given, as a
+//! `PATCH`; `null` removes a key's values) and `deleteStation(id:)`. A record is a `JSON`
+//! value, as the REST API's body. One that breaks its shape changes nothing and fails with the
+//! violations in the error's `extensions`. Create and update answer the record as it now is;
+//! delete answers its id.
 
-use super::{ApiSet, Field, Sets, list, records, reference, schema_name, sets_for};
+use super::{
+    ApiSet, Field, Sets, WriteMethod, WriteRequest, list, percent_encode, records, reference,
+    schema_name, sets_for,
+};
 use crate::admin::Entry;
 use crate::{HttpError, Params, Reply, State, View};
 use async_graphql::dynamic::{
     Field as GqlField, FieldFuture, FieldValue, InputObject, InputValue, Object, ResolverContext,
     Scalar, Schema, TypeRef,
 };
-use async_graphql::{SelectionField, Value as GqlValue};
+use async_graphql::{ErrorExtensions, SelectionField, Value as GqlValue};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -50,6 +61,14 @@ struct Request {
     /// The values the request may still read (MAX_ANSWER_VALUES at the start).
     left: AtomicUsize,
     base: String,
+    /// The caller's right to write, for a mutation (checked before the request runs).
+    writes: Option<Writes>,
+}
+
+/// What a mutation writes with: the server and the caller's write rights.
+pub(crate) struct Writes {
+    pub(crate) state: Arc<State>,
+    pub(crate) options: tripletrail::UpdateOptions,
 }
 
 impl Request {
@@ -103,19 +122,13 @@ type SchemaCache = HashMap<(u64, Option<u64>), (Sets, Schema)>;
 static SCHEMAS: Mutex<Option<SchemaCache>> = Mutex::new(None);
 const SCHEMAS_KEPT: usize = 64;
 
-/// Answers a GraphQL request: `GET ?query=&variables=&operationName=`, or `POST` with a JSON
+/// Reads a GraphQL request: `GET ?query=&variables=&operationName=`, or `POST` with a JSON
 /// body (`application/json`) or the query itself (`application/graphql`).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn answer(
-    state: &State,
-    entry: Arc<Entry>,
+pub(crate) fn read_request(
     params: &Params,
     body: Option<(&str, &[u8])>,
-    base: &str,
-    timeout: Option<Duration>,
-    view: &View,
-) -> Result<Reply, HttpError> {
-    let (query, variables, operation) = match body {
+) -> Result<GraphQlRequest, HttpError> {
+    Ok(match body {
         Some((kind, bytes)) if kind.starts_with("application/graphql") => (
             String::from_utf8(bytes.to_vec())
                 .map_err(|_| HttpError::bad_request("The query is not UTF-8"))?,
@@ -156,7 +169,51 @@ pub(crate) fn answer(
                 params.get("operationName").map(str::to_owned),
             )
         }
+    })
+}
+
+/// A GraphQL request: its query, variables and operation name.
+pub(crate) type GraphQlRequest = (String, Option<Value>, Option<String>);
+
+/// Whether the operation `request` runs is a mutation: `Some(true)` when it may add data
+/// (anything but deletes), `Some(false)` when it only deletes, `None` for a query or a
+/// request that does not parse (which then fails as a query).
+pub(crate) fn mutates(request: &GraphQlRequest) -> Option<bool> {
+    use async_graphql::parser::types::{DocumentOperations, OperationType, Selection};
+    let document = async_graphql::parser::parse_query(&request.0).ok()?;
+    let operation = match (&document.operations, request.2.as_deref()) {
+        (DocumentOperations::Single(op), _) => op,
+        (DocumentOperations::Multiple(ops), Some(name)) => ops.get(name)?,
+        (DocumentOperations::Multiple(ops), None) if ops.len() == 1 => ops.values().next()?,
+        _ => return None,
     };
+    if operation.node.ty != OperationType::Mutation {
+        return None;
+    }
+    let adds = operation
+        .node
+        .selection_set
+        .node
+        .items
+        .iter()
+        .any(|s| match &s.node {
+            Selection::Field(f) => !f.node.name.node.starts_with("delete"),
+            _ => true,
+        });
+    Some(adds)
+}
+
+/// Answers a GraphQL request (see [`read_request`]); `writes` for a mutation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn answer(
+    state: &State,
+    entry: Arc<Entry>,
+    (query, variables, operation): GraphQlRequest,
+    base: &str,
+    timeout: Option<Duration>,
+    view: &View,
+    writes: Option<Writes>,
+) -> Result<Reply, HttpError> {
     let sets = sets_for(state, &entry, view, Reader::GraphQl)?;
     let schema = schema(&entry, view, &sets)?;
     let mut request = async_graphql::Request::new(query);
@@ -166,7 +223,6 @@ pub(crate) fn answer(
     if let Some(operation) = operation {
         request = request.operation_name(operation);
     }
-    // Queries only: a GET may not change anything, and there are no mutations yet.
     let request = request.data(Request {
         entry,
         sets,
@@ -174,6 +230,7 @@ pub(crate) fn answer(
         deadline: timeout.map(|t| Instant::now() + t),
         left: AtomicUsize::new(MAX_ANSWER_VALUES),
         base: base.to_owned(),
+        writes,
     });
     let response = pollster::block_on(schema.execute(request));
     let body = serde_json::to_vec(&response)
@@ -319,6 +376,7 @@ impl Names {
             "Query",
             "Mutation",
             "Subscription",
+            "JSON",
             "PageInfo",
             "LangString",
             "String",
@@ -393,6 +451,7 @@ fn make_schema(sets: &Sets) -> Result<Schema, async_graphql::dynamic::SchemaErro
     let mut objects: Vec<Object> = Vec::new();
     let mut inputs: Vec<InputObject> = Vec::new();
     let mut query = Object::new("Query");
+    let mut mutation = Object::new("Mutation");
     let mut roots: HashSet<String> = HashSet::new();
     let page_info = Object::new("PageInfo")
         .description("Where a page of a list is")
@@ -529,9 +588,14 @@ fn make_schema(sets: &Sets) -> Result<Schema, async_graphql::dynamic::SchemaErro
             .description(format!("One record of {}", set.title))
             .argument(InputValue::new("id", TypeRef::named_nn(TypeRef::ID))),
         );
+        mutation = mutations(mutation, set, &type_name);
     }
-    let mut builder = Schema::build("Query", None, None)
+    let any_set = !sets.is_empty();
+    let mut builder = Schema::build("Query", any_set.then_some("Mutation"), None)
         .register(query)
+        .register(Scalar::new("JSON").description(
+            "A record as the REST API writes it: its keys, references as IRIs or {\"id\": …}",
+        ))
         .register(
             Scalar::new("LangString")
                 .description("Text by language tag: {\"en\": \"…\", \"fr\": \"…\"}, several texts of one language as a list"),
@@ -544,7 +608,156 @@ fn make_schema(sets: &Sets) -> Result<Schema, async_graphql::dynamic::SchemaErro
     for i in inputs {
         builder = builder.register(i);
     }
+    if any_set {
+        builder = builder.register(mutation);
+    }
     builder.finish()
+}
+
+/// The create, update and delete mutations of `set` (#27), added to `mutation`.
+fn mutations(mutation: Object, set: &ApiSet, type_name: &str) -> Object {
+    let field = |verb: &str, method: WriteMethod, ty: TypeRef| {
+        let slug = set.slug.clone();
+        GqlField::new(format!("{verb}{type_name}"), ty, move |ctx| {
+            let slug = slug.clone();
+            FieldFuture::new(async move { mutate(&ctx, &slug, method) })
+        })
+    };
+    let record = || {
+        InputValue::new("record", TypeRef::named_nn("JSON"))
+            .description("The record's keys, as the REST API's body")
+    };
+    let id = || InputValue::new("id", TypeRef::named_nn(TypeRef::ID));
+    mutation
+        .field(
+            field("create", WriteMethod::Create, TypeRef::named(type_name))
+                .description(format!(
+                    "A new record of {}, checked against its shape; its IRI in id, or made",
+                    set.title
+                ))
+                .argument(record())
+                .argument(
+                    InputValue::new("graph", TypeRef::named(TypeRef::STRING)).description(
+                        "The named graph to write it in (the default graph if left out)",
+                    ),
+                ),
+        )
+        .field(
+            field("update", WriteMethod::Change, TypeRef::named(type_name))
+                .description(format!(
+                    "Changes the keys given of a record of {}: null removes a key's values",
+                    set.title
+                ))
+                .argument(id())
+                .argument(record()),
+        )
+        .field(
+            field("delete", WriteMethod::Delete, TypeRef::named(TypeRef::ID))
+                .description(format!("Deletes a record of {}; its id", set.title))
+                .argument(id()),
+        )
+}
+
+/// A mutation: the REST API's write of the record, then the record as it now is.
+fn mutate(
+    ctx: &ResolverContext<'_>,
+    slug: &str,
+    method: WriteMethod,
+) -> Result<Option<FieldValue<'static>>, async_graphql::Error> {
+    let r = ctx.data::<Request>()?;
+    let writes = r
+        .writes
+        .as_ref()
+        .ok_or("Mutations are sent with POST, by a caller who may write")?;
+    r.spend(1)?;
+    let set = find(&r.sets, slug)?;
+    let id = match ctx.args.get("id") {
+        Some(v) => Some(v.string()?.to_owned()),
+        None => None,
+    };
+    let body = match ctx.args.get("record") {
+        Some(v) => v.as_value().clone().into_json()?,
+        None => Value::Object(serde_json::Map::new()),
+    };
+    let mut params = Vec::new();
+    if let Some(g) = ctx.args.get("graph") {
+        params.push(("graph".to_owned(), g.string()?.to_owned()));
+    }
+    let encoded = id.as_deref().map(percent_encode);
+    let mut path = vec!["v1", slug];
+    path.extend(encoded.as_deref());
+    let body = serde_json::to_vec(&body)?;
+    let reply = super::write(
+        &writes.state,
+        &r.entry,
+        &path,
+        &Params(params),
+        &r.base,
+        r.timeout()?,
+        &r.view,
+        &WriteRequest {
+            method,
+            body: &body,
+            options: &writes.options,
+            if_match: None,
+        },
+    )
+    .map_err(|e| {
+        let status = e.0;
+        async_graphql::Error::new(e.1).extend_with(|_, x| x.set("status", status))
+    })?;
+    let mut text = Vec::new();
+    let mut answer = reply.body;
+    answer.read_to_end(&mut text)?;
+    let answer: Value = serde_json::from_slice(&text).unwrap_or(Value::Null);
+    match reply.status {
+        204 => Ok(id.map(|id| FieldValue::value(GqlValue::from(id)))),
+        200 | 201 => {
+            let iri = answer
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|i| NamedNode::new(i).ok())
+                .ok_or("The record was written, but has no IRI to read it by")?;
+            let mut found = fetch(r, set, &[iri])?;
+            expand(r, &set.fields, &ctx.ctx.field(), &mut found, 0)?;
+            Ok(found.pop().map(FieldValue::owned_any))
+        }
+        _ => {
+            // A problem (422, 412): its title, with each violation in the extensions.
+            let title = answer
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("The write was refused")
+                .to_owned();
+            let errors = answer
+                .get("errors")
+                .cloned()
+                .unwrap_or(Value::Array(Vec::new()));
+            let details: Vec<String> = errors
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|e| {
+                    let message = e.get("message").and_then(Value::as_str).unwrap_or_default();
+                    match e.get("key").and_then(Value::as_str) {
+                        Some(key) => format!("{key}: {message}"),
+                        None => message.to_owned(),
+                    }
+                })
+                .collect();
+            let message = if details.is_empty() {
+                title
+            } else {
+                format!("{title}: {}", details.join("; "))
+            };
+            let violations = GqlValue::from_json(errors).unwrap_or(GqlValue::Null);
+            let status = reply.status;
+            Err(async_graphql::Error::new(message).extend_with(|_, e| {
+                e.set("status", status);
+                e.set("violations", violations.clone());
+            }))
+        }
+    }
 }
 
 /// The nested types of the embedded keys of `fields`, named after the type that has them.

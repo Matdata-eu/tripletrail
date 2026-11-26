@@ -347,6 +347,32 @@ fn tool_queries_land_in_the_slow_query_log() {
         assert!(std::time::Instant::now() < deadline, "not ready");
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    // Both logs are written once the answer is sent: read them as they come.
+    let lines = |pipe: Box<dyn Read + Send>| {
+        let (send, receive) = std::sync::mpsc::channel::<Value>();
+        std::thread::spawn(move || {
+            for line in std::io::BufRead::lines(std::io::BufReader::new(pipe)).map_while(Result::ok)
+            {
+                if let Ok(v) = serde_json::from_str::<Value>(&line)
+                    && send.send(v).is_err()
+                {
+                    break;
+                }
+            }
+        });
+        receive
+    };
+    let errors = lines(Box::new(child.stderr.take().unwrap()));
+    let requests = lines(Box::new(child.stdout.take().unwrap()));
+    let find = |from: &std::sync::mpsc::Receiver<Value>, what: &dyn Fn(&Value) -> bool| {
+        loop {
+            match from.recv_timeout(std::time::Duration::from_secs(30)) {
+                Ok(v) if what(&v) => return Some(v),
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+        }
+    };
     let query = "SELECT ?s WHERE { ?s a <http://example.com/Station> }";
     let (text, error) = tool(
         &format!("{base}/kg/mcp"),
@@ -355,35 +381,17 @@ fn tool_queries_land_in_the_slow_query_log() {
         json!({ "query": query }),
     );
     assert!(!error, "{text}");
+    let slow = find(&errors, &|l| l["event"] == "slow_query");
+    let logged = find(&requests, &|l| l["path"] == "/kg/mcp");
     let _ = child.kill();
     let _ = child.wait();
-    let mut stderr = String::new();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut stderr)
-        .unwrap();
-    let mut stdout = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut stdout)
-        .unwrap();
-    let slow: Value = stderr
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .find(|l| l["event"] == "slow_query")
-        .unwrap_or_else(|| panic!("{stderr}"));
+    let (slow, logged) = (
+        slow.expect("a slow_query line"),
+        logged.expect("a request line"),
+    );
     assert_eq!(slow["text"], query);
     assert_eq!(slow["operation"], "query");
     assert_eq!(slow["dataset"], "kg");
     let hash = slow["query_hash"].as_str().unwrap();
-    let logged: Value = stdout
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .find(|l| l["path"] == "/kg/mcp")
-        .unwrap_or_else(|| panic!("{stdout}"));
     assert_eq!(logged["query_hash"], hash);
 }
