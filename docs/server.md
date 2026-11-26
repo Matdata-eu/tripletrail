@@ -84,6 +84,10 @@ for Fuseki or oxigraph-server work unchanged:
   the indexes and are computed once per version of the data (a few ms at 1M triples); while
   writes not yet folded into the indexes are under 1 % of the store they are left out.
   MatGUI reads these for its dataset overview and its class and property autocompletion.
+- `/{ds}/examples`: the dataset's example queries and default query text as JSON,
+  `{"examples": [{"title", "query"}], "defaultQuery"}` (`defaultQuery` is null without
+  `--default-query`), for anyone who may read the dataset. The Query page reads it; see
+  [Branding](#branding).
 - `/.well-known/dcat`: a [DCAT-AP](https://semiceu.github.io/DCAT-AP/) catalog for data
   portals (data.europa.eu and others harvest DCAT). The catalog `<{origin}/#catalog>` lists
   each dataset as a `dcat:Dataset` (the node of its VoID description), with two
@@ -164,8 +168,9 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   dictionaries of up to 16 million terms; logged as `{ds}: string ranks of N terms in S s`,
   0.14 s for 460,000 terms) and then makes its map in the background, one dataset
   after the other (#92): the map's collections (the profile of the data) and the unfiltered
-  facet counts of each, kept in the caches that requests read, so the first visitor does not
-  wait for them. The unfiltered counts stay until the next write to the dataset, whatever the
+  facet counts of each, then the map search's full-text index (7 s on RINF's eight
+  countries), kept in the caches that requests read, so the first visitor does not wait for
+  them. The unfiltered counts stay until the next write to the dataset, whatever the
   result cache (`--result-cache-mb`) lets go meanwhile. Each facet query gets the dataset's timeout, as a map request does, and a
   dataset's warm-up at most five minutes in all: the collections left then are made by the
   first request that needs them. The log says `{ds}: map ready: N collections and their facets
@@ -2519,8 +2524,10 @@ which hold the admin token or a "view as"). Opening such a link adds the query a
 then takes it out of the address bar.
 
 - **Datasets**: totals, every dataset and alias with its mode and readiness, and per dataset
-  its statistics, back up, snapshot, detach, upload (Graph Store Protocol, with progress) and,
-  for an alias, swap and roll back. New datasets are created, attached or restored from a
+  its statistics, back up, snapshot, detach, **Add data** and, for an alias, swap and roll
+  back. **Add data** takes any files (#275): RDF loads through the Graph Store Protocol, with
+  progress (an `.xml` file is RDF when it holds `rdf:RDF`); each other file, or one set to
+  *Lift with Facade-X*, opens on the **Import** page with its lift drafted, one after the other. New datasets are created, attached or restored from a
   backup in one dialog.
 - **Query**: [MatGUI](https://github.com/Matdata-eu/Matgui) on the chosen dataset, with its
   table, map, chart and graph views, and **Explain**, which shows TripleTrail's plan with row counts,
@@ -2572,9 +2579,17 @@ then takes it out of the address bar.
   with live checks; the kept versions with rollback. See
   [The shapes editor](#the-shapes-editor).
 - **Import** (`/$/ui/import/{ds}`): drop a file (CSV, JSON, XML, YAML, a spreadsheet, HTML,
-  Markdown, an archive...), see it as Facade-X triples, edit the drafted `CONSTRUCT`, preview
-  the triples it makes and add them to a named graph. *Download query* saves the query as a
-  lift query that reads the file by its name. See [Importing files](#importing-files).
+  Markdown, an archive...), see it as Facade-X triples and the kinds of records in it, change
+  the source namespace and the column each kind's IRIs come from (*Draft again*), edit the
+  drafted `CONSTRUCT`, preview the triples it makes and add them to a named graph. *Save as lift
+  query* writes the query into a Workbench workspace (a new one, or one of the caller's) as
+  `lift/{file}.rq` reading `lift/{file}`, the file beside it, and a `lift` step into the graph
+  (with `clear: true`) at the end of its `pipeline.yaml`, so the pipeline lifts a new version of
+  the file the same way. *Download query* saves the query as a lift query that reads the file by
+  its name. A file larger than the import takes is drafted from its first MiB when it is made
+  of lines (CSV, TSV, JSON lines), to save or download the query and lift the whole file with
+  `tripletrail lift` or a pipeline; *Add to the graph* is then off. See
+  [Importing files](#importing-files).
 - **Workbench** (`/$/ui/workbench/{workspace}/{file}`): develop shapes, rules and queries in a
   [workspace](#workbench-workspaces), described below.
 - **Access** (`/$/ui/access`): API keys, groups, anonymous access and who may read and write
@@ -2730,20 +2745,46 @@ reading and writing every graph): callers whose policies give them only some gra
 under row rules, are answered 403, as a mapping's `WHERE` could read past them. A read-only
 dataset answers 405.
 
-- `POST /{ds}/import?name=NAME[&options=…]`: the file as the body. `NAME` (letters, digits,
-  `.`, `-`, `_`) chooses the format as a file name does; `options` are Facade-X options
-  (`csv.headers=true` by default for `.csv` and `.tsv`); options that name another source
-(`location`, `from-archive`, `content`, `table`, `sql`...) are refused. Answers 201 with `id`, `name`,
-  `bytes`, `options`, `location` (`upload:NAME`), `tree` (the first 300 triples, as N-Triples),
-  `triples` and `truncated`, and `query`: a `CONSTRUCT` that maps every key of the records (the
-  rows of a table, the objects of a JSON array), with IRIs under `https://example.org/import/`.
-  A file that cannot be read is answered 422.
+- `GET /{ds}/import`: `{"maxBytes", "kept"}`, the largest file it takes (`--max-body`, at most
+  256 MiB) and how many files it keeps.
+- `POST /{ds}/import?name=NAME[&options=…][&namespace=IRI]`: the file as the body. `NAME`
+  (ASCII letters, digits, `.`, `-`, `_`; other names are refused) chooses the format as a file name does; `options` are
+  Facade-X options (`csv.headers=true` by default for `.csv` and `.tsv`); options that name
+  another source (`location`, `from-archive`, `content`, `table`, `sql`...) are refused.
+  Answers 201 with `id`, `name`, `bytes`, `options`, `location` (`upload:NAME`), `tree` (the
+  first 300 triples, as N-Triples), `triples`, `truncated`, `namespace`, `kinds`, `schema` and
+  `query`, the drafted lift (below). A file that cannot be read is answered 422.
+- `POST /{ds}/import/{id}/draft`: `{"namespace": IRI, "keys": {KIND: COLUMN or null}}` as the
+  body; the lift drafted again (`{"namespace", "kinds", "query"}`), in another namespace or
+  with other key columns (`null`: none). A kind left out of `keys` gets the one found.
 - `POST /{ds}/import/{id}/preview`: a `CONSTRUCT` as the body; answers its triples (Turtle by
   default, any format `/{ds}/query` gives by `Accept`) and writes nothing.
 - `POST /{ds}/import/{id}/run?graph=IRI`: adds the triples of the `CONSTRUCT` (without `FROM`)
   to the graph, in one update, and answers `{"after", "before", "graph"}`: the graph's size
   before and after.
 - `DELETE /{ds}/import/{id}`: forgets the file (204).
+
+The drafted lift (#275) is the file in its own vocabulary, mechanically: nothing is
+interpreted, and nothing is dropped but empty values (interpreting it is the uplift's work).
+From the first 2,000 triples of the file's Facade-X graph it finds the kinds of records: the
+rows of a table (named after the file), the XML elements of one name, the objects under one
+JSON or YAML key, and the document itself when it has keys. Each kind becomes a class, each
+column, key or attribute a property, and records in records links under the key or element
+name that holds them. All are named in `namespace` (`https://data.example.org/src/{file}/`
+when none is given; one that ends in neither `/` nor `#` gets a `/`), the odd name
+percent-encoded. Values the file gives only as text (CSV cells, XML attributes) are typed by
+what they all look like: `xsd:integer` (not with a leading zero), `xsd:decimal`,
+`xsd:double`, `xsd:boolean`, `xsd:date` or `xsd:dateTime`; JSON keeps its own types. A
+record's IRI is `{namespace}{kind}/{key}` from its key column (`fx:entity`): one on every
+record sampled, with a value of its own each, and named as an id is (`id`, `code`, `key`,
+`…id`, `…code`), unless `keys` says otherwise; without one, a row's number, the namespace's
+`{file}` for the document, or the record's blank node. Every record gets
+`prov:wasDerivedFrom <{namespace}{NAME}>`. `kinds` lists them, each with `name`, `class`,
+`records` (`rows`, `elements`, `objects` or `document`), `sampled`, `columns` (those that can
+name a record) and `key`. `schema` is the schema the file names, for generating an ontology and
+shapes from it: `{"kind": "xsd", "location"}` for `xsi:schemaLocation` or
+`xsi:noNamespaceSchemaLocation`, `{"kind": "json-schema", "location"}` for `"$schema"`,
+`{"kind": "openapi"}` for an OpenAPI or Swagger document, else `null`.
 
 The queries may read only the upload: `location=upload:NAME`, or `location=NAME` of its own
 name (so a lift query that names the file runs as it is), and `from-archive` of it. Other
@@ -2783,6 +2824,8 @@ URLs, never HTML.
 | `--default-dataset NAME` | `TRIPLETRAIL_DEFAULT_DATASET` | The dataset the Query, Map, Search, Explore, Records and Import pages and the top search open on, in place of the first in the list, when the viewer may see it and has not picked another. |
 | `--ui-theme auto\|light\|dark` | `TRIPLETRAIL_UI_THEME` | The theme of a viewer's first visit; `auto` (the default) follows the system. The viewer's own choice is kept over it. |
 | `--map-view ZOOM/LAT/LON` | `TRIPLETRAIL_MAP_VIEW` | Where the Map page starts, as in a map link's `#zoom/lat/lon` (such as `7/50.8/4.4`), when the dataset's extent is unknown or spans half the world or more. A link with a place still opens there. |
+| `--examples [DATASET=]DIR` | `TRIPLETRAIL_EXAMPLES` (one per line) | Example queries for the Query page: the `.rq` files of a directory, by file name, each titled by its first line when that is a `#` comment (else its file name). The page lists them under **Examples…**, and a viewer's first visit opens up to five as tabs. `DATASET=DIR` gives one dataset's, listed before every dataset's. Repeatable; at most 200 files of 64 KB each per directory. |
+| `--default-query [DATASET=]FILE` | `TRIPLETRAIL_DEFAULT_QUERY` (one per line) | The text of a new tab in the Query page, such as the dataset's prefixes, in place of MatGUI's. `DATASET=FILE` gives one dataset's. At most 64 KB. |
 
 An image file is SVG, PNG, ICO, WebP or JPEG, at most 256 KB, read when the server starts, and
 served with its type, `X-Content-Type-Options: nosniff` and a sandboxing
@@ -3496,8 +3539,8 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   last as a prefix, so it works while typing; case and Latin accents aside), labels with the
   fewest other words first, then by score, at most 5 of a class and 20 in all. Each result has
   `iri`, `label` (the label that matched, without what `tts:labelStrip` matches), `collection`
-  and `bbox` (CRS84, around its geometries). The first search
-  builds the index (about 4 s on RINF DE+FR); a search then takes milliseconds. As
+  and `bbox` (CRS84, around its geometries). The map's warm-up builds the index (or else
+  the first search: about 7 s on RINF's eight countries); a search then takes milliseconds. As
   `tt:search`, a caller limited to some graphs or rows searches only what it can read.
 - `color.{collection}={key}` on the `all` tiles (`color={key}` on a collection's own) gives
   each feature of the collection the value of that values facet as the property `value` (the
@@ -4038,6 +4081,8 @@ option given several times, `true` for a flag. `datasets` lists the datasets, ea
 | `rdfs`, `owl-rl` | `true`, or the IRI of the graph to keep the entailment in (`--rdfs`, `--owl-rl`) |
 | `aliases` | a name or a list of names that answer for the dataset (`--alias`) |
 | `text-properties` | an IRI or a list of IRIs whose literals full-text search indexes too (`--text-properties name=IRI`, see [full-text search](full-text-search.md#what-is-indexed)) |
+| `examples` | a directory of the dataset's example queries (`--examples name=DIR`) |
+| `default-query` | a file with the text of a new query tab for the dataset (`--default-query name=FILE`) |
 
 ```yaml
 bind: 0.0.0.0:3030

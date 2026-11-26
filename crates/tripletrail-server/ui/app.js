@@ -46,6 +46,7 @@
       Object.assign(document.createElement("button"), { type: "button", className: "btn small", textContent: "Stop viewing as", onclick: () => viewAs.set(null) }));
   }
   const THEME_KEY = "tripletrail-theme";
+  const SEEDED_KEY = "tripletrail-query-seeded"; // the Query page's first visit is over
 
   // ---------- formatting ----------
   const nf = new Intl.NumberFormat();
@@ -374,6 +375,7 @@
     $("#ds-upload").hidden = ds.alias || ds.mode !== "read-write";
     $("#upload-msg").textContent = "";
     $("#upload-progress").hidden = true;
+    if (!d.open) { adding = []; $("#upload-files").replaceChildren(); $("#upload-file").value = ""; }
     if (!d.open) d.showModal();
   }
   $("#ds-dialog").addEventListener("close", () => {
@@ -501,36 +503,84 @@
   $("#swap-btn").addEventListener("click", () => swapTo($("#swap-to").value, $("#swap-release").checked));
   $("#rollback-btn").addEventListener("click", () => current && current.previous && swapTo(current.previous, false));
 
-  // Upload through the Graph Store Protocol, with progress (fetch has none for uploads).
+  // "Add data" (#275): one entry for any file. RDF loads through the Graph Store Protocol, with
+  // progress (fetch has none for uploads); every other format goes to the Import page, which
+  // drafts its lift in the file's own vocabulary.
   const EXT_TYPES = { ttl: "text/turtle", nt: "application/n-triples", nq: "application/n-quads", trig: "application/trig", rdf: "application/rdf+xml", owl: "application/rdf+xml", xml: "application/rdf+xml", jsonld: "application/ld+json" };
-  $("#upload-btn").addEventListener("click", () => {
-    const file = $("#upload-file").files[0];
-    if (!current || !file) { $("#upload-msg").textContent = "Choose a file first."; return; }
+  /** Whether a file is RDF: by its extension, and an .xml file by an rdf:RDF in its first bytes. */
+  async function isRdf(file) {
     const ext = file.name.toLowerCase().split(".").pop();
-    const type = EXT_TYPES[ext] || file.type;
-    if (!type) { $("#upload-msg").textContent = "Unknown format: use .ttl, .nt, .nq, .trig, .rdf or .jsonld."; return; }
-    const graph = $("#upload-graph").value.trim();
-    const quads = type === "application/n-quads" || type === "application/trig";
-    const url = new URL(`/${current.name}/data`, location.origin);
-    if (graph) url.searchParams.set("graph", graph); else if (!quads) url.searchParams.set("default", "");
-    const xhr = new XMLHttpRequest();
-    xhr.open($("#upload-method").value, url);
-    xhr.setRequestHeader("Content-Type", type);
-    const token = store.get(TOKEN_KEY);
-    if (token) xhr.setRequestHeader("Authorization", "Bearer " + token);
-    const bar = $("#upload-progress");
-    bar.hidden = false; bar.value = 0;
-    const started = performance.now();
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) bar.value = e.loaded / e.total; $("#upload-msg").textContent = `Sending ${fmtBytes(e.loaded)} of ${fmtBytes(e.total)}…`; };
-    xhr.upload.onload = () => { $("#upload-msg").textContent = "Loading into the store…"; bar.removeAttribute("value"); };
-    xhr.onload = () => {
-      bar.hidden = true;
-      const secs = ((performance.now() - started) / 1000).toFixed(1);
-      if (xhr.status < 300) { $("#upload-msg").textContent = `Loaded ${file.name} in ${secs} s.`; toast("Loaded " + file.name, "ok"); openDataset(current.name); }
-      else $("#upload-msg").textContent = `Failed (${xhr.status}): ${xhr.responseText}`;
-    };
-    xhr.onerror = () => { bar.hidden = true; $("#upload-msg").textContent = "The upload failed: the connection was lost."; };
-    xhr.send(file);
+    if (ext === "xml") {
+      const head = await file.slice(0, 4096).text().catch(() => "");
+      return /<rdf:RDF\b|http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#/.test(head);
+    }
+    return !!EXT_TYPES[ext];
+  }
+  let adding = []; // [{ file, how: "rdf" | "lift" }]
+  async function chooseFiles(files) {
+    adding = await Promise.all([...files].map(async (file) => ({ file, how: (await isRdf(file)) ? "rdf" : "lift" })));
+    $("#upload-msg").textContent = "";
+    $("#upload-files").replaceChildren(...adding.map((a) => el("li", {},
+      el("span", { class: "grow" }, a.file.name, el("span", { class: "muted small" }, " " + fmtBytes(a.file.size))),
+      el("select", { "aria-label": "How to add " + a.file.name, onchange: (e) => { a.how = e.target.value; } },
+        el("option", { value: "rdf", selected: a.how === "rdf" }, "Load as RDF"),
+        el("option", { value: "lift", selected: a.how === "lift" }, "Lift with Facade-X")))));
+  }
+  $("#upload-file").addEventListener("change", (e) => chooseFiles(e.target.files));
+  {
+    const drop = $("#ds-upload .add-drop");
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); chooseFiles(e.dataTransfer.files); });
+  }
+  /** Loads one RDF file into the dataset; resolves with the seconds it took. */
+  function loadRdf(name, file) {
+    return new Promise((done, failed) => {
+      const ext = file.name.toLowerCase().split(".").pop();
+      const type = EXT_TYPES[ext] || file.type;
+      if (!type) { failed(new Error(file.name + ": unknown format: use .ttl, .nt, .nq, .trig, .rdf or .jsonld.")); return; }
+      const graph = $("#upload-graph").value.trim();
+      const quads = type === "application/n-quads" || type === "application/trig";
+      const url = new URL(`/${name}/data`, location.origin);
+      if (graph) url.searchParams.set("graph", graph); else if (!quads) url.searchParams.set("default", "");
+      const xhr = new XMLHttpRequest();
+      xhr.open($("#upload-method").value, url);
+      xhr.setRequestHeader("Content-Type", type);
+      const token = store.get(TOKEN_KEY);
+      if (token) xhr.setRequestHeader("Authorization", "Bearer " + token);
+      const bar = $("#upload-progress");
+      bar.hidden = false; bar.value = 0;
+      const started = performance.now();
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) bar.value = e.loaded / e.total; $("#upload-msg").textContent = `Sending ${file.name}: ${fmtBytes(e.loaded)} of ${fmtBytes(e.total)}…`; };
+      xhr.upload.onload = () => { $("#upload-msg").textContent = `Loading ${file.name} into the store…`; bar.removeAttribute("value"); };
+      xhr.onload = () => {
+        bar.hidden = true;
+        if (xhr.status < 300) done(((performance.now() - started) / 1000).toFixed(1));
+        else failed(new Error(`${file.name} failed (${xhr.status}): ${xhr.responseText}`));
+      };
+      xhr.onerror = () => { bar.hidden = true; failed(new Error(file.name + ": the upload failed: the connection was lost.")); };
+      xhr.send(file);
+    });
+  }
+  $("#upload-btn").addEventListener("click", async () => {
+    if (!current || !adding.length) { $("#upload-msg").textContent = "Choose a file first."; return; }
+    const name = current.name;
+    const rdf = adding.filter((a) => a.how === "rdf").map((a) => a.file);
+    const lift = adding.filter((a) => a.how === "lift").map((a) => a.file);
+    const loaded = [];
+    for (const f of rdf) {
+      try { loaded.push(`${f.name} in ${await loadRdf(name, f)} s`); }
+      catch (e) { $("#upload-msg").textContent = e.message; return; }
+    }
+    adding = [];
+    $("#upload-files").replaceChildren();
+    $("#upload-file").value = "";
+    if (loaded.length) { $("#upload-msg").textContent = "Loaded " + loaded.join(", ") + "."; toast("Loaded " + rdf.map((f) => f.name).join(", "), "ok"); }
+    if (lift.length && window.TripleTrailImport) {
+      window.TripleTrailImport.take(name, lift);
+      $("#ds-dialog").close();
+      go("import/" + encodeURIComponent(name));
+    } else if (loaded.length) openDataset(name);
   });
 
   // ---------- new dataset ----------
@@ -630,6 +680,56 @@
     }
     const tab = yasgui.getTab();
     if (tab && tab.getEndpoint() !== endpointOf(name)) tab.setEndpoint(endpointOf(name));
+    showExamples(name);
+  }
+
+  // ---------- the dataset's example queries and default query text (--examples, --default-query) ----------
+  const examplesOf = new Map(); // dataset → its answer, once
+  let matguiDefault = null; // MatGUI's own text of a new tab
+  async function fetchExamples(name) {
+    if (name.startsWith(WS)) return { examples: [], defaultQuery: null };
+    if (!examplesOf.has(name)) {
+      examplesOf.set(name, (async () => {
+        const headers = { "X-TripleTrail-Client": "ui", ...viewAs.headers() };
+        try {
+          const r = await fetch(serviceOf(name, "examples"), { headers });
+          if (r.ok) return await r.json();
+        } catch (e) { /* none */ }
+        return { examples: [], defaultQuery: null };
+      })());
+    }
+    return examplesOf.get(name);
+  }
+  function openExample(name, example) {
+    yasgui.addTab(true, { name: example.title });
+    const t = yasgui.getTab();
+    if (!t) return;
+    t.setEndpoint(endpointOf(name));
+    t.setQuery(example.query);
+  }
+  async function showExamples(name) {
+    const { examples = [], defaultQuery = null } = await fetchExamples(name);
+    if ($("#query-ds").value !== name && !(name.startsWith(WS) && name === workspaceOpen)) return;
+    // A new tab starts with the dataset's default query text, or MatGUI's.
+    if (matguiDefault === null) matguiDefault = yasgui.config.yasqe.value ?? "";
+    yasgui.config.yasqe.value = defaultQuery ?? matguiDefault;
+    const sel = $("#query-examples");
+    sel.replaceChildren(el("option", { value: "" }, "Examples…"),
+      ...examples.map((e, i) => el("option", { value: String(i) }, e.title)));
+    sel.hidden = examples.length === 0;
+    sel.onchange = () => {
+      const e = examples[Number(sel.value)];
+      sel.value = "";
+      if (e) openExample(name, e);
+    };
+    // A viewer's first visit: the default query in the first tab, and the examples as tabs.
+    // Only once something was seeded, so a dataset given examples later still seeds them.
+    if (store.get(SEEDED_KEY) || (defaultQuery == null && !examples.length)) return;
+    store.set(SEEDED_KEY, "1");
+    const first = yasgui.getTab();
+    if (defaultQuery != null && first && first.getQuery() === matguiDefault) first.setQuery(defaultQuery);
+    for (const e of examples.slice(0, 5)) openExample(name, e);
+    if (first && examples.length) yasgui.selectTabId(first.getId());
   }
   function syncSelectFromTab() {
     const tab = yasgui && yasgui.getTab();

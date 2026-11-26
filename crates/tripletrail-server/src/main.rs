@@ -1205,6 +1205,26 @@ struct ServeArgs {
     /// 5/50.8/4.4.
     #[arg(long, env = "TRIPLETRAIL_MAP_VIEW", value_name = "ZOOM/LAT/LON")]
     map_view: Option<String>,
+    /// A directory of example queries for the web UI's Query page: `.rq` files, each titled by
+    /// its first line when that is a `#` comment. `DATASET=DIR` gives one dataset's, listed
+    /// before every dataset's. Repeatable; in the environment, one per line.
+    #[arg(
+        long = "examples",
+        env = "TRIPLETRAIL_EXAMPLES",
+        value_delimiter = '\n',
+        value_name = "[DATASET=]DIR"
+    )]
+    examples: Vec<String>,
+    /// The query text of a new tab in the web UI's Query page, such as the dataset's
+    /// prefixes: a file of at most 64 KB. `DATASET=FILE` gives one dataset's. Repeatable; in
+    /// the environment, one per line.
+    #[arg(
+        long = "default-query",
+        env = "TRIPLETRAIL_DEFAULT_QUERY",
+        value_delimiter = '\n',
+        value_name = "[DATASET=]FILE"
+    )]
+    default_query: Vec<String>,
     /// Write one JSON line per request to standard output (time, method, path, dataset,
     /// status, ms, query_hash).
     #[arg(long, env = "TRIPLETRAIL_LOG_REQUESTS")]
@@ -2229,6 +2249,8 @@ fn serve(args: ServeArgs) -> Result<()> {
         ui_home,
         ui_theme,
         map_view,
+        examples,
+        default_query,
         log_requests,
         shutdown_grace,
         base_iris,
@@ -2570,6 +2592,7 @@ fn serve(args: ServeArgs) -> Result<()> {
                 ui_theme.as_deref(),
                 map_view.as_deref(),
             )?,
+            examples: tripletrail_server::examples::Examples::read(&examples, &default_query)?,
             log_requests,
             shutdown_grace: Duration::try_from_secs_f64(shutdown_grace)
                 .map_err(|_| "--shutdown-grace takes a positive number of seconds")?,

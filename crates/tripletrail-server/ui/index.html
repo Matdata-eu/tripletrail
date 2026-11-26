@@ -102,6 +102,7 @@
     <div class="query-bar">
       <label>Dataset <select id="query-ds"></select></label>
       <span class="chip" id="query-mode"></span>
+      <select id="query-examples" aria-label="Example queries" title="Open an example query in a new tab" hidden></select>
       <span class="grow"></span>
       <button class="btn" id="explain-btn" type="button" title="Run the query and show its plan with row counts and timings">Explain</button>
     </div>
@@ -162,12 +163,17 @@
       </div>
     </div>
     <div id="ds-upload" hidden>
-      <h3>Upload data</h3>
+      <h3>Add data</h3>
+      <label class="imp-drop add-drop" for="upload-file">
+        <strong>Drop files here, or choose them</strong>
+        <span class="muted small">RDF loads as it is. CSV, JSON, XML, spreadsheets and the other formats Facade-X reads are lifted: you see the drafted query before anything is written.</span>
+        <input type="file" id="upload-file" multiple aria-label="Files to add">
+      </label>
+      <ul class="add-files" id="upload-files"></ul>
       <div class="row">
-        <input type="file" id="upload-file">
-        <input type="text" id="upload-graph" placeholder="Graph IRI (empty: default graph)">
-        <select id="upload-method"><option value="POST">Add</option><option value="PUT">Replace graph</option></select>
-        <button class="btn primary" id="upload-btn" type="button">Upload</button>
+        <input type="text" id="upload-graph" placeholder="Graph IRI for RDF (empty: default graph)">
+        <select id="upload-method" aria-label="How RDF is added"><option value="POST">Add</option><option value="PUT">Replace graph</option></select>
+        <button class="btn primary" id="upload-btn" type="button">Add</button>
       </div>
       <progress id="upload-progress" max="1" value="0" hidden></progress>
       <p class="small" id="upload-msg"></p>
