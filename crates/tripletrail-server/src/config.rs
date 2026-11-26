@@ -199,11 +199,11 @@ fn dataset(d: &Yaml) -> Result<Vec<(&'static str, String)>, String> {
         let ok = matches!(k, Yaml::String(k) if [
             "name", "path", "read-only", "read_only", "union-default-graph", "union_default_graph",
             "rdfs", "owl-rl", "owl_rl", "aliases", "alias", "text-properties", "text_properties",
-            "examples", "default-query", "default_query",
+            "examples", "default-query", "default_query", "map-view", "map_view",
         ].contains(&k.as_str()));
         if !ok {
             return Err(format!(
-                "datasets: unknown key {k:?}; a dataset has name, path, read-only, union-default-graph, rdfs, owl-rl, aliases, text-properties, examples and default-query"
+                "datasets: unknown key {k:?}; a dataset has name, path, read-only, union-default-graph, rdfs, owl-rl, aliases, text-properties, examples, default-query and map-view"
             ));
         }
     }
@@ -269,6 +269,15 @@ fn dataset(d: &Yaml) -> Result<Vec<(&'static str, String)>, String> {
         }
         Some(_) => return Err(format!("datasets: {name}: text-properties are IRIs")),
     }
+    match get("map-view") {
+        None | Some(Yaml::Null) => {}
+        Some(Yaml::String(v)) => out.push(("map-view", format!("{name}={v}"))),
+        Some(_) => {
+            return Err(format!(
+                "datasets: {name}: map-view is ZOOM/LAT/LON, in quotes (\"7/50.8/4.4\")"
+            ));
+        }
+    }
     let aliases = match get("aliases").or_else(|| get("alias")) {
         None | Some(Yaml::Null) => Vec::new(),
         Some(Yaml::String(a)) => vec![a.clone()],
@@ -315,11 +324,33 @@ mod tests {
             o("config", true, None),
             o("examples", true, None),
             o("default-query", true, None),
+            o("map-view", true, None),
         ]
     }
 
     fn args(a: &[&str]) -> Vec<OsString> {
         a.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn a_dataset_takes_a_map_view() {
+        let text = "datasets:\n  - name: rail\n    map-view: \"7/50.8/4.4\"\n";
+        let got: Vec<String> = expand(&args(&["tripletrail", "serve"]), text, &opts())
+            .unwrap()
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "tripletrail",
+                "serve",
+                "--dataset",
+                "rail",
+                "--map-view",
+                "rail=7/50.8/4.4"
+            ]
+        );
     }
 
     #[test]

@@ -2823,7 +2823,9 @@ URLs, never HTML.
 | `--ui-home PAGE` | `TRIPLETRAIL_UI_HOME` | The page `/` and `/$/ui/` open: `datasets` (the default), `query`, `map`, `search` or `explore`. The top bar's name links there too. |
 | `--default-dataset NAME` | `TRIPLETRAIL_DEFAULT_DATASET` | The dataset the Query, Map, Search, Explore, Records and Import pages and the top search open on, in place of the first in the list, when the viewer may see it and has not picked another. |
 | `--ui-theme auto\|light\|dark` | `TRIPLETRAIL_UI_THEME` | The theme of a viewer's first visit; `auto` (the default) follows the system. The viewer's own choice is kept over it. |
-| `--map-view ZOOM/LAT/LON` | `TRIPLETRAIL_MAP_VIEW` | Where the Map page starts, as in a map link's `#zoom/lat/lon` (such as `7/50.8/4.4`), when the dataset's extent is unknown or spans half the world or more. A link with a place still opens there. |
+| `--map-view [DATASET=]ZOOM/LAT/LON` | `TRIPLETRAIL_MAP_VIEW` (one per line) | Where the Map page starts, as in a map link's `#zoom/lat/lon` (such as `7/50.8/4.4`), when the dataset's extent is unknown or spans half the world or more. `DATASET=ZOOM/LAT/LON` gives one dataset's, which wins over the one for all. A link with a place still opens there. |
+| `--ui-css FILE` | `TRIPLETRAIL_UI_CSS` | A stylesheet of at most 256 KB, read at start, that the web UI loads after its own from `/$/ui/brand/custom.css`, for what the options above do not cover. Its class names are not a stable interface: they may change between versions. |
+| `--hide-version` | `TRIPLETRAIL_HIDE_VERSION` | The `Server` header of every answer says `TripleTrail` instead of `TripleTrail/VERSION`, for security scans that flag a version. The product token stays, because MatGUI recognises the engine by it; the About dialog and `/$/server` still give the version. |
 | `--examples [DATASET=]DIR` | `TRIPLETRAIL_EXAMPLES` (one per line) | Example queries for the Query page: the `.rq` files of a directory, by file name, each titled by its first line when that is a `#` comment (else its file name). The page lists them under **Examples…**, and a viewer's first visit opens up to five as tabs. `DATASET=DIR` gives one dataset's, listed before every dataset's. Repeatable; at most 200 files of 64 KB each per directory. |
 | `--default-query [DATASET=]FILE` | `TRIPLETRAIL_DEFAULT_QUERY` (one per line) | The text of a new tab in the Query page, such as the dataset's prefixes, in place of MatGUI's. `DATASET=FILE` gives one dataset's. At most 64 KB. |
 
@@ -2841,8 +2843,8 @@ REST API and GraphQL pages add its origin to their `img-src`.
 "logo", "logoDark", "color", "banner", "links", "supportUrl", "contactEmail", "defaults"},
 "version"}` (`named` is false without `--site-name`; what is not set is null, and `links`
 empty). The banner is `{"text", "level", "link"}`, each link `{"label", "url"}`, and the
-defaults `{"dataset", "home", "theme", "mapView"}` (`home` is `datasets` and `theme` `auto`
-when unset). It and `/$/ui/brand/…` need no credentials, also
+defaults `{"dataset", "home", "theme", "mapView", "mapViews"}` (`home` is `datasets` and
+`theme` `auto` when unset; `mapViews` holds the per-dataset start views by name). It and `/$/ui/brand/…` need no credentials, also
 with [authentication](#authentication) on: they hold no data. The About dialog keeps naming
 TripleTrail, its version and the licences of what it ships, whatever the name.
 
@@ -4083,6 +4085,7 @@ option given several times, `true` for a flag. `datasets` lists the datasets, ea
 | `text-properties` | an IRI or a list of IRIs whose literals full-text search indexes too (`--text-properties name=IRI`, see [full-text search](full-text-search.md#what-is-indexed)) |
 | `examples` | a directory of the dataset's example queries (`--examples name=DIR`) |
 | `default-query` | a file with the text of a new query tab for the dataset (`--default-query name=FILE`) |
+| `map-view` | the Map page's start view for the dataset, in quotes (`"7/50.8/4.4"`, `--map-view name=ZOOM/LAT/LON`) |
 
 ```yaml
 bind: 0.0.0.0:3030

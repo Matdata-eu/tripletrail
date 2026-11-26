@@ -59,6 +59,9 @@ pub struct Branding {
     /// What a new viewer of the web UI starts on (`--default-dataset`, `--ui-home`,
     /// `--ui-theme`, `--map-view`).
     pub(crate) defaults: Defaults,
+    /// `--ui-css`: a stylesheet the web UI loads after its own, served at
+    /// `/$/ui/brand/custom.css`.
+    pub(crate) css: Option<String>,
 }
 
 /// What a viewer of the web UI starts on, until they choose otherwise.
@@ -72,6 +75,8 @@ pub(crate) struct Defaults {
     pub(crate) theme: Option<&'static str>,
     /// The Map page's start view when the data's extent is unknown, as `ZOOM/LAT/LON`.
     pub(crate) map_view: Option<String>,
+    /// The same for one dataset (`--map-view NAME=ZOOM/LAT/LON`), by name.
+    pub(crate) map_views: Vec<(String, String)>,
 }
 
 /// The pages `--ui-home` may name.
@@ -206,13 +211,13 @@ impl Branding {
 
     /// Adds what a new viewer starts on: the dataset the pages open on, the page `/$/ui/`
     /// opens (one of [`HOMES`]), the first visit's theme (`auto`, `light` or `dark`) and the
-    /// Map page's start view as `ZOOM/LAT/LON`.
+    /// Map page's start views as `ZOOM/LAT/LON`, each `NAME=ZOOM/LAT/LON` for one dataset.
     pub fn with_defaults(
         mut self,
         dataset: Option<&str>,
         home: Option<&str>,
         theme: Option<&str>,
-        map_view: Option<&str>,
+        map_views: &[&str],
     ) -> Result<Branding, String> {
         self.defaults.dataset = dataset
             .map(str::trim)
@@ -237,12 +242,63 @@ impl Branding {
                 return Err(format!("--ui-theme takes auto, light or dark, not {other}"));
             }
         };
-        self.defaults.map_view = map_view
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(parse_map_view)
-            .transpose()?;
+        self.defaults.map_view = None;
+        self.defaults.map_views.clear();
+        for view in map_views.iter().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+            match view.split_once('=') {
+                Some((name, v)) => {
+                    let name = one_line("--map-view", name.trim(), 200)?;
+                    let v = parse_map_view(v.trim())?;
+                    self.defaults.map_views.retain(|(n, _)| *n != name);
+                    self.defaults.map_views.push((name, v));
+                }
+                None => self.defaults.map_view = Some(parse_map_view(view)?),
+            }
+        }
         Ok(self)
+    }
+
+    /// Adds `--ui-css`: a CSS file of at most 256 KB, read now, which the web UI loads after
+    /// its own stylesheet.
+    pub fn with_css(mut self, path: Option<&str>) -> Result<Branding, String> {
+        self.css = match path.map(str::trim).filter(|p| !p.is_empty()) {
+            None => None,
+            Some(p) => {
+                let size = std::fs::metadata(p)
+                    .map_err(|e| format!("--ui-css: cannot read {p}: {e}"))?
+                    .len();
+                if size > MAX_IMAGE {
+                    return Err(format!(
+                        "--ui-css: {p} has {size} bytes, more than the {} KB a stylesheet may have",
+                        MAX_IMAGE / 1024
+                    ));
+                }
+                Some(
+                    std::fs::read_to_string(p)
+                        .map_err(|e| format!("--ui-css: cannot read {p} as UTF-8 text: {e}"))?,
+                )
+            }
+        };
+        Ok(self)
+    }
+
+    /// The link to `--ui-css`'s stylesheet, after the web UI's own; empty without it.
+    pub(crate) fn css_link(&self) -> &'static str {
+        if self.css.is_some() {
+            "<link rel=\"stylesheet\" href=\"/$/ui/brand/custom.css\">"
+        } else {
+            ""
+        }
+    }
+
+    /// The per-dataset start views as a JSON object, `{"NAME": "ZOOM/LAT/LON"}`.
+    pub(crate) fn map_views_json(&self) -> serde_json::Value {
+        self.defaults
+            .map_views
+            .iter()
+            .map(|(n, v)| (n.clone(), serde_json::Value::from(v.clone())))
+            .collect::<serde_json::Map<_, _>>()
+            .into()
     }
 
     /// The banner over the web UI's pages, which a viewer may dismiss for the browser session.
@@ -419,6 +475,7 @@ impl Branding {
                     "home": self.defaults.home.unwrap_or("datasets"),
                     "theme": self.defaults.theme.unwrap_or("auto"),
                     "mapView": self.defaults.map_view,
+                    "mapViews": self.map_views_json(),
                 },
             },
             "version": env!("CARGO_PKG_VERSION"),
@@ -803,29 +860,40 @@ mod tests {
                 Some(" rail "),
                 Some("Map"),
                 Some("dark"),
-                Some("5 / 50.8 / 4.4"),
+                &["5 / 50.8 / 4.4", "rinf = 7/50.8/4.4"],
             )
             .unwrap();
         assert_eq!(b.defaults.dataset.as_deref(), Some("rail"));
         assert_eq!(b.defaults.home, Some("map"));
         assert_eq!(b.defaults.theme, Some("dark"));
         assert_eq!(b.defaults.map_view.as_deref(), Some("5/50.8/4.4"));
+        assert_eq!(
+            b.defaults.map_views,
+            [("rinf".to_owned(), "7/50.8/4.4".to_owned())]
+        );
         let config = b.config_json();
         assert_eq!(config["site"]["defaults"]["home"], "map");
         assert_eq!(config["site"]["defaults"]["mapView"], "5/50.8/4.4");
+        assert_eq!(
+            config["site"]["defaults"]["mapViews"],
+            serde_json::json!({"rinf": "7/50.8/4.4"})
+        );
         let plain = none()
-            .with_defaults(None, Some("datasets"), Some("auto"), None)
+            .with_defaults(None, Some("datasets"), Some("auto"), &[])
             .unwrap();
         assert_eq!(plain.defaults, Defaults::default());
         assert_eq!(plain.config_json()["site"]["defaults"]["home"], "datasets");
         assert_eq!(plain.config_json()["site"]["defaults"]["theme"], "auto");
         let refused = |home: Option<&str>, theme: Option<&str>, view: Option<&str>| {
-            none().with_defaults(None, home, theme, view).unwrap_err()
+            let view: Vec<&str> = view.into_iter().collect();
+            none()
+                .with_defaults(None, home, theme, view.as_slice())
+                .unwrap_err()
         };
         assert!(refused(Some("server"), None, None).contains("--ui-home takes datasets, query"));
         assert!(refused(None, Some("blue"), None).contains("auto, light or dark"));
         for view in [
-            "5/50.8", "23/0/0", "5/90/0", "5/0/181", "a/b/c", "5/NaN/0", "5/0/0/0",
+            "5/50.8", "23/0/0", "5/90/0", "5/0/181", "a/b/c", "5/NaN/0", "5/0/0/0", "rinf=5/0",
         ] {
             assert!(
                 refused(None, None, Some(view)).contains("ZOOM/LAT/LON"),
