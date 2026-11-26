@@ -374,6 +374,15 @@ fn without_users_a_basic_header_is_ignored_as_before() {
     // And the 401 asks for a key only.
     let path = temp_file("no-users-closed", &config(false, r#""127.0.0.1""#));
     let base = start(&path);
+    // The brand's settings and images need no credentials (#262): a sign-in page shows them.
+    for public in ["/$/ui/config.json", "/$/ui/brand/favicon"] {
+        let r = ureq::get(&format!("{base}{public}")).call();
+        assert!(r.is_ok(), "{public}: {r:?}");
+    }
+    assert!(matches!(
+        ureq::get(&format!("{base}/$/ui/")).call(),
+        Err(ureq::Error::Status(401, _))
+    ));
     match query(&base, "kg").call() {
         Err(ureq::Error::Status(401, r)) => {
             let challenges: Vec<&str> = r.all("WWW-Authenticate");

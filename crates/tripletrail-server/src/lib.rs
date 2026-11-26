@@ -30,6 +30,7 @@ mod area;
 mod audit;
 pub mod auth;
 mod binary_rdf;
+pub mod branding;
 pub mod config;
 #[cfg(feature = "postgres")]
 pub mod database_sources;
@@ -221,6 +222,8 @@ pub struct Options {
     pub map_attribution: Option<String>,
     /// More base maps the Map page offers besides `map_tiles` (`--map-basemap`).
     pub map_basemaps: Vec<Basemap>,
+    /// The name, favicon, logo and colour of the pages (`--site-*`, #262).
+    pub branding: branding::Branding,
     /// Write one JSON line per request to standard output.
     pub log_requests: bool,
     /// On SIGTERM or Ctrl-C, how long running requests may take before the server exits
@@ -359,6 +362,7 @@ impl Default for Options {
             map_tiles: None,
             map_attribution: None,
             map_basemaps: Vec::new(),
+            branding: branding::Branding::default(),
             log_requests: false,
             shutdown_grace: Duration::from_secs(30),
             base_iris: Vec::new(),
@@ -2034,7 +2038,10 @@ fn route(
     if let Some(auth) = &state.auth
         && !matches!(
             segments.as_slice(),
-            ["$", "ping" | "ready"] | ["$", "role", _]
+            ["$", "ping" | "ready"]
+                | ["$", "role", _]
+                | ["$", "ui", "config.json"]
+                | ["$", "ui", "brand", _]
         )
     {
         let remote = remote_addr(state, request).map(|a| a.ip());
@@ -2188,6 +2195,7 @@ fn route(
                     &all,
                     &aliases,
                     state.options.catalog.as_deref(),
+                    state.options.branding.name.as_deref(),
                 )?;
                 drop(registry);
                 let body = service_description::serialize(&triples, format)?;

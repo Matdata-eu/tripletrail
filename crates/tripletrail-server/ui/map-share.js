@@ -75,11 +75,16 @@
   /** Metres per CSS pixel at `lat` and `zoom` (512-pixel tiles, as MapLibre draws them). */
   const metresPerPixel = (lat, zoom) => (EQUATOR * Math.cos((lat * Math.PI) / 180)) / (512 * 2 ** zoom);
 
+  /** The server's name (`--site-name`), as the page carries it. */
+  function siteName() {
+    return (typeof document !== "undefined" && document.documentElement.dataset.siteName) || "TripleTrail";
+  }
+
   /** The citation of a map: {title, dataset, version, link, when (`YYYY-MM-DD`), time
    *  (`datetime` or ""), layers: [{title, sparql, items}]}, as plain text. */
   function citation(c) {
     const lines = [];
-    lines.push(`${c.title}. Map of the dataset "${c.dataset}" in TripleTrail` +
+    lines.push(`${c.title}. Map of the dataset "${c.dataset}" in ${c.site || siteName()}` +
       (c.version ? `, data version ${c.version}` : "") + `. Retrieved ${c.when}.`);
     lines.push(c.link);
     if (c.time) lines.push(`Time: ${c.time}`);
@@ -217,7 +222,7 @@
       const credit = (document.querySelector("#map-canvas .maplibregl-ctrl-attrib-inner") || {}).textContent || "";
       const version = ctx.version ? `, data version ${ctx.version}` : "";
       const time = ctx.getTime();
-      const foot = `${credit ? credit.trim() + " · " : ""}TripleTrail · ${ctx.ds}${version}${time ? " · time " + time : ""} · ${new Date().toISOString().slice(0, 10)}`;
+      const foot = `${credit ? credit.trim() + " · " : ""}${siteName()} · ${ctx.ds}${version}${time ? " · time " + time : ""} · ${new Date().toISOString().slice(0, 10)}`;
       const top = title ? 34 * ratio : 0;
       const bottom = 22 * ratio;
       canvas.width = img.width;
