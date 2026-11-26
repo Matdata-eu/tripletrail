@@ -529,6 +529,10 @@ enum Agg<'a> {
     Sum(&'a Expression, bool),
     /// `AVG` of numbers on ids (#62), of the distinct values if `true`.
     Avg(&'a Expression, bool),
+    /// `SUM` or `AVG` of a condition (`SUM(?o > 0)`, #10): each row gives a boolean or an
+    /// error, never a number, so the aggregate is an error (unbound) over any row, and 0 over
+    /// none, without computing the condition.
+    NotNumbers,
     /// `GROUP_CONCAT` of a variable's strings (#11), of the distinct ones if `true`, with this
     /// separator, in order of their text.
     GroupConcat(&'a Variable, bool, &'a str),
@@ -559,6 +563,11 @@ fn id_aggregates(aggregates: &[(Variable, AggregateExpression)]) -> Option<Vec<A
                 )),
                 _ => None,
             },
+            AggregateExpression::FunctionCall {
+                name: AggregateFunction::Sum | AggregateFunction::Avg,
+                expr,
+                ..
+            } if crate::idvalue::is_condition(expr, &|_| true) => Some(Agg::NotNumbers),
             AggregateExpression::FunctionCall {
                 name: AggregateFunction::Sum,
                 expr,
@@ -1692,6 +1701,10 @@ impl Pass<'_> {
                     (Agg::Min(v), Some(t)) => Value::Id(pick.extreme(t, rows, v, false)?),
                     (Agg::Max(v), Some(t)) => Value::Id(pick.extreme(t, rows, v, true)?),
                     (Agg::Sample(v), Some(t)) => Value::Id(crate::idtree::Pick::sample(t, rows, v)),
+                    (Agg::NotNumbers, Some(_)) if rows.is_empty() => {
+                        Value::literal(self.snapshot, Literal::from(0_i64))
+                    }
+                    (Agg::NotNumbers, Some(_)) => Value::Id(TermId(0)),
                     (Agg::Sum(_, distinct) | Agg::Avg(_, distinct), Some(t)) => {
                         let kernel = kernels[i].as_ref()?;
                         let mut sum = crate::idvalue::Sum::default();

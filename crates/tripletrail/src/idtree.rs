@@ -4386,8 +4386,12 @@ pub(crate) fn count_rows(t: &Table, rows: &[u32], var: Option<&Variable>, distin
 pub(crate) struct Pick<'a> {
     snapshot: &'a Snapshot,
     terms: HashMap<TermId, oxigraph::model::Term>,
-    /// The order of IRIs and strings, fetched on first use.
+    /// The order of IRIs and strings: the snapshot's when they are built (else they are built
+    /// in the background for later queries, and this compares by text until it has compared
+    /// [`Pick::RANK_AFTER`] pairs, then waits for them).
     ranks: Option<std::sync::Arc<tripletrail_store::StringRanks>>,
+    /// Pairs compared by their text so far, without ranks.
+    by_text: usize,
     /// The numbers [`Self::extreme`] read as the evaluator does, `None` for other terms.
     numbers: HashMap<TermId, Option<spareval::ExpressionTerm>>,
 }
@@ -4398,9 +4402,15 @@ impl<'a> Pick<'a> {
             snapshot,
             terms: HashMap::new(),
             ranks: None,
+            by_text: 0,
             numbers: HashMap::new(),
         }
     }
+
+    /// Pairs compared by their text before the ranks of all IRIs and strings are built:
+    /// building them reads the whole dictionary (75 ms for 250,000 terms), more than a
+    /// `MIN` over a few groups' rows costs by text (#10).
+    const RANK_AFTER: usize = 1 << 18;
 
     /// `SAMPLE(?var)`: the first bound value (`UNBOUND` if there is none).
     pub(crate) fn sample(t: &Table, rows: &[u32], var: &Variable) -> TermId {
@@ -4600,10 +4610,21 @@ impl<'a> Pick<'a> {
         // IRIs and strings by their ranks, else by their text, from the dictionary (language
         // strings by value, then language tag).
         if ka != 2 {
-            let ranks = self
-                .ranks
-                .get_or_insert_with(|| self.snapshot.string_ranks());
-            if let (Some(x), Some(y)) = (ranks.rank(a), ranks.rank(b)) {
+            if self.ranks.is_none() && self.by_text == 0 {
+                self.ranks = self.snapshot.string_ranks_built();
+                if self.ranks.is_none() {
+                    self.snapshot.string_ranks_in_background();
+                }
+            }
+            if self.ranks.is_none() {
+                self.by_text += 1;
+                if self.by_text > Self::RANK_AFTER {
+                    self.ranks = Some(self.snapshot.string_ranks());
+                }
+            }
+            if let Some(ranks) = &self.ranks
+                && let (Some(x), Some(y)) = (ranks.rank(a), ranks.rank(b))
+            {
                 return Some(x.cmp(&y));
             }
         }

@@ -187,7 +187,12 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   its rank is in the range `Snapshot::string_prefix` finds by binary search; language
   strings and strings without a rank are read from the dictionary; other values are an
   error. On 300 k labels: `REGEX(?o, "^C")` count 52 → 6.5 ms, `MIN` of a string predicate
-  16 → 6.4 ms. The first query to need the ranks builds them (one sort of the strings).
+  16 → 6.4 ms. The first query to need the ranks starts building them in the background
+  (one sort of the strings, about 80 ms for 250 k terms); `MIN` and `MAX` compare texts
+  until they are ready, and build them in place only after 2^18 text comparisons.
+  `SUM` and `AVG` of a condition (`SUM(?o > 0)`, `AVG(BOUND(?v))`) are answered on ids
+  without evaluating it: a condition is a boolean, not a number, so the aggregate is
+  unbound over any row and 0 over none, as in the evaluator.
 - **Rows on term ids.** The same tables also answer parts of queries that return rows
   (`crates/tripletrail/src/rows.rs`): a part with a `MINUS` or a `FILTER` the tables handle is
   evaluated on ids when it gives at most two thirds as many rows as its triple patterns match.
