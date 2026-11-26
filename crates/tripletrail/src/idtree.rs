@@ -4623,11 +4623,17 @@ impl<'a> Pick<'a> {
             }
             if self.ranks.is_none() {
                 self.by_text += 1;
+                // Looked for again now and then: the first look may have found another query
+                // holding them for a moment, or a build that has finished since.
+                if self.by_text.is_multiple_of(Self::RANK_AFTER_BUILDING) {
+                    self.ranks = self.snapshot.string_ranks_built();
+                }
                 // While another query has them built, wait for them sooner.
-                if self.by_text > Self::RANK_AFTER
-                    || (self.by_text > Self::RANK_AFTER_BUILDING
-                        && !self.building
-                        && self.snapshot.string_ranks_building())
+                if self.ranks.is_none()
+                    && (self.by_text > Self::RANK_AFTER
+                        || (self.by_text > Self::RANK_AFTER_BUILDING
+                            && !self.building
+                            && self.snapshot.string_ranks_building()))
                 {
                     self.ranks = Some(self.snapshot.string_ranks());
                 }
