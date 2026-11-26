@@ -789,8 +789,12 @@ impl Snapshot {
                 Some(ci),
             )
             .with_rows(self.rows());
-        let mut groups: FxHashMap<u64, u64> = FxHashMap::default();
+        let mut groups = SmallGroups::default();
         let mut chunk = Vec::new();
+        // The scan comes in the order of the centre (when a permutation gives it): each value
+        // is found from where the last one was, not by a search of all of them (#298).
+        let mut at = 0;
+        let mut last = 0;
         loop {
             chunk.clear();
             if !scan.next_chunk(&mut chunk) {
@@ -800,16 +804,27 @@ impl Snapshot {
                 return Some(None);
             }
             for q in &chunk {
-                if let Ok(at) = product.binary_search_by_key(&q[ci], |(v, _)| *v) {
-                    let n = groups.entry(q[ki]).or_insert(0);
-                    *n = n.saturating_add(product[at].1);
+                let v = q[ci];
+                if v < last {
+                    at = 0;
+                }
+                last = v;
+                at = seek(&product, at, v);
+                if let Some(&(x, n)) = product.get(at)
+                    && x == v
+                {
+                    groups.add(q[ki], n);
                 }
             }
             if groups.len() > max_groups {
                 return None;
             }
         }
-        let mut out: Vec<(TermId, u64)> = groups.into_iter().map(|(v, n)| (TermId(v), n)).collect();
+        let mut out: Vec<(TermId, u64)> = groups
+            .into_pairs()
+            .into_iter()
+            .map(|(v, n)| (TermId(v), n))
+            .collect();
         out.sort_unstable();
         Some(Some(out))
     }
@@ -2098,12 +2113,95 @@ fn repeated_positions(slots: &[IdSlot; 3]) -> Vec<(usize, usize)> {
     same
 }
 
+/// The first position of `runs` at or after `from` whose value is not below `v` (`runs`
+/// sorted by value): a galloping search from `from`, a few steps for a near value.
+fn seek(runs: &[(u64, u64)], from: usize, v: u64) -> usize {
+    let mut step = 1;
+    let mut low = from;
+    while low < runs.len() && runs[low].0 < v {
+        let next = low + step;
+        if next >= runs.len() || runs[next].0 >= v {
+            let high = next.min(runs.len());
+            return low + 1 + runs[low + 1..high].partition_point(|(x, _)| *x < v);
+        }
+        low = next;
+        step *= 2;
+    }
+    low
+}
+
+/// Sums per key, for a few keys in a short list (most facets have a handful), past
+/// [`SmallGroups::LIST`] in a hash map.
+#[derive(Default)]
+struct SmallGroups {
+    list: Vec<(u64, u64)>,
+    map: Option<FxHashMap<u64, u64>>,
+}
+
+impl SmallGroups {
+    const LIST: usize = 32;
+
+    fn add(&mut self, key: u64, n: u64) {
+        if let Some(map) = &mut self.map {
+            let c = map.entry(key).or_insert(0);
+            *c = c.saturating_add(n);
+            return;
+        }
+        if let Some((_, c)) = self.list.iter_mut().find(|(k, _)| *k == key) {
+            *c = c.saturating_add(n);
+            return;
+        }
+        if self.list.len() < Self::LIST {
+            self.list.push((key, n));
+            return;
+        }
+        let mut map: FxHashMap<u64, u64> = self.list.drain(..).collect();
+        map.insert(key, n);
+        self.map = Some(map);
+    }
+
+    fn len(&self) -> usize {
+        self.map.as_ref().map_or(self.list.len(), |m| m.len())
+    }
+
+    fn into_pairs(self) -> Vec<(u64, u64)> {
+        match self.map {
+            Some(map) => map.into_iter().collect(),
+            None => self.list,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Store;
     use oxigraph::model::{GraphNameRef, Literal, NamedNode, QuadRef};
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    #[test]
+    fn a_seek_finds_what_a_search_finds_from_any_start() {
+        let runs: Vec<(u64, u64)> = (0..200).map(|i| (i * 3 + 1, 1)).collect();
+        for from in [0, 1, 7, 100, 199, 200] {
+            for v in 0..650 {
+                let at = runs.partition_point(|(x, _)| *x < v);
+                assert_eq!(seek(&runs, from, v), at.max(from), "{from} {v}");
+            }
+        }
+        assert_eq!(seek(&[], 0, 5), 0);
+    }
+
+    #[test]
+    fn small_groups_sum_past_the_list() {
+        let mut g = SmallGroups::default();
+        for i in 0..1000u64 {
+            g.add(i % 40, 2);
+        }
+        assert_eq!(g.len(), 40);
+        let mut pairs = g.into_pairs();
+        pairs.sort_unstable();
+        assert_eq!(pairs, (0..40).map(|k| (k, 50)).collect::<Vec<_>>());
+    }
 
     fn n(i: &str) -> NamedNode {
         NamedNode::new(format!("http://e/{i}")).unwrap()

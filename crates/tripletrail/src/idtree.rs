@@ -4470,6 +4470,12 @@ pub(crate) fn count_rows(t: &Table, rows: &[u32], var: Option<&Variable>, distin
             all.len() as u64
         }
         (Some(None), _) => 0,
+        // Bound in every row: a row each (#298), without a list of the values.
+        (Some(Some(c)), false) if !t.maybe[c] => rows.len() as u64,
+        (Some(Some(c)), false) => rows
+            .iter()
+            .filter(|&&r| t.row(r as usize)[c] != UNBOUND)
+            .count() as u64,
         (Some(Some(c)), d) => {
             let mut values: Vec<TermId> = rows
                 .iter()
