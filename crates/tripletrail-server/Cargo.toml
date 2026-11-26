@@ -31,6 +31,8 @@ sha2 = "0.11.1"
 getrandom = "0.3"
 # The Import page turns a CONSTRUCT into an INSERT (#20); already in the engine.
 spargebra.workspace = true
+# tts:labelStrip patterns (#260); already in the engine.
+regex.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
 rustls = { workspace = true, optional = true }
 gix = { version = "0.90", default-features = false, features = ["sha1", "blocking-network-client"], optional = true }

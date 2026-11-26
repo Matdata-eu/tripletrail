@@ -4670,6 +4670,7 @@ dependencies = [
  "pollster",
  "postgres",
  "quick-xml 0.41.0",
+ "regex",
  "ring",
  "rustls",
  "serde_json",

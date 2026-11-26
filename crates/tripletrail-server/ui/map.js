@@ -55,6 +55,7 @@ window.TripleTrailMap = (function () {
   let tools = null; // the map's tools (map-tools.js): the area drawn, measuring
   let when = ""; // the time shown (`datetime`, map-share.js), or "" for every time
   let preview = null; // the id of proposed shapes it is drawn with (/{ds}/tiles/preview/{id}), or null
+  let labelStrip = null; // what the shapes take out of labels (tts:labelStrip), or null
   /** A path under the dataset's tiles, or under the preview's. */
   const tilesPath = (rest) => (preview ? "tiles/preview/" + preview + "/" : "tiles/") + rest;
   const page = () => document.getElementById("page-map");
@@ -151,6 +152,11 @@ window.TripleTrailMap = (function () {
     if (shown !== name) return;
     const collections = (style.metadata && style.metadata["tripletrail:collections"]) || [];
     drawn = collections;
+    labelStrip = null;
+    try {
+      const strip = style.metadata && style.metadata["tripletrail:labelStrip"];
+      if (strip) labelStrip = new RegExp(strip, "gu");
+    } catch (e) { /* a pattern JavaScript reads otherwise strips nothing */ }
     // The link's hidden layers and filters, drawn from the start.
     const state = readState(collections);
     when = new URLSearchParams(location.search).get("datetime") || "";
@@ -1053,12 +1059,32 @@ window.TripleTrailMap = (function () {
     try { return decodeURIComponent(tail) || iri; } catch (e) { return tail || iri; }
   }
 
-  /** A label of each IRI (rdfs:label, skos:prefLabel, schema:name, dct:title), by one query. */
+  /** How well a label in `lang` suits this browser (lower is better): its languages in
+   *  order, then English, then no language, then any (#260). */
+  function labelRank(lang) {
+    if (!lang) return 1001;
+    const wanted = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || "en"]).map((l) => l.toLowerCase());
+    const l = lang.toLowerCase();
+    const primary = (t) => t.split("-")[0];
+    for (let i = 0; i < wanted.length; i++) if (wanted[i] === l) return 2 * i;
+    for (let i = 0; i < wanted.length; i++) if (primary(wanted[i]) === primary(l)) return 2 * i + 1;
+    return primary(l) === "en" ? 1000 : 1002;
+  }
+
+  /** `label` without what the shapes' tts:labelStrip matches. */
+  function strip(label) {
+    if (!labelStrip) return label;
+    const out = label.replace(labelStrip, "").trim();
+    return out || label;
+  }
+
+  /** A label of each IRI (rdfs:label, skos:prefLabel, schema:name, dct:title), by one query:
+   *  the one in the browser's language, else English, else without a language, else any. */
   async function labels(ds, iris) {
     const safe = iris.filter((i) => !/[\s<>"{}|^`\\]/.test(i));
     if (!safe.length) return [];
-    const query = "SELECT ?s (SAMPLE(?l) AS ?label) WHERE { VALUES ?s { " + safe.map((i) => "<" + i + ">").join(" ") +
-      " } VALUES ?p { " + LABELS.map((p) => "<" + p + ">").join(" ") + " } ?s ?p ?l } GROUP BY ?s";
+    const query = "SELECT ?s ?label WHERE { VALUES ?s { " + safe.map((i) => "<" + i + ">").join(" ") +
+      " } VALUES ?p { " + LABELS.map((p) => "<" + p + ">").join(" ") + " } ?s ?p ?label FILTER(isLiteral(?label)) }";
     const r = await fetch(service(ds, "sparql"), {
       method: "POST",
       headers: { "Content-Type": "application/sparql-query", Accept: "application/sparql-results+json", ...headers() },
@@ -1066,7 +1092,14 @@ window.TripleTrailMap = (function () {
     });
     if (!r.ok) return [];
     const out = await r.json();
-    return out.results.bindings.filter((b) => b.label).map((b) => [b.s.value, b.label.value]);
+    const best = new Map();
+    for (const b of out.results.bindings) {
+      if (!b.label) continue;
+      const rank = labelRank(b.label["xml:lang"]);
+      const known = best.get(b.s.value);
+      if (!known || rank < known[0] || (rank === known[0] && b.label.value < known[1])) best.set(b.s.value, [rank, b.label.value]);
+    }
+    return [...best].map(([iri, [, label]]) => [iri, strip(label)]);
   }
 
   /** Called when another page opens: the map stops. */

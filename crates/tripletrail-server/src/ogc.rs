@@ -220,6 +220,9 @@ pub(crate) struct Collection {
     /// The dataset's base IRI (`--base-iri`, when it has one): the ids of the features under
     /// it are their IRIs' local part (#497). Set by [`find`].
     id_base: Option<String>,
+    /// What the map takes out of the labels it shows: the `tts:labelStrip` patterns of all the
+    /// shapes, one of them (#260). The same in every collection of a dataset.
+    pub(crate) label_strip: Option<regex::Regex>,
 }
 
 /// A facet of a collection (a property shape with `tts:facet`): what a map counts and filters
@@ -1455,11 +1458,50 @@ fn collections_of(shapes: &Graph) -> Result<Vec<Collection>, HttpError> {
             instances: text(node, &tts("instances")).and_then(|n| n.parse().ok()),
             time,
             views: Vec::new(),
+            label_strip: None,
         });
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     add_views(shapes, &mut out);
+    let strip = label_strip(shapes);
+    for c in &mut out {
+        c.label_strip.clone_from(&strip);
+    }
     Ok(out)
+}
+
+/// The `tts:labelStrip` patterns of `shapes`, as one (#260): those that are no regular
+/// expression are left out (`shapes check` names them).
+fn label_strip(shapes: &Graph) -> Option<regex::Regex> {
+    let mut patterns: Vec<String> = shapes
+        .triples_for_predicate(&NamedNode::new_unchecked(format!("{TTS}labelStrip")))
+        .filter_map(|t| match t.object {
+            TermRef::Literal(l) if regex::Regex::new(l.value()).is_ok() => {
+                Some(format!("(?:{})", l.value()))
+            }
+            _ => None,
+        })
+        .collect();
+    patterns.sort();
+    patterns.dedup();
+    if patterns.is_empty() {
+        return None;
+    }
+    regex::Regex::new(&patterns.join("|")).ok()
+}
+
+/// `label` without what `strip` matches, trimmed; `label` itself when nothing would be left.
+pub(crate) fn stripped(label: &str, strip: Option<&regex::Regex>) -> String {
+    let Some(strip) = strip else {
+        return label.to_owned();
+    };
+    let out = strip.replace_all(label, "");
+    let out = out.trim();
+    if out.is_empty() {
+        label.to_owned()
+    } else {
+        out.to_owned()
+    }
 }
 
 fn find(state: &State, entry: &Entry, id: &str, view: &View) -> Result<Collection, HttpError> {
