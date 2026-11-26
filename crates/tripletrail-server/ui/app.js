@@ -157,9 +157,11 @@
 
   // ---------- theme: auto, light or dark, shared with MatGUI's data-theme ----------
   const media = matchMedia("(prefers-color-scheme: dark)");
+  // The first visit's theme (--ui-theme); the viewer's own choice is kept over it.
+  const THEME_DEFAULT = document.documentElement.dataset.uiTheme || "auto";
   let yasgui = null;
   function applyTheme() {
-    const pref = store.get(THEME_KEY) || "auto";
+    const pref = store.get(THEME_KEY) || THEME_DEFAULT;
     const theme = pref === "auto" ? (media.matches ? "dark" : "light") : pref;
     document.documentElement.setAttribute("data-theme", theme);
     if (yasgui && yasgui.themeManager && yasgui.themeManager.getTheme() !== theme) {
@@ -171,8 +173,8 @@
   }
   $("#theme-btn").addEventListener("click", () => {
     const order = ["auto", "light", "dark"];
-    const next = order[(order.indexOf(store.get(THEME_KEY) || "auto") + 1) % 3];
-    store.set(THEME_KEY, next === "auto" ? null : next);
+    const next = order[(order.indexOf(store.get(THEME_KEY) || THEME_DEFAULT) + 1) % 3];
+    store.set(THEME_KEY, next === THEME_DEFAULT ? null : next);
     applyTheme();
     toast("Theme: " + next);
   });
@@ -180,7 +182,7 @@
   // MatGUI's own theme switch writes data-theme: remember that choice too.
   new MutationObserver(() => {
     const t = document.documentElement.getAttribute("data-theme");
-    const pref = store.get(THEME_KEY) || "auto";
+    const pref = store.get(THEME_KEY) || THEME_DEFAULT;
     const expected = pref === "auto" ? (media.matches ? "dark" : "light") : pref;
     if (t && t !== expected) store.set(THEME_KEY, t);
   }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
@@ -590,7 +592,7 @@
     const sel = $("#query-ds");
     if (name && name.startsWith(WS)) workspaceOpen = name;
     const known = (n) => byName(n) || (n && n === workspaceOpen);
-    if (!name || !known(name)) name = (known(sel.value) && sel.value) || (datasets[0] && datasets[0].name);
+    if (!name || !known(name)) name = (known(sel.value) && sel.value) || preferred(datasets.map((d) => d.name));
     sel.replaceChildren(...datasets.map((d) => el("option", { value: d.name, selected: d.name === name }, d.alias ? `${d.name} → ${d.target}` : d.name)),
       workspaceOpen ? el("option", { value: workspaceOpen, selected: workspaceOpen === name }, "Workbench workspace " + workspaceOpen.slice(WS.length, WS.length + 8)) : null);
     const ds = byName(name);
@@ -747,8 +749,11 @@
 
   // ---------- routing ----------
   let page = null;
+  // The page / and /$/ui/ open (--ui-home).
+  const HOME = document.documentElement.dataset.uiHome || "datasets";
   function route() {
-    const [p = "datasets", arg] = location.pathname.slice(UI.length).split("/").filter(Boolean);
+    if (HOME !== "datasets" && /^\/\$\/ui\/(index\.html)?$/.test(location.pathname)) history.replaceState(null, "", UI + HOME + location.search + location.hash);
+    const [p = HOME, arg] = location.pathname.slice(UI.length).split("/").filter(Boolean);
     const name = arg ? decodeURIComponent(arg) : null;
     page = ["datasets", "query", "map", "search", "explore", "tasks", "server", "workbench", "access", "shapes", "import", "records"].includes(p) ? p : "datasets";
     if (page !== "workbench" && document.body.dataset.page === "workbench" && window.TripleTrailWorkbench) window.TripleTrailWorkbench.leave();
@@ -830,7 +835,11 @@
 
   // What the Workbench (workbench.js) uses of this page.
   viewAsBanner();
-  const shared = { api, el, toast, fail, go, copyText, copyButton, withCopy, store, viewAs, TOKEN_KEY, ApiError, openToken, confirmDialog, fmtNum, fmtBytes, fmtTime, explain: (url, q) => explain(url, q) };
+  // The dataset a page opens on when its link names none and the viewer has not picked one:
+  // the server's --default-dataset when the viewer may see it, else the first.
+  const DEFAULT_DATASET = document.documentElement.dataset.defaultDataset || "";
+  const preferred = (names) => (DEFAULT_DATASET && names.includes(DEFAULT_DATASET) ? DEFAULT_DATASET : names[0]);
+  const shared = { preferred, api, el, toast, fail, go, copyText, copyButton, withCopy, store, viewAs, TOKEN_KEY, ApiError, openToken, confirmDialog, fmtNum, fmtBytes, fmtTime, explain: (url, q) => explain(url, q) };
   window.addEventListener("popstate", route);
   // MatGUI keeps its share links and map position in the URL's hash, so pages are paths.
   function go(path, replace) {

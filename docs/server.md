@@ -2745,6 +2745,10 @@ URLs, never HTML.
 | `--site-link "LABEL\|URL"` | `TRIPLETRAIL_SITE_LINKS` (one per line) | A link in the footer of the web UI and of the OGC API and describe pages, such as Privacy, Terms, Imprint or Contact. Repeatable. The label is plain text of at most 40 characters. |
 | `--support-url URL` | `TRIPLETRAIL_SUPPORT_URL` | Where the About dialog's "Found a bug, missing a feature or have a question?" points, in place of TripleTrail's GitHub issues. |
 | `--contact-email ADDRESS` | `TRIPLETRAIL_CONTACT_EMAIL` | Shown in the About dialog, and each dataset's `dcat:contactPoint` in the DCAT catalog (a `vcard:Kind` with `vcard:hasEmail`, named by `--site-name`) when `--catalog` gives none. |
+| `--ui-home PAGE` | `TRIPLETRAIL_UI_HOME` | The page `/` and `/$/ui/` open: `datasets` (the default), `query`, `map`, `search` or `explore`. The top bar's name links there too. |
+| `--default-dataset NAME` | `TRIPLETRAIL_DEFAULT_DATASET` | The dataset the Query, Map, Search, Explore, Records and Import pages and the top search open on, in place of the first in the list, when the viewer may see it and has not picked another. |
+| `--ui-theme auto\|light\|dark` | `TRIPLETRAIL_UI_THEME` | The theme of a viewer's first visit; `auto` (the default) follows the system. The viewer's own choice is kept over it. |
+| `--map-view ZOOM/LAT/LON` | `TRIPLETRAIL_MAP_VIEW` | Where the Map page starts, as in a map link's `#zoom/lat/lon` (such as `7/50.8/4.4`), when the dataset's extent is unknown or spans half the world or more. A link with a place still opens there. |
 
 An image file is SVG, PNG, ICO, WebP or JPEG, at most 256 KB, read when the server starts, and
 served with its type, `X-Content-Type-Options: nosniff` and a sandboxing
@@ -2757,9 +2761,11 @@ end with ` · NAME` under `--site-name`. A favicon or logo given as a URL is a r
 REST API and GraphQL pages add its origin to their `img-src`.
 
 `GET /$/ui/config.json` gives the settings to scripts: `{"site": {"name", "named", "favicon",
-"logo", "logoDark", "color", "banner", "links", "supportUrl", "contactEmail"}, "version"}`
-(`named` is false without `--site-name`; what is not set is null, and `links` empty). The
-banner is `{"text", "level", "link"}`, and each link `{"label", "url"}`. It and `/$/ui/brand/…` need no credentials, also
+"logo", "logoDark", "color", "banner", "links", "supportUrl", "contactEmail", "defaults"},
+"version"}` (`named` is false without `--site-name`; what is not set is null, and `links`
+empty). The banner is `{"text", "level", "link"}`, each link `{"label", "url"}`, and the
+defaults `{"dataset", "home", "theme", "mapView"}` (`home` is `datasets` and `theme` `auto`
+when unset). It and `/$/ui/brand/…` need no credentials, also
 with [authentication](#authentication) on: they hold no data. The About dialog keeps naming
 TripleTrail, its version and the licences of what it ships, whatever the name.
 

@@ -56,7 +56,26 @@ pub struct Branding {
     pub(crate) links: Vec<(String, String)>,
     pub(crate) support_url: Option<String>,
     pub(crate) contact_email: Option<String>,
+    /// What a new viewer of the web UI starts on (`--default-dataset`, `--ui-home`,
+    /// `--ui-theme`, `--map-view`).
+    pub(crate) defaults: Defaults,
 }
+
+/// What a viewer of the web UI starts on, until they choose otherwise.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Defaults {
+    /// The dataset the pages open on, when the viewer may see it.
+    pub(crate) dataset: Option<String>,
+    /// The page `/` and `/$/ui/` open: one of [`HOMES`]; the Datasets page without it.
+    pub(crate) home: Option<&'static str>,
+    /// The first visit's theme: `light` or `dark`; `auto` (the system's) without it.
+    pub(crate) theme: Option<&'static str>,
+    /// The Map page's start view when the data's extent is unknown, as `ZOOM/LAT/LON`.
+    pub(crate) map_view: Option<String>,
+}
+
+/// The pages `--ui-home` may name.
+pub const HOMES: [&str; 5] = ["datasets", "query", "map", "search", "explore"];
 
 /// One line of notice over every page of the web UI (`--banner`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,6 +187,47 @@ impl Branding {
                 Some(e.to_owned())
             }
         };
+        Ok(self)
+    }
+
+    /// Adds what a new viewer starts on: the dataset the pages open on, the page `/$/ui/`
+    /// opens (one of [`HOMES`]), the first visit's theme (`auto`, `light` or `dark`) and the
+    /// Map page's start view as `ZOOM/LAT/LON`.
+    pub fn with_defaults(
+        mut self,
+        dataset: Option<&str>,
+        home: Option<&str>,
+        theme: Option<&str>,
+        map_view: Option<&str>,
+    ) -> Result<Branding, String> {
+        self.defaults.dataset = dataset
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(|d| one_line("--default-dataset", d, 200))
+            .transpose()?;
+        self.defaults.home = match home.map(|h| h.trim().to_ascii_lowercase()) {
+            None => None,
+            Some(h) if h.is_empty() || h == "datasets" => None,
+            Some(h) => Some(
+                *HOMES
+                    .iter()
+                    .find(|p| **p == h)
+                    .ok_or_else(|| format!("--ui-home takes {}, not {h}", HOMES.join(", ")))?,
+            ),
+        };
+        self.defaults.theme = match theme.map(|t| t.trim().to_ascii_lowercase()).as_deref() {
+            None | Some("" | "auto") => None,
+            Some("light") => Some("light"),
+            Some("dark") => Some("dark"),
+            Some(other) => {
+                return Err(format!("--ui-theme takes auto, light or dark, not {other}"));
+            }
+        };
+        self.defaults.map_view = map_view
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(parse_map_view)
+            .transpose()?;
         Ok(self)
     }
 
@@ -340,6 +400,12 @@ impl Branding {
                 "links": self.links.iter().map(|(label, url)| json!({ "label": label, "url": url })).collect::<Vec<_>>(),
                 "supportUrl": self.support_url,
                 "contactEmail": self.contact_email,
+                "defaults": {
+                    "dataset": self.defaults.dataset,
+                    "home": self.defaults.home.unwrap_or("datasets"),
+                    "theme": self.defaults.theme.unwrap_or("auto"),
+                    "mapView": self.defaults.map_view,
+                },
             },
             "version": env!("CARGO_PKG_VERSION"),
         })
@@ -352,6 +418,31 @@ pub(crate) fn escape(s: &str) -> String {
         .replace('"', "&quot;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+/// `ZOOM/LAT/LON` (as in a map link's `#zoom/lat/lon`): zoom 0 to 22, latitude -85 to 85,
+/// longitude -180 to 180. Given back as written, without spaces.
+fn parse_map_view(value: &str) -> Result<String, String> {
+    let bad = || {
+        format!(
+            "--map-view takes ZOOM/LAT/LON, as 5/50.8/4.4 (zoom 0 to 22, latitude -85 to 85, \
+             longitude -180 to 180), not {value}"
+        )
+    };
+    let parts: Vec<&str> = value.split('/').map(str::trim).collect();
+    let [zoom, lat, lon] = parts[..] else {
+        return Err(bad());
+    };
+    let number = |s: &str, low: f64, high: f64| {
+        s.parse::<f64>()
+            .ok()
+            .filter(|n| n.is_finite() && (low..=high).contains(n))
+            .ok_or_else(bad)
+    };
+    number(zoom, 0.0, 22.0)?;
+    number(lat, -85.0, 85.0)?;
+    number(lon, -180.0, 180.0)?;
+    Ok(format!("{zoom}/{lat}/{lon}"))
 }
 
 /// One line of plain text, at most `max` characters.
@@ -674,6 +765,45 @@ mod tests {
             " http://Other.example.org:8080 https://cdn.example.org"
         );
         assert_eq!(Branding::default().image_origins(), "");
+    }
+
+    #[test]
+    fn viewer_defaults_are_checked() {
+        let none = || Branding::new(None, None, None, None, None).unwrap();
+        let b = none()
+            .with_defaults(
+                Some(" rail "),
+                Some("Map"),
+                Some("dark"),
+                Some("5 / 50.8 / 4.4"),
+            )
+            .unwrap();
+        assert_eq!(b.defaults.dataset.as_deref(), Some("rail"));
+        assert_eq!(b.defaults.home, Some("map"));
+        assert_eq!(b.defaults.theme, Some("dark"));
+        assert_eq!(b.defaults.map_view.as_deref(), Some("5/50.8/4.4"));
+        let config = b.config_json();
+        assert_eq!(config["site"]["defaults"]["home"], "map");
+        assert_eq!(config["site"]["defaults"]["mapView"], "5/50.8/4.4");
+        let plain = none()
+            .with_defaults(None, Some("datasets"), Some("auto"), None)
+            .unwrap();
+        assert_eq!(plain.defaults, Defaults::default());
+        assert_eq!(plain.config_json()["site"]["defaults"]["home"], "datasets");
+        assert_eq!(plain.config_json()["site"]["defaults"]["theme"], "auto");
+        let refused = |home: Option<&str>, theme: Option<&str>, view: Option<&str>| {
+            none().with_defaults(None, home, theme, view).unwrap_err()
+        };
+        assert!(refused(Some("server"), None, None).contains("--ui-home takes datasets, query"));
+        assert!(refused(None, Some("blue"), None).contains("auto, light or dark"));
+        for view in [
+            "5/50.8", "23/0/0", "5/90/0", "5/0/181", "a/b/c", "5/NaN/0", "5/0/0/0",
+        ] {
+            assert!(
+                refused(None, None, Some(view)).contains("ZOOM/LAT/LON"),
+                "{view}"
+            );
+        }
     }
 
     #[test]
