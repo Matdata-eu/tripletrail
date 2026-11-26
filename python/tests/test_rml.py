@@ -67,3 +67,59 @@ def test_errors(folder, tmp_path_factory):
     with pytest.raises(OSError):
         e.run_mapping(RML, base_dir=str(folder), allowed=[str(elsewhere)])
     assert len(e) == 0
+
+
+R2RML = """@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.com/> .
+<#Station> rr:logicalTable [ rr:tableName "tt_py_station" ] ;
+  rr:subjectMap [ rr:template "http://example.com/station/{code}" ; rr:class ex:Station ] ;
+  rr:predicateObjectMap [ rr:predicate ex:tracks ; rr:objectMap [ rr:column "tracks" ] ] .
+"""
+
+
+@pytest.fixture
+def postgres():
+    """A table in the PostgreSQL database of TRIPLETRAIL_TEST_POSTGRES (skipped without it)."""
+    import os
+    import subprocess
+
+    url = os.environ.get("TRIPLETRAIL_TEST_POSTGRES")
+    if not url:
+        pytest.skip("set TRIPLETRAIL_TEST_POSTGRES to a PostgreSQL connection string")
+    sql = (
+        "DROP TABLE IF EXISTS tt_py_station; "
+        "CREATE TABLE tt_py_station (code text PRIMARY KEY, tracks integer); "
+        "INSERT INTO tt_py_station VALUES ('GNT', 12), ('BRG', 10);"
+    )
+    subprocess.run(["psql", url, "-q", "-c", sql], check=True)
+    yield url
+    subprocess.run(["psql", url, "-q", "-c", "DROP TABLE tt_py_station"], check=True)
+
+
+def test_database_sources(postgres, tmp_path):
+    e = Engine()
+    # R2RML reads the database given.
+    assert e.run_mapping(R2RML, base_dir=str(tmp_path), database=postgres) == 4
+    tracks = {str(s["s"].value): s["t"].value for s in e.query(
+        "SELECT ?s ?t WHERE { ?s <http://example.com/tracks> ?t }")}
+    assert tracks == {EX + "station/GNT": "12", EX + "station/BRG": "10"}
+    # YARRRML names its own database.
+    yarrrml = f"""prefixes:
+  ex: http://example.com/
+sources:
+  db:
+    access: {postgres}
+    type: postgresql
+    queryFormulation: sql2008
+    query: SELECT code FROM tt_py_station WHERE tracks > 10
+mappings:
+  big:
+    sources: db
+    s: ex:big/$(code)
+    po:
+      - [a, ex:BigStation]
+"""
+    assert e.run_mapping(yarrrml, yarrrml=True, base_dir=str(tmp_path)) == 1
+    # Without a database, an R2RML mapping has nothing to read.
+    with pytest.raises((ValueError, OSError)):
+        Engine().run_mapping(R2RML, base_dir=str(tmp_path))

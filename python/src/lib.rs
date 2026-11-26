@@ -5,6 +5,12 @@
 //! [`ox`], so code written against `pyoxigraph.Store` switches by changing the import, and
 //! the store builds its terms natively without pyoxigraph installed.
 
+use ox::model::{
+    PyBlankNode, PyDefaultGraph, PyGraphName, PyLiteral, PyNamedNode, PyNamedOrBlankNode, PyQuad,
+    PyTerm, PyTriple,
+};
+use pyo3::IntoPyObjectExt;
+use pyo3::exceptions::{PyIOError, PyRuntimeError, PySyntaxError, PyTypeError, PyValueError};
 use tripletrail::oxigraph::io::{RdfFormat, RdfParser, RdfSerializer};
 use tripletrail::oxigraph::model::{
     BaseDirection, BlankNode, GraphName, Literal, NamedNode, NamedOrBlankNode, Quad, Term, Triple,
@@ -12,12 +18,6 @@ use tripletrail::oxigraph::model::{
 use tripletrail::oxigraph::sparql::{CancellationToken, QueryDataset, Variable};
 use tripletrail::oxigraph::store::Store;
 use tripletrail::store::QuadIter;
-use ox::model::{
-    PyBlankNode, PyDefaultGraph, PyGraphName, PyLiteral, PyNamedNode, PyNamedOrBlankNode, PyQuad,
-    PyTerm, PyTriple,
-};
-use pyo3::IntoPyObjectExt;
-use pyo3::exceptions::{PyIOError, PyRuntimeError, PySyntaxError, PyTypeError, PyValueError};
 mod ox;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString, PyTuple};
@@ -683,9 +683,11 @@ impl PyEngine {
     /// name). Relative source paths resolve against `base_dir`, by default the current
     /// directory, as `tripletrail lift` does; with `allowed` (a list of directories) only files
     /// inside them are read. Quads in the default graph go to `to_graph` when given; a
-    /// mapping's own graph maps are kept. Logical targets and database sources are refused:
-    /// use `tripletrail lift` for them.
-    #[pyo3(signature = (mapping = None, *, path = None, yarrrml = false, base_dir = None, allowed = None, to_graph = None))]
+    /// mapping's own graph maps are kept. PostgreSQL tables and queries are read as sources
+    /// (#21): from the `d2rq:Database` a mapping names, else from `database` (a connection
+    /// string, `postgresql://user:password@host:port/name`), as `tripletrail lift --database`
+    /// does. Logical targets are refused: use `tripletrail lift` for them.
+    #[pyo3(signature = (mapping = None, *, path = None, yarrrml = false, base_dir = None, allowed = None, to_graph = None, database = None))]
     #[allow(clippy::too_many_arguments)]
     fn run_mapping(
         &self,
@@ -696,6 +698,7 @@ impl PyEngine {
         base_dir: Option<PathBuf>,
         allowed: Option<Vec<PathBuf>>,
         to_graph: Option<&Bound<'_, PyAny>>,
+        database: Option<String>,
     ) -> PyResult<usize> {
         let to_graph = to_graph.map(graph_from_py).transpose()?;
         let base = match base_dir {
@@ -737,12 +740,23 @@ impl PyEngine {
                     "the mapping has logical targets: run it with `tripletrail lift`",
                 ));
             }
-            let loader = tripletrail_rml::FsLoader {
+            let files = tripletrail_rml::FsLoader {
                 config: tripletrail::fx::FxConfig {
                     base,
                     allowed,
                     ..Default::default()
                 },
+            };
+            #[cfg(feature = "postgres")]
+            let loader = tripletrail_rml::DatabaseLoader::new(files, database);
+            #[cfg(not(feature = "postgres"))]
+            let loader = {
+                if database.is_some() {
+                    return Err(PyValueError::new_err(
+                        "this build reads no databases: build it with the postgres feature",
+                    ));
+                }
+                files
             };
             const BATCH: usize = 1 << 20;
             let mut batch = Vec::with_capacity(BATCH);

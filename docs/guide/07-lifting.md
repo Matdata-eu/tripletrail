@@ -372,6 +372,14 @@ made = e.run_mapping(path="lift/operators.yarrrml",
                      to_graph=NamedNode("https://example.org/graph/operators"))
 ```
 
+A mapping that reads PostgreSQL tables or queries reads them from Python too: from the
+`d2rq:Database` it names, or, for R2RML, from `database=` (a connection string, as
+`tripletrail lift --database`):
+
+```python
+made = e.run_mapping(path="assets.r2rml.ttl", database="postgresql://reader@db/assets")
+```
+
 See [the Python package](../../python/README.md#rml-mappings).
 
 For a lift that is one step of a larger job (lift, load, update, validate, export), use a
