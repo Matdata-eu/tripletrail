@@ -790,6 +790,36 @@ curl -s 'http://localhost:7878/$/ui/config.json' | jq -c '.site.defaults'
 A viewer's own choices still win: the dataset they picked, the theme they set and the place a
 map link names.
 
+Example queries help someone who does not know the data yet. `--examples DIR` offers the `.rq`
+files of a directory on the Query page, each titled by its first `#` comment line, and opens
+them as tabs on a viewer's first visit. `--default-query FILE` is the text of each new tab,
+such as the prefixes of your data. Give either as `DATASET=PATH` for one dataset only:
+
+<!-- test: run -->
+```sh
+mkdir -p examples
+printf '# Stations by name\nPREFIX ex: <http://example.org/rail#>\nSELECT ?station ?name WHERE { ?station a ex:Station ; ex:name ?name } ORDER BY ?name\n' > examples/stations.rq
+printf 'PREFIX ex: <http://example.org/rail#>\n\nSELECT * WHERE { ?s ?p ?o } LIMIT 10\n' > rail.rq
+```
+
+<!-- test: serve -->
+```sh
+tripletrail serve --location data --dataset rail_v1 --examples examples \
+  --default-query rail_v1=rail.rq
+```
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/rail_v1/examples' | jq -c '{titles: [.examples[].title], defaultQuery}'
+```
+
+<!-- test: output -->
+```text
+{"titles":["Stations by name"],"defaultQuery":"PREFIX ex: <http://example.org/rail#>\n\nSELECT * WHERE { ?s ?p ?o } LIMIT 10\n"}
+```
+
+In the `--config` file, a dataset takes them as `examples:` and `default-query:`.
+
 Every option also works as an environment variable (`TRIPLETRAIL_SITE_NAME`, ...) and as a key
 of the `--config` file. See [the web UI](../server.md#web-ui).
 
@@ -805,7 +835,7 @@ of the `--config` file. See [the web UI](../server.md#web-ui).
 - `--site-name`, `--site-logo`, `--site-favicon` and `--site-color` give the pages your
   service's name and look; `--banner`, `--site-link`, `--support-url` and `--contact-email`
   its notices and links; `--ui-home`, `--default-dataset`, `--ui-theme` and `--map-view` where
-  a new viewer starts.
+  a new viewer starts, and `--examples` and `--default-query` the queries they start with.
 - The enterprise edition is a separate build that reads an offline licence and never stops
   the server when it expires; its audit log records who changed what, in a chain that shows
   tampering.

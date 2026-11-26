@@ -46,6 +46,7 @@
       Object.assign(document.createElement("button"), { type: "button", className: "btn small", textContent: "Stop viewing as", onclick: () => viewAs.set(null) }));
   }
   const THEME_KEY = "tripletrail-theme";
+  const SEEDED_KEY = "tripletrail-query-seeded"; // the Query page's first visit is over
 
   // ---------- formatting ----------
   const nf = new Intl.NumberFormat();
@@ -679,6 +680,56 @@
     }
     const tab = yasgui.getTab();
     if (tab && tab.getEndpoint() !== endpointOf(name)) tab.setEndpoint(endpointOf(name));
+    showExamples(name);
+  }
+
+  // ---------- the dataset's example queries and default query text (--examples, --default-query) ----------
+  const examplesOf = new Map(); // dataset → its answer, once
+  let matguiDefault = null; // MatGUI's own text of a new tab
+  async function fetchExamples(name) {
+    if (name.startsWith(WS)) return { examples: [], defaultQuery: null };
+    if (!examplesOf.has(name)) {
+      examplesOf.set(name, (async () => {
+        const headers = { "X-TripleTrail-Client": "ui", ...viewAs.headers() };
+        try {
+          const r = await fetch(serviceOf(name, "examples"), { headers });
+          if (r.ok) return await r.json();
+        } catch (e) { /* none */ }
+        return { examples: [], defaultQuery: null };
+      })());
+    }
+    return examplesOf.get(name);
+  }
+  function openExample(name, example) {
+    yasgui.addTab(true, { name: example.title });
+    const t = yasgui.getTab();
+    if (!t) return;
+    t.setEndpoint(endpointOf(name));
+    t.setQuery(example.query);
+  }
+  async function showExamples(name) {
+    const { examples = [], defaultQuery = null } = await fetchExamples(name);
+    if ($("#query-ds").value !== name && !(name.startsWith(WS) && name === workspaceOpen)) return;
+    // A new tab starts with the dataset's default query text, or MatGUI's.
+    if (matguiDefault === null) matguiDefault = yasgui.config.yasqe.value ?? "";
+    yasgui.config.yasqe.value = defaultQuery ?? matguiDefault;
+    const sel = $("#query-examples");
+    sel.replaceChildren(el("option", { value: "" }, "Examples…"),
+      ...examples.map((e, i) => el("option", { value: String(i) }, e.title)));
+    sel.hidden = examples.length === 0;
+    sel.onchange = () => {
+      const e = examples[Number(sel.value)];
+      sel.value = "";
+      if (e) openExample(name, e);
+    };
+    // A viewer's first visit: the default query in the first tab, and the examples as tabs.
+    // Only once something was seeded, so a dataset given examples later still seeds them.
+    if (store.get(SEEDED_KEY) || (defaultQuery == null && !examples.length)) return;
+    store.set(SEEDED_KEY, "1");
+    const first = yasgui.getTab();
+    if (defaultQuery != null && first && first.getQuery() === matguiDefault) first.setQuery(defaultQuery);
+    for (const e of examples.slice(0, 5)) openExample(name, e);
+    if (first && examples.length) yasgui.selectTabId(first.getId());
   }
   function syncSelectFromTab() {
     const tab = yasgui && yasgui.getTab();
