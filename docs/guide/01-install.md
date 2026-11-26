@@ -64,11 +64,15 @@ Releases publish ready-made binaries for Linux, macOS and Windows on the
 ## Python
 
 TripleTrail is also a Python package that runs the engine inside your Python process, with the
-same functions and no server. It needs Rust to build:
+same functions and no server. Releases publish it to PyPI, with ready-made wheels for Linux
+(x86_64, aarch64), macOS (Intel and Apple silicon) and Windows (x86_64), for Python 3.9 and
+later:
 
 ```sh
-pip install ./python
+pip install tripletrail
 ```
+
+To build it from a checkout instead (it needs Rust): `pip install ./python`.
 
 See [the Python package](../../python/README.md) for what it offers.
 
