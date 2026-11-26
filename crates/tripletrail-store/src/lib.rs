@@ -324,6 +324,8 @@ struct Inner {
     touched: Mutex<std::collections::VecDeque<Touched>>,
     /// Built on first use (see [`Snapshot::string_ranks`]).
     ranks: Mutex<Option<Arc<StringRanks>>>,
+    /// Whether [`Snapshot::string_ranks_in_background`] is building them now.
+    ranks_building: std::sync::atomic::AtomicBool,
     /// The copies of triples held by several graphs, for the generation they were found at
     /// (see [`Snapshot::union_copies`]).
     /// Held while they are found or brought up to date, so queries that need them at once
@@ -513,6 +515,7 @@ impl Store {
             id: next_store_id(),
             touched: Default::default(),
             ranks: Default::default(),
+            ranks_building: Default::default(),
             union_copies: Default::default(),
             _lock: None,
             merging: Default::default(),
@@ -3515,6 +3518,35 @@ impl Snapshot {
     /// rank.
     pub fn string_ranks(&self) -> Arc<StringRanks> {
         self.string_ranks_within(|covered| covered / 8)
+    }
+
+    /// [`Snapshot::string_ranks`] if they are built and cover nearly all terms (as there),
+    /// without building them.
+    pub fn string_ranks_built(&self) -> Option<Arc<StringRanks>> {
+        let cached = self.inner.ranks.lock_unpoisoned();
+        let r = cached.as_ref()?;
+        let covered = r.covered() as usize;
+        (covered + covered / 8 >= self.inner.dict.read_unpoisoned().len()).then(|| Arc::clone(r))
+    }
+
+    /// Builds [`Snapshot::string_ranks`] on a thread of its own, unless that is under way,
+    /// so that later queries find them built while this one does without (#10).
+    pub fn string_ranks_in_background(&self) {
+        if self
+            .inner
+            .ranks_building
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let snapshot = self.clone();
+        std::thread::spawn(move || {
+            snapshot.string_ranks();
+            snapshot
+                .inner
+                .ranks_building
+                .store(false, std::sync::atomic::Ordering::Release);
+        });
     }
 
     /// [`Snapshot::string_ranks`], built again once more than `slack(covered)` terms have no
