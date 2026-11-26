@@ -293,6 +293,25 @@ const TOUCHED_QUADS: usize = 1 << 16;
 /// How many commits [`Store::touched_between`] can look back over.
 const TOUCHED_COMMITS: usize = 64;
 
+/// A triple term of the dictionary and the ids of its parts ([`Snapshot::triple_terms`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TripleTermIds {
+    /// The triple term's own id.
+    pub id: u64,
+    /// The ids of its subject, predicate and object; [`TripleTermIds::ABSENT`] for a term the
+    /// dictionary does not hold, which no filter hides.
+    pub subject: u64,
+    pub predicate: u64,
+    pub object: u64,
+    /// Its object is itself a triple term.
+    pub nested: bool,
+}
+
+impl TripleTermIds {
+    /// The id of a part the dictionary does not hold.
+    pub const ABSENT: u64 = u64::MAX;
+}
+
 /// The most copies of triples in several graphs [`Snapshot::union_copies`] keeps (32 bytes and
 /// a hash slot each); past them the union is left to the evaluator's merge.
 pub const MAX_UNION_COPIES: usize = 4_000_000;
@@ -331,6 +350,9 @@ struct Inner {
     /// Held while they are found or brought up to date, so queries that need them at once
     /// wait for that one scan.
     union_copies: Mutex<Option<(u64, Option<Arc<RowFilter>>)>>,
+    /// The triple terms of the dictionary, found by scanning its keys up to the count kept
+    /// here (see [`Snapshot::triple_terms`]): the dictionary only grows, and keeps its ordinals.
+    triple_terms: Mutex<(usize, Arc<Vec<TripleTermIds>>)>,
     /// The shared lock of a store opened read-only (a writable store's is in its writer).
     _lock: Option<std::fs::File>,
     /// A merge of runs into the segments is running in the background (see
@@ -517,6 +539,7 @@ impl Store {
             ranks: Default::default(),
             ranks_building: Default::default(),
             union_copies: Default::default(),
+            triple_terms: Default::default(),
             _lock: None,
             merging: Default::default(),
             background_merges: std::sync::atomic::AtomicBool::new(true),
@@ -3370,6 +3393,46 @@ impl Snapshot {
     /// The scan of the whole store is only made when `scan` says it is worth it; without it, and
     /// when the commits since the last result are not known, `None`. Also `None` for a
     /// transaction's view, once `cancelled` says so, or past [`MAX_UNION_COPIES`] copies.
+    /// The RDF 1.2 triple terms of the store's dictionary, each with the ids of its subject,
+    /// predicate and object (#9 of the enterprise tracker): row rules hide a triple term whose
+    /// triple they hide, as the readers of the triple would otherwise see it there. Found once
+    /// and then for the keys added since, so most calls find nothing new.
+    pub fn triple_terms(&self) -> Arc<Vec<TripleTermIds>> {
+        let mut kept = self.inner.triple_terms.lock_unpoisoned();
+        let dict = self.inner.dict.read_unpoisoned();
+        let len = dict.len();
+        if kept.0 >= len {
+            return Arc::clone(&kept.1);
+        }
+        let mut found: Vec<TripleTermIds> = kept.1.as_ref().clone();
+        let mut key = Vec::new();
+        let mut id_of = |term: TermRef<'_>| match dict::encode(term, &mut key) {
+            Encoded::Inline(id) => id.0,
+            Encoded::Key(kind) => dict
+                .get(&key)
+                .map_or(TripleTermIds::ABSENT, |o| TermId::new(kind, u64::from(o)).0),
+        };
+        for ordinal in kept.0 + 1..=len {
+            let raw = dict.raw_key(ordinal as u32);
+            if raw.first() != Some(&(Kind::Triple as u8)) || dict::is_compact(raw) {
+                continue;
+            }
+            let Term::Triple(t) = dict.term(ordinal as u32) else {
+                continue;
+            };
+            let nested = matches!(t.object, Term::Triple(_));
+            found.push(TripleTermIds {
+                id: TermId::new(Kind::Triple, ordinal as u64).0,
+                subject: id_of(t.subject.as_ref().into()),
+                predicate: id_of(t.predicate.as_ref().into()),
+                object: id_of(t.object.as_ref()),
+                nested,
+            });
+        }
+        *kept = (len, Arc::new(found));
+        Arc::clone(&kept.1)
+    }
+
     pub fn union_copies(
         &self,
         scan: bool,
