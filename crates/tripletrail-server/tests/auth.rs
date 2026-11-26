@@ -3607,3 +3607,210 @@ fn changes_are_written_to_the_audit_log() {
     assert_eq!(report.starts, 2);
     assert_eq!(report.last_hash, got[13]["hash"].as_str().unwrap());
 }
+
+/// The row rule builder's API (enterprise#8): the classes and properties of the data, a
+/// preview of a rule before it is saved (the file stays as it was), then the shape and the
+/// rule saved, enforced, listed with the policy, and kept by a client that leaves them out.
+#[cfg(feature = "enterprise")]
+#[test]
+fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
+    use serde_json::{Value, json};
+    use tripletrail_enterprise::license::{Date, License};
+    let dir = tripletrail_testdir::tempdir("auth-row-builder");
+    std::fs::write(
+        dir.join("assets.ttl"),
+        format!(
+            "{SG}ex:Contractors a sg:Policy ; sg:group \"contractor\" ; sg:readAllGraphs true .
+             ex:Team a sg:Policy ; sg:group \"team\" ; sg:readAllGraphs true ."
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("guard.json"),
+        format!(
+            r#"{{"auth": {{"apiKeys": [
+                {{"sha256": "{}", "agent": "http://example.org/north", "groups": ["contractor"]}},
+                {{"sha256": "{}", "agent": "http://example.org/root", "groups": ["tripletrail:admin"]}}]}},
+              "datasets": {{"assets": {{"policies": ["assets.ttl"]}}}}}}"#,
+            hash("north"),
+            hash("root"),
+        ),
+    )
+    .unwrap();
+    let engine = Engine::new_tripletrail();
+    engine
+        .load(
+            RdfFormat::Turtle,
+            &b"@prefix ex: <http://example.org/> .
+               ex:p1 a ex:Project ; ex:area ex:north ; ex:name \"p1\" .
+               ex:p2 a ex:Project ; ex:area ex:south ; ex:name \"p2\" .
+               ex:p3 a ex:Project ; ex:area ex:south ; ex:name \"p3\" .
+               ex:t1 a ex:Task ; ex:of ex:p2 ."[..],
+        )
+        .unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        [("assets".to_owned(), engine)],
+        Options {
+            threads: 2,
+            auth_config: Some(dir.join("guard.json")),
+            license: Ok(License {
+                id: "2026-043".into(),
+                kid: "test".into(),
+                customer: "Example Rail AS".into(),
+                issued: Date::today().plus_days(-10),
+                expires: Date::today().plus_days(300),
+                features: vec!["row-policies".to_owned()],
+                max_nodes: None,
+                max_cores: None,
+                note: None,
+            }),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let call = |method: &str, path: &str, body: Option<Value>| -> (u16, Value) {
+        let request = ureq::request(method, &format!("{base}/$/access/datasets/assets{path}"))
+            .set("X-API-Key", "root");
+        let response = match body {
+            Some(b) => request.send_string(&b.to_string()),
+            None => request.call(),
+        };
+        match response {
+            Ok(r) => {
+                let status = r.status();
+                let text = r.into_string().unwrap();
+                (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+            }
+            Err(ureq::Error::Status(code, r)) => {
+                (code, json!(r.into_string().unwrap_or_default()))
+            }
+            Err(e) => panic!("{e}"),
+        }
+    };
+    let projects = |key: &str| -> usize {
+        let r = ureq::get(&format!("{base}/assets/query"))
+            .query("query", "SELECT ?p { ?p a <http://example.org/Project> }")
+            .set("X-API-Key", key)
+            .set("Accept", "text/csv")
+            .call()
+            .unwrap();
+        r.into_string().unwrap().lines().count() - 1
+    };
+    let file = || std::fs::read_to_string(dir.join("assets.ttl")).unwrap();
+
+    // What the builder offers: the classes, and the properties of one.
+    let (code, offered) = call("GET", "/shapes?class=http://example.org/Project", None);
+    assert_eq!(code, 200, "{offered}");
+    assert_eq!(offered["shapes"], json!([]));
+    assert_eq!(offered["classes"][0], json!({ "class": "http://example.org/Project", "instances": 3 }));
+    let paths: Vec<&str> = offered["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["path"].as_str().unwrap())
+        .collect();
+    assert!(paths.contains(&"http://example.org/area"), "{offered}");
+
+    // A rule previewed: the contractors would see their own area only.
+    let shape = json!({
+        "id": "http://example.org/OwnArea",
+        "turtle": "<http://example.org/OwnArea> a sh:NodeShape ; sh:targetClass <http://example.org/Project> ;
+                     sh:property [ sh:path <http://example.org/area> ; sh:hasValue sg:requestingAgent ] .",
+    });
+    let policy = json!({
+        "id": "http://example.org/Contractors",
+        "groups": ["contractor"],
+        "readAllGraphs": true,
+        "rowRules": [{ "rule": "sg:visibleIf", "shape": "http://example.org/OwnArea" }],
+    });
+    let before = file();
+    let (code, preview) = call(
+        "POST",
+        "/preview",
+        Some(json!({ "agent": "http://example.org/north", "groups": ["contractor"],
+                     "shapes": [shape], "policy": policy })),
+    );
+    assert_eq!(code, 200, "{preview}");
+    assert_eq!(file(), before);
+    assert_eq!(preview["rowRulesNow"], json!([]));
+    assert_eq!(preview["rowRulesAfter"][0]["rule"], "sg:visibleIf");
+    let project = preview["classes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["class"] == "http://example.org/Project")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (&project["instances"], &project["visibleNow"], &project["visibleAfter"]),
+        (&json!(3), &json!(3), &json!(1)),
+        "{project}"
+    );
+    assert_eq!(project["sampled"], 3);
+    assert_eq!(project["visible"], json!(["http://example.org/p1"]));
+    assert_eq!(project["hidden"].as_array().unwrap().len(), 2);
+    // The contractors read but do not write.
+    assert_eq!(project["sampledEditable"], 0);
+    // A team member is not under the rule.
+    let (_, team) = call("POST", "/preview", Some(json!({ "agent": "http://example.org/t", "groups": "team", "shapes": [shape], "policy": policy })));
+    assert_eq!(team["rowRulesAfter"], json!([]));
+    // A shape that does not parse is a 422, and nothing is written.
+    let broken = json!({ "id": "http://example.org/OwnArea", "turtle": "<http://example.org/OwnArea> sh:targetClass" });
+    assert_eq!(call("POST", "/preview", Some(json!({ "shapes": [broken] }))).0, 422);
+    assert_eq!(call("PUT", "/shapes", Some(broken)).0, 400);
+    assert_eq!(projects("north"), 3);
+
+    // Saved: the shape, then the rule. The contractors now see their own area only.
+    let (code, saved) = call("PUT", "/shapes", Some(shape.clone()));
+    assert_eq!(code, 200, "{saved}");
+    let (code, saved) = call("PUT", "/policies", Some(policy.clone()));
+    assert_eq!(code, 200, "{saved}");
+    assert_eq!(projects("north"), 1);
+    let text = file();
+    assert!(text.contains("sg:visibleIf ex:OwnArea"), "{text}");
+    assert!(text.contains("sh:hasValue sg:requestingAgent"), "{text}");
+    // Listed with the policy that uses it, and in the overview.
+    let (_, listed) = call("GET", "/shapes", None);
+    assert_eq!(listed["shapes"][0]["id"], "http://example.org/OwnArea");
+    assert_eq!(
+        listed["shapes"][0]["usedBy"],
+        json!([{ "policy": "http://example.org/Contractors", "rule": "sg:visibleIf" }])
+    );
+    let overview: Value = serde_json::from_str(
+        &ureq::get(&format!("{base}/$/access"))
+            .set("X-API-Key", "root")
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap(),
+    )
+    .unwrap();
+    let contractors = overview["datasets"][0]["policies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "http://example.org/Contractors")
+        .unwrap()
+        .clone();
+    assert_eq!(contractors["rowRules"][0]["shape"], "http://example.org/OwnArea");
+    // A client that does not send row rules keeps them.
+    let mut plain = policy.clone();
+    plain.as_object_mut().unwrap().remove("rowRules");
+    assert_eq!(call("PUT", "/policies", Some(plain)).0, 200);
+    assert_eq!(projects("north"), 1);
+    // The preview now compares with the rule in force.
+    let (_, now) = call("POST", "/preview", Some(json!({ "agent": "http://example.org/north", "groups": ["contractor"] })));
+    assert_eq!(now["rowRulesNow"].as_array().unwrap().len(), 1, "{now}");
+    // A shape a rule uses cannot be removed; the rule first, then the shape.
+    let (code, _) = call("DELETE", "/shapes?id=http://example.org/OwnArea", None);
+    assert_eq!(code, 422);
+    let mut none = policy.clone();
+    none["rowRules"] = json!([]);
+    assert_eq!(call("PUT", "/policies", Some(none)).0, 200);
+    assert_eq!(call("DELETE", "/shapes?id=http://example.org/OwnArea", None).0, 204);
+    assert_eq!(projects("north"), 3);
+    assert!(!file().contains("OwnArea"), "{}", file());
+}
