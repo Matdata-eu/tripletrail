@@ -81,8 +81,9 @@ On a large dataset the map's first request waits for TripleTrail to read the dat
 and count every layer's facets: on all of RINF's countries, close to a minute. So once the
 datasets are open, the server makes each one's map in the background, and its log says when
 it is ready. It gives each dataset at most five minutes (and each query the dataset's
-timeout); what is left then waits for the first visitor. `--no-warm-up` leaves it all to the
-first visitor:
+timeout); what is left then waits for the first visitor. Before the map it sorts the
+dataset's IRIs and strings once, for queries with `MIN`, `MAX` or `ORDER BY` on them (the
+log line `ds: string ranks of N terms`). `--no-warm-up` leaves it all to the first visitor:
 
 <!-- test: run -->
 ```sh
