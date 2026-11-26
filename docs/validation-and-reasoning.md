@@ -97,6 +97,9 @@ To compare two runs, or the same data under two sets of shapes, each result has 
 shape (by its `ttsh:shapeIri`), constraint component and severity, written out (terms in
 N-Triples, the path in SPARQL syntax, each followed by the byte `0xff`). FNV-1a is fixed by its
 definition, so a key stored today matches the same result in a later run of a later build.
+That holds for focus nodes and values that are IRIs or literals. A blank node is hashed by its
+label: in the same store it keeps its label and its key, but data loaded again (or into another
+store) gives its blank nodes new labels, so results on them get new keys.
 Messages and `sh:detail`s are not part of it. The same result found twice (two parents of one
 focus node) has one key. A comparison holds about 40 bytes per distinct result, and at most
 `FINDING_KEYS_HELD` (4 million, about 160 MB) of them; past that it gives counts by shape only.
