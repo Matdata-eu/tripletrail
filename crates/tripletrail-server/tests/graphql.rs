@@ -320,3 +320,186 @@ fn an_answer_has_a_bounded_size() {
     let small = post(&base, "{ lines(first: 2) { nodes { id } } }", json!({}));
     assert_eq!(small["data"]["lines"]["nodes"].as_array().unwrap().len(), 2);
 }
+
+/// Posts `query` with an optional bearer token; the status and the answer's JSON.
+fn post_as(base: &str, token: Option<&str>, query: &str, variables: Value) -> (u16, Value) {
+    let mut request =
+        ureq::post(&format!("{base}/kg/graphql")).set("Content-Type", "application/json");
+    if let Some(t) = token {
+        request = request.set("Authorization", &format!("Bearer {t}"));
+    }
+    match request.send_string(&json!({ "query": query, "variables": variables }).to_string()) {
+        Ok(r) => (
+            r.status(),
+            serde_json::from_str(&r.into_string().unwrap()).unwrap(),
+        ),
+        Err(ureq::Error::Status(code, r)) => (code, Value::String(r.into_string().unwrap())),
+        Err(e) => panic!("{e}"),
+    }
+}
+
+/// Mutations (#27): records created, changed and deleted as the REST API writes them,
+/// checked against the dataset's own shapes, under the same write rights.
+#[test]
+fn records_are_written_with_mutations_and_checked_against_the_shapes() {
+    const ADMIN: &str = "admin-secret";
+    const WRITER: &str = "writer-secret";
+    let dir = tripletrail_testdir::tempdir("graphql-mutations");
+    let engine = Engine::new_tripletrail();
+    engine
+        .load(
+            RdfFormat::Turtle,
+            "@prefix ex: <http://example.com/> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             ex:o1 a ex:Operator ; rdfs:label \"Infrabel\" .\n\
+             ex:s1 a ex:Station ; rdfs:label \"Brussels\" ; ex:tracks 4 ; ex:hasOperator ex:o1 .\n"
+                .as_bytes(),
+        )
+        .unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 4,
+            admin_token: Some(ADMIN.to_owned()),
+            update_token: Some(WRITER.to_owned()),
+            location: Some(dir.join("data")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let shape = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix ex: <http://example.com/> .\n\
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+        @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+        ex:StationShape a sh:NodeShape ; sh:targetClass ex:Station ; tts:key \"Station\" ;\n\
+          sh:property [ sh:path rdfs:label ; sh:minCount 1 ; sh:maxCount 1 ] ,\n\
+            [ sh:path ex:tracks ; sh:datatype xsd:integer ; sh:maxCount 1 ; sh:minInclusive 1 ;\n\
+              sh:message \"A station has at least one track\" ] ,\n\
+            [ sh:path ex:hasOperator ; sh:class ex:Operator ; sh:maxCount 1 ] .\n";
+    let saved = ureq::put(&format!("{base}/$/datasets/kg/shapes/files/Station.ttl"))
+        .set("Authorization", &format!("Bearer {ADMIN}"))
+        .send_string(shape);
+    assert!(saved.is_ok(), "{saved:?}");
+    let ask = |query: &str| -> bool {
+        let r = ureq::get(&format!("{base}/kg/query"))
+            .query("query", query)
+            .set("Accept", "application/sparql-results+json")
+            .call()
+            .unwrap();
+        let v: Value = serde_json::from_str(&r.into_string().unwrap()).unwrap();
+        v["boolean"].as_bool().unwrap()
+    };
+    let create =
+        "mutation($r: JSON!) { createStation(record: $r) { id label tracks operator { label } } }";
+    let ghent = json!({ "id": "http://example.com/s2", "label": "Ghent", "tracks": 12,
+                        "operator": "http://example.com/o1" });
+
+    // The same write rights as SPARQL Update and the REST API.
+    let (status, _) = post_as(&base, None, create, json!({ "r": ghent }));
+    assert_eq!(status, 401);
+    // A mutation is not sent with GET.
+    let r = ureq::get(&format!("{base}/kg/graphql"))
+        .query(
+            "query",
+            "mutation { deleteStation(id: \"http://example.com/s1\") }",
+        )
+        .set("Authorization", &format!("Bearer {WRITER}"))
+        .call();
+    assert!(matches!(r, Err(ureq::Error::Status(405, _))), "{r:?}");
+    // Queries still need no token.
+    let (status, _) = post_as(&base, None, "{ stations { nodes { id } } }", json!({}));
+    assert_eq!(status, 200);
+
+    let w = Some(WRITER);
+    let (status, made) = post_as(&base, w, create, json!({ "r": ghent }));
+    assert_eq!(status, 200);
+    assert_eq!(
+        made["data"]["createStation"],
+        json!({ "id": "http://example.com/s2", "label": "Ghent", "tracks": 12,
+                "operator": { "label": "Infrabel" } }),
+        "{made}"
+    );
+    let (_, again) = post_as(&base, w, create, json!({ "r": ghent }));
+    assert_eq!(again["errors"][0]["extensions"]["status"], 409, "{again}");
+    // It reads back the same through the REST API and SPARQL.
+    let rest: Value = serde_json::from_str(
+        &ureq::get(&format!(
+            "{base}/kg/api/v1/Station/http%3A%2F%2Fexample.com%2Fs2"
+        ))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        (&rest["label"], &rest["tracks"]),
+        (&json!("Ghent"), &json!(12))
+    );
+    assert!(ask(
+        "ASK { <http://example.com/s2> <http://example.com/tracks> 12 }"
+    ));
+
+    // A record that breaks its shape changes nothing; the violations come as an error.
+    let update = "mutation($id: ID!, $r: JSON!) { updateStation(id: $id, record: $r) { tracks } }";
+    let (_, refused) = post_as(
+        &base,
+        w,
+        update,
+        json!({ "id": "http://example.com/s2", "r": { "tracks": 0 } }),
+    );
+    let error = &refused["errors"][0];
+    assert_eq!(
+        error["message"],
+        "The record does not conform to its shape: tracks: A station has at least one track",
+        "{refused}"
+    );
+    assert_eq!(error["extensions"]["status"], 422);
+    assert_eq!(
+        error["extensions"]["violations"][0]["constraint"],
+        "sh:minInclusive"
+    );
+    assert_eq!(refused["data"]["updateStation"], Value::Null);
+    assert!(ask(
+        "ASK { <http://example.com/s2> <http://example.com/tracks> 12 }"
+    ));
+    let (_, refused) = post_as(
+        &base,
+        w,
+        update,
+        json!({ "id": "http://example.com/s2", "r": { "operator": "http://example.com/s1" } }),
+    );
+    assert_eq!(
+        refused["errors"][0]["extensions"]["violations"][0]["constraint"], "sh:class",
+        "{refused}"
+    );
+
+    // Only the keys given change.
+    let (_, changed) = post_as(
+        &base,
+        w,
+        "mutation { updateStation(id: \"http://example.com/s2\", record: {tracks: 10}) { label tracks } }",
+        json!({}),
+    );
+    assert_eq!(
+        changed["data"]["updateStation"],
+        json!({ "label": "Ghent", "tracks": 10 }),
+        "{changed}"
+    );
+
+    let (_, deleted) = post_as(
+        &base,
+        w,
+        "mutation { deleteStation(id: \"http://example.com/s2\") }",
+        json!({}),
+    );
+    assert_eq!(
+        deleted["data"]["deleteStation"], "http://example.com/s2",
+        "{deleted}"
+    );
+    assert!(!ask("ASK { <http://example.com/s2> ?p ?o }"));
+}
