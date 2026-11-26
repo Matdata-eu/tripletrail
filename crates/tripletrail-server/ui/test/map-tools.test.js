@@ -2,7 +2,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { geometry: g } = require("../map-tools.js");
+const { geometry: g, featureNumber } = require("../map-tools.js");
 
 const close = (a, b, tolerance, what) => assert.ok(Math.abs(a - b) <= tolerance, `${what}: ${a} is not ${b} ± ${tolerance}`);
 
@@ -83,4 +83,11 @@ test("a drawn area as CQL2 for the OGC API's items", () => {
   assert.strictEqual(g.cqlArea({ area: "layer:Station" }), "");
   assert.strictEqual(g.cqlArea({ area: "<http://www.opengis.net/def/crs/EPSG/0/31370> POINT(150000 170000)" }), "");
   assert.strictEqual(g.cqlArea(null), "");
+});
+
+test("a feature's number is the server's", () => {
+  // The values of tiles.rs's test: FNV-1a 64 cut to 40 bits.
+  assert.strictEqual(featureNumber(""), Number(0xcbf29ce484222325n & 0xffffffffffn));
+  assert.strictEqual(featureNumber("a"), Number(0xaf63dc4c8601ec8cn & 0xffffffffffn));
+  assert.strictEqual(featureNumber("http://data.europa.eu/949/tunnel/0fc55bc6a3"), 154522281420);
 });

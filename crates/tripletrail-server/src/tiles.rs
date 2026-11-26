@@ -445,6 +445,19 @@ pub(crate) fn route(
         reply.headers.push(("Cache-Control", "no-cache".to_owned()));
         return Ok(reply);
     }
+    if let ["iris", id] = rest {
+        let (collections, _) = shown()?;
+        let collection = collections
+            .iter()
+            .find(|c| c.id == *id)
+            .ok_or_else(|| HttpError(404, format!("No collection {id}")))?;
+        let found = iris_of_numbers(entry, collection, params, timeout, view)?;
+        return Ok(Reply::bytes(
+            200,
+            "application/json",
+            found.to_string().into_bytes(),
+        ));
+    }
     if let ["facets", id] = rest {
         let (collections, _) = shown()?;
         let collection = collections
@@ -2363,17 +2376,10 @@ fn group_tiles(
                 None
             };
             let mut properties = if low {
-                // The IRI in two: its namespace, which the layer keeps once for all the
-                // features that share it, and the rest (#261). Most of a generalised tile's
-                // bytes were IRIs: RINF's z6 tiles were 2.5 times RINF Atlas's.
-                let (ns, local) = split_iri(f.as_str());
-                vec![
-                    ("ns".to_owned(), Literal::new_simple_literal(ns).into()),
-                    (
-                        "local".to_owned(),
-                        Literal::new_simple_literal(local).into(),
-                    ),
-                ]
+                // No IRI: the feature's number instead (#261), which
+                // `/{ds}/tiles/iris/{collection}` turns back into it. Most of a generalised
+                // tile's bytes were IRIs; RINF Atlas sends a number too.
+                Vec::new()
             } else {
                 vec![(
                     "iri".to_owned(),
@@ -2388,7 +2394,7 @@ fn group_tiles(
             }
             let feature = Feature {
                 geometry,
-                id: None,
+                id: low.then(|| feature_number(f.as_str())),
                 properties,
             };
             match replaces {
@@ -2404,11 +2410,72 @@ fn group_tiles(
     Ok(out)
 }
 
-/// An IRI as its namespace (up to its last `/` or `#`) and the rest: `ns` and `local` of a
-/// generalised tile's features.
-fn split_iri(iri: &str) -> (&str, &str) {
-    let at = iri.rfind(['/', '#']).map_or(0, |i| i + 1);
-    iri.split_at(at)
+/// Bits of a feature's number: two features of a class of a million share one about once
+/// in two classes.
+const NUMBER_BITS: u32 = 40;
+
+/// The number a generalised tile gives a feature in place of its IRI (#261): the low 40 bits
+/// of the IRI's 64-bit FNV-1a hash. The same in every store and version, so a cached tile
+/// stays right; the Map page computes it too, to outline a feature it has the IRI of.
+pub(crate) fn feature_number(iri: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in iri.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash & ((1 << NUMBER_BITS) - 1)
+}
+
+/// Numbers asked of `/{ds}/tiles/iris/{collection}` at most.
+const MAX_NUMBERS: usize = 1000;
+
+/// `/{ds}/tiles/iris/{collection}?id=N&id=M`: the IRIs of the collection's features with
+/// those numbers, as `{"N": [IRI, …]}` (two IRIs share a number only rarely; a number no
+/// feature has is left out).
+fn iris_of_numbers(
+    entry: &Entry,
+    collection: &Collection,
+    params: &Params,
+    timeout: Option<Duration>,
+    view: &View,
+) -> Result<serde_json::Value, HttpError> {
+    let mut wanted: HashMap<u64, Vec<String>> = HashMap::new();
+    for (k, v) in &params.0 {
+        if k != "id" {
+            continue;
+        }
+        let n = v
+            .parse::<u64>()
+            .map_err(|_| HttpError::bad_request("id must be a whole number"))?;
+        wanted.entry(n).or_default();
+    }
+    if wanted.is_empty() {
+        return Err(HttpError::bad_request("Name the features: id=N, repeated"));
+    }
+    if wanted.len() > MAX_NUMBERS {
+        return Err(HttpError::bad_request(format!(
+            "More than {MAX_NUMBERS} ids"
+        )));
+    }
+    let query = format!(
+        "SELECT ?f WHERE {{ ?f a <{}> FILTER(isIRI(?f)) }}",
+        collection.class.as_str()
+    );
+    for row in run(entry, &query, timeout, view)? {
+        if let Some(Term::NamedNode(f)) = &row[0]
+            && let Some(found) = wanted.get_mut(&feature_number(f.as_str()))
+        {
+            found.push(f.as_str().to_owned());
+        }
+    }
+    let mut out = serde_json::Map::new();
+    for (n, mut iris) in wanted {
+        if !iris.is_empty() {
+            iris.sort_unstable();
+            out.insert(n.to_string(), iris.into());
+        }
+    }
+    Ok(serde_json::Value::Object(out))
 }
 
 #[cfg(test)]
@@ -2416,13 +2483,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_iri_splits_after_its_last_slash_or_hash() {
+    fn a_feature_number_is_40_bits_of_fnv_1a() {
+        // FNV-1a 64 of the empty string and of "a", the published test values, cut to 40 bits.
+        assert_eq!(feature_number(""), 0xcbf2_9ce4_8422_2325 & 0xff_ffff_ffff);
+        assert_eq!(feature_number("a"), 0xaf63_dc4c_8601_ec8c & 0xff_ffff_ffff);
+        // map.js's `featureNumber` gives the same (checked in tests/ui.rs).
         assert_eq!(
-            split_iri("http://data.europa.eu/949/tunnel/0fc55bc6a3"),
-            ("http://data.europa.eu/949/tunnel/", "0fc55bc6a3")
+            feature_number("http://data.europa.eu/949/tunnel/0fc55bc6a3"),
+            154_522_281_420
         );
-        assert_eq!(split_iri("http://ex.org/a#b"), ("http://ex.org/a#", "b"));
-        assert_eq!(split_iri("urn:x:y"), ("", "urn:x:y"));
     }
 
     #[test]

@@ -3338,16 +3338,17 @@ https://tripletrail.example.org/kg/tiles/all/{z}/{x}/{y}.mvt
 - Below zoom 8, a layer of more than 1,000 features in one tile is generalised, as RINF Atlas
   does (#92): a 512 extent (and an 8-unit buffer) instead of 4096, and one feature per
   position, the one drawn on top (the last by IRI). Lines and polygons smaller than a unit are
-  left out. Such a layer's features carry their IRI in two attributes in place of `iri`: `ns`,
-  the IRI up to its last `/` or `#`, which the layer holds once for all the features that
-  share it, and `local`, the rest (#261); the IRI is `ns` followed by `local`. On RINF's eight
-  countries this halves nine z6 tiles of every class around Brussels (1,239 instead of 2,481 KB). A
-  layer of fewer features keeps them all at every zoom, with `iri`.
+  left out. Such a layer's features carry no `iri`: each has the MVT feature id instead, a
+  number made from its IRI (the low 40 bits of its 64-bit FNV-1a hash, the same in every store
+  and version), which `/{ds}/tiles/iris/{collection}?id=N&id=M` turns back into IRIs (#261).
+  On RINF's eight countries this takes nine z6 tiles of every class around Brussels from
+  2,481 KB to 756 KB (RINF Atlas 1,019 KB). A layer of fewer features keeps them all at every
+  zoom, with `iri`.
 - A client whose `Accept-Encoding` takes gzip gets tiles gzipped (level 3), as it does the
   styles, facets, counts and searches under `/{ds}/tiles/` and every answer of the OGC API
   (`/{ds}/ogc/`); answers under 1 KB and streamed ones go as they are, and these answers say
   `Vary: Accept-Encoding`. On RINF's eight countries the nine tiles of every class around
-  Brussels come to 488 KB at z6, 113 KB at z9 and 34 KB at z12 (RINF Atlas, gzipped too: 431,
+  Brussels come to 401 KB at z6, 113 KB at z9 and 34 KB at z12 (RINF Atlas, gzipped too: 431,
   228 and 82 KB).
 - Collections that read their geometry through the same path are fetched with one query
   (the spatial index is asked once per tile), and those queries run on up to four threads.
@@ -3478,6 +3479,12 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   comes after the other facets' filters and the check that a feature is drawn, so that it
   (a computed facet's above all) is evaluated only for the features they keep (#256; RINF FR+BE running tracks, 40,143, RINF Atlas's shapes, a country
   and a minimum speed, first request: 1.0 to 1.1 s → 0.1 to 0.45 s).
+- `/{ds}/tiles/iris/{collection}?id=N&id=M` (up to 1,000 `id`s) answers the IRIs of the
+  collection's features with those numbers, the ids of a generalised low-zoom tile's features,
+  as `{"N": [IRI, …]}`; a number no feature has is left out. Two IRIs of a class of a million
+  share a number about once in two classes, so a number can give more than one. The Map page
+  asks it for the features under a click and computes the number itself to outline a feature.
+  It reads every feature of the class (RINF's sections of line: 21 ms).
 - `/{ds}/tiles/search?q=…` finds the map's features by name, with the
   [full-text index](full-text-search.md): those with a label holding every word of `q` (the
   last as a prefix, so it works while typing; case and Latin accents aside), labels with the
