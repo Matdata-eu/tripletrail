@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn titles_come_from_the_first_comment_or_the_file_name() {
-        let dir = std::env::temp_dir().join(format!("tt-examples-{}", std::process::id()));
+        let dir = tripletrail_testdir::tempdir("examples");
         let rail = dir.join("rail");
         std::fs::create_dir_all(&rail).unwrap();
         std::fs::write(
@@ -224,7 +224,6 @@ mod tests {
                 .unwrap_err()
                 .contains("larger than 64 KB")
         );
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
