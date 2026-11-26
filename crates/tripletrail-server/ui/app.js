@@ -674,7 +674,8 @@
       if (e) openExample(name, e);
     };
     // A viewer's first visit: the default query in the first tab, and the examples as tabs.
-    if (store.get(SEEDED_KEY)) return;
+    // Only once something was seeded, so a dataset given examples later still seeds them.
+    if (store.get(SEEDED_KEY) || (defaultQuery == null && !examples.length)) return;
     store.set(SEEDED_KEY, "1");
     const first = yasgui.getTab();
     if (defaultQuery != null && first && first.getQuery() === matguiDefault) first.setQuery(defaultQuery);

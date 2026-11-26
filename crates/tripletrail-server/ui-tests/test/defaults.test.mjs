@@ -95,7 +95,16 @@ test("the Query page offers the examples, and a first visit opens them as tabs",
   await context.addInitScript(() => localStorage.setItem("tripletrail-tour", "9999"));
   await context.route((url) => !url.href.startsWith(base), (route) => route.abort());
   const page = await context.newPage();
+  // A first visit before the dataset had examples seeds nothing, and keeps the first visit for later.
+  const none = (route) => route.fulfill({ json: { examples: [], defaultQuery: null } });
+  await page.route("**/rail/examples", none);
   await page.goto(base + "/$/ui/query/rail");
+  await page.waitForResponse("**/rail/examples").catch(() => {});
+  await page.locator("#yasgui .tabsList .tab").first().waitFor();
+  await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(() => localStorage.getItem("tripletrail-query-seeded")), null);
+  await page.unroute("**/rail/examples", none);
+  await page.reload();
   const examples = page.locator("#query-examples");
   await examples.waitFor();
   assert.deepEqual(await examples.locator("option").allTextContents(), ["Examples…", "Count the triples", "The classes"]);
