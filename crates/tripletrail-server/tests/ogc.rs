@@ -250,7 +250,7 @@ fn features_from_the_shapes() {
     let latlon: Value = serde_json::from_str(&r.into_string().unwrap()).unwrap();
     assert_eq!(
         latlon["features"][0]["geometry"]["coordinates"],
-        serde_json::json!([1.0, 3.0])
+        serde_json::json!([1, 3])
     );
     // x 2.5..3.5 and y 0.5..1.5 degrees, in metres.
     let (_, _, mercator) = get(&format!(
@@ -3381,4 +3381,82 @@ fn facets_of_blank_shapes_keep_their_order() {
     }
     assert_eq!(orders[0], ["first", "kind", "tracks", "zone"]);
     assert!(orders.iter().all(|o| *o == orders[0]), "{orders:?}");
+}
+
+/// A feature's geometry in the items and the tiles (#316): of the alternatives of the shape's
+/// path, the first that gives one, so a track with a line of its own is drawn with it and not
+/// with the longer line of the section it is part of; and longitudes and latitudes to 7
+/// decimals.
+#[test]
+fn a_feature_takes_its_own_geometry_before_its_parents() {
+    let dir = tripletrail_testdir::tempdir("ogc-own-geometry");
+    let ttl = "@prefix ex: <http://example.com/> .\n\
+               @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+               ex:s1 a ex:Section ; geo:hasGeometry [ geo:asWKT \"LINESTRING(1 1, 2 2, 30 30, 60 50)\"^^geo:wktLiteral ] .\n\
+               ex:t1 a ex:Track ; ex:isPartOf ex:s1 ; geo:hasGeometry [ geo:asWKT \"LINESTRING(1.123456789 1, 1.5 1.5)\"^^geo:wktLiteral ] .\n\
+               ex:t2 a ex:Track ; ex:isPartOf ex:s1 .\n";
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 4,
+            admin_token: Some("t".to_owned()),
+            location: Some(dir.join("data")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let shapes = "@prefix ex: <http://example.com/> .\n\
+                  @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+                  @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                  @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+                  ex:TrackShape a sh:NodeShape ; sh:targetClass ex:Track ; tts:key \"track\" ;\n\
+                    tts:geometry [ sh:path [ sh:alternativePath (\n\
+                      ( geo:hasGeometry geo:asWKT ) ( ex:isPartOf geo:hasGeometry geo:asWKT ) ) ] ] .\n";
+    let r = ureq::put(&format!("{base}/$/datasets/kg/shapes/files/rail.ttl"))
+        .set("Authorization", "Bearer t")
+        .send_string(shapes)
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let (status, _, items) = get(&format!("{base}/kg/ogc/collections/track/items"));
+    assert_eq!(status, 200, "{items}");
+    let geometry = |iri: &str| -> Value {
+        items["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"].as_str().is_some_and(|id| id.ends_with(iri)))
+            .map(|f| f["geometry"]["coordinates"].clone())
+            .unwrap_or(Value::Null)
+    };
+    assert_eq!(
+        geometry("t1"),
+        json!([[1.1234568, 1], [1.5, 1.5]]),
+        "{items}"
+    );
+    assert_eq!(
+        geometry("t2"),
+        json!([[1, 1], [2, 2], [30, 30], [60, 50]]),
+        "{items}"
+    );
+    // A tile the section's line crosses far from t1's own: t2 alone.
+    let (status, far) = tile(&format!("{base}/kg/tiles/track/3/5/2.mvt"));
+    assert_eq!(status, 200);
+    assert!(holds(&far, "http://example.com/t2"));
+    assert!(!holds(&far, "http://example.com/t1"));
+    // With all of them, t1 has both lines.
+    let (_, _, all) = get(&format!(
+        "{base}/kg/ogc/collections/track/items?geometries=all"
+    ));
+    let t1 = all["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"].as_str().is_some_and(|id| id.ends_with("t1")))
+        .unwrap();
+    assert_eq!(t1["geometry"]["type"], "GeometryCollection", "{t1}");
 }

@@ -236,13 +236,22 @@ impl Ways {
     /// [`Ways::pattern`] with `filter` (SPARQL on `o`, such as a `FILTER`) next to each way, so
     /// that a spatial filter stays beside the path it can use an index for.
     pub(crate) fn filtered(&self, s: &str, o: &str, filter: &str) -> String {
+        self.chosen(s, o, filter, false)
+    }
+
+    /// [`Ways::filtered`] with, when `first`, each alternative of a path (`A|B|C`) only for the
+    /// instances that the alternatives before it give no geometry: the shape lists them from
+    /// the one to take first, as a track's own line before that of the section it is part of,
+    /// which the most detailed of them all would take (#316). The items and the tiles draw
+    /// these; filters and counts, which ask only whether there is a geometry, need not.
+    pub(crate) fn chosen(&self, s: &str, o: &str, filter: &str, first: bool) -> String {
         let filter = if filter.is_empty() {
             String::new()
         } else {
             format!(" {filter}")
         };
         if let [Way::Path(p)] = self.0.as_slice() {
-            return path_filtered(s, p, o, &filter);
+            return path_filtered(s, p, o, &filter, first);
         }
         if self.0.is_empty() {
             // A window none of the lines meets.
@@ -251,12 +260,12 @@ impl Ways {
         let mut branches = Vec::new();
         for (i, way) in self.0.iter().enumerate() {
             let alternatives = match way {
-                Way::Path(p) if !filter.is_empty() => alternatives(p),
+                Way::Path(p) if !filter.is_empty() || first => alternatives(p),
                 _ => Vec::new(),
             };
             let (mut branch, filter) = if alternatives.len() > 1 {
                 let Way::Path(p) = way else { unreachable!() };
-                (path_filtered(s, p, o, &filter), String::new())
+                (path_filtered(s, p, o, &filter, first), String::new())
             } else {
                 (way.bind(s, o, i), filter.clone())
             };
@@ -279,8 +288,11 @@ impl Ways {
 /// alternatives as a whole it was tested on every instance's geometry (1.3 s for a map tile of
 /// RINF Germany's tracks, 4 ms as a union, #947). The answers are the same, as a path of
 /// alternatives is the union of its alternatives.
-fn path_filtered(s: &str, p: &str, o: &str, filter: &str) -> String {
-    let alternatives = if filter.is_empty() {
+///
+/// With `first`, an alternative is for the instances the ones before it give no geometry
+/// (see [`Ways::chosen`]).
+fn path_filtered(s: &str, p: &str, o: &str, filter: &str, first: bool) -> String {
+    let alternatives = if filter.is_empty() && !first {
         Vec::new()
     } else {
         alternatives(p)
@@ -290,7 +302,19 @@ fn path_filtered(s: &str, p: &str, o: &str, filter: &str) -> String {
     }
     alternatives
         .iter()
-        .map(|a| format!("{{ {s} {a} {o} .{filter} }}"))
+        .enumerate()
+        .map(|(i, a)| {
+            let before: String = if first {
+                alternatives[..i]
+                    .iter()
+                    .enumerate()
+                    .map(|(j, b)| format!(" FILTER NOT EXISTS {{ {s} {b} {o}_alt_{i}_{j} . }}"))
+                    .collect()
+            } else {
+                String::new()
+            };
+            format!("{{ {s} {a} {o} .{before}{filter} }}")
+        })
         .collect::<Vec<_>>()
         .join(" UNION ")
 }

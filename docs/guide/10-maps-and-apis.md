@@ -497,6 +497,11 @@ curl -s 'http://localhost:7878/ds/ogc/collections/Station/items?bbox=4.2,50.75,4
 "label":"Mechelen"
 ```
 
+Each feature has one geometry: of the alternatives its shape's geometry path lists, the first
+that gives it one (a track's own line before that of the section it is part of), with
+longitudes and latitudes to 7 decimals, about a centimetre. `geometries=all` gives all of
+them as a `GeometryCollection`.
+
 <!-- test: run -->
 ```sh
 curl -s -G http://localhost:7878/ds/ogc/collections/Section/items -d f=json \

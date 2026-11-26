@@ -3260,9 +3260,13 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   store written to without pause, a window builds every line. The boxes kept take at most
   128 MB. A window that more
   than 10,000 boxes meet (a map of a whole network at a low zoom) builds every line, about a
-  second per 100,000 on a laptop; give such a class an `tts:minZoom`. A feature with several values there gets the most detailed
-  one (most coordinates, then most digits), as data often holds a rounded and an exact copy;
-  `geometries=all` gives a `GeometryCollection` of them all instead; the properties are the values of the shape's property
+  second per 100,000 on a laptop; give such a class an `tts:minZoom`. A feature with several values there gets those of
+  the first alternative of the path (`sh:alternativePath`) that gives it one, in the shape's
+  order, so a track with a line of its own is not drawn with the longer line of the section
+  it is part of (#316); of those the most detailed (most coordinates, then most digits), as
+  data often holds a rounded and an exact copy; `geometries=all` gives a `GeometryCollection`
+  of them all instead. Longitudes and latitudes have at most 7 decimals (about a centimetre,
+  as RINF Atlas's PostGIS writes them), Web Mercator's metres 2; the properties are the values of the shape's property
   shapes under their `tts:key`, numbers and booleans typed, IRIs as strings, several values as
   an array. The feature id is its IRI; `…/items/{id}` takes it percent-encoded. A dataset with
   one base IRI (`--base-iri`) gives the features under it their IRI's local part as id
@@ -3382,7 +3386,8 @@ https://tripletrail.example.org/kg/tiles/all/{z}/{x}/{y}.mvt
 - The layers are the collections the `map` reader reads (`?reader=map` on the shapes), as for
   the OGC API but with the map's choices: a collection with `tts:minZoom` is left out of
   tiles below that zoom (generated shapes give 10 from 5,000 instances and 12 from 50,000).
-- Each feature has one geometry (the most detailed, as in the items), clipped to the tile
+- Each feature has one geometry (of the first alternative with one, the most detailed, as in
+  the items), clipped to the tile
   with a 64-unit buffer in a 4096 extent, and its IRI as the attribute `iri`. Below zoom 14,
   lines and polygons are simplified to one tile unit (Douglas–Peucker), so low zooms carry
   no detail they cannot show.
@@ -3395,12 +3400,14 @@ https://tripletrail.example.org/kg/tiles/all/{z}/{x}/{y}.mvt
   On RINF's eight countries this takes nine z6 tiles of every class around Brussels from
   2,481 KB to 756 KB (RINF Atlas 1,019 KB). A layer of fewer features keeps them all at every
   zoom, with `iri`.
-- A client whose `Accept-Encoding` takes gzip gets tiles gzipped (level 3), as it does the
+- A client whose `Accept-Encoding` takes gzip gets tiles gzipped (level 3; level 5 for an
+  answer of a megabyte or more, such as a page of features), as it does the
   styles, facets, counts and searches under `/{ds}/tiles/` and every answer of the OGC API
   (`/{ds}/ogc/`); answers under 1 KB and streamed ones go as they are, and these answers say
   `Vary: Accept-Encoding`. On RINF's eight countries the nine tiles of every class around
   Brussels come to 401 KB at z6, 113 KB at z9 and 34 KB at z12 (RINF Atlas, gzipped too: 431,
-  228 and 82 KB).
+  228 and 82 KB). A page of the 7,281 running tracks in a box around Vienna takes 3.9 s and
+  5.4 MB (RINF Atlas: 3.8 s and 5.4 MB).
 - Collections that read their geometry through the same path are fetched with one query
   (the spatial index is asked once per tile), and those queries run on up to four threads.
 - Tiles are kept in memory, 256 MiB at most over all datasets (oldest out first; a layer tile

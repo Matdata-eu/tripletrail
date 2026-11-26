@@ -2264,10 +2264,11 @@ fn group_tiles(
     let limit = MAX_FEATURES * classes.len();
     let query = format!(
         "SELECT ?c ?f ?w WHERE {{ {} {classes_check}{filter} }} LIMIT {}",
-        group[0].geometry.near(entry, view, "?f", &window).filtered(
+        group[0].geometry.near(entry, view, "?f", &window).chosen(
             "?f",
             "?w",
-            &format!("FILTER(<{GEOF}sfIntersects>(?w, \"{window}\"^^<{WKT}>))")
+            &format!("FILTER(<{GEOF}sfIntersects>(?w, \"{window}\"^^<{WKT}>))"),
+            true,
         ),
         limit + 1,
     );
@@ -2275,7 +2276,8 @@ fn group_tiles(
     if rows.len() > limit {
         return Err(too_many(&group[0].id, z, x, y));
     }
-    // Per class, one geometry per feature, the most detailed, as the items do.
+    // Per class, one geometry per feature: of the first alternative of the path with one, the
+    // most detailed, as the items do (#316).
     let mut by_class: HashMap<NamedNode, (Vec<NamedNode>, HashMap<NamedNode, Term>)> =
         HashMap::new();
     for row in rows {
