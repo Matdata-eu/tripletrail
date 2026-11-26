@@ -3684,9 +3684,7 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
                 let text = r.into_string().unwrap();
                 (status, serde_json::from_str(&text).unwrap_or(Value::Null))
             }
-            Err(ureq::Error::Status(code, r)) => {
-                (code, json!(r.into_string().unwrap_or_default()))
-            }
+            Err(ureq::Error::Status(code, r)) => (code, json!(r.into_string().unwrap_or_default())),
             Err(e) => panic!("{e}"),
         }
     };
@@ -3705,7 +3703,10 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
     let (code, offered) = call("GET", "/shapes?class=http://example.org/Project", None);
     assert_eq!(code, 200, "{offered}");
     assert_eq!(offered["shapes"], json!([]));
-    assert_eq!(offered["classes"][0], json!({ "class": "http://example.org/Project", "instances": 3 }));
+    assert_eq!(
+        offered["classes"][0],
+        json!({ "class": "http://example.org/Project", "instances": 3 })
+    );
     let paths: Vec<&str> = offered["properties"]
         .as_array()
         .unwrap()
@@ -3730,8 +3731,10 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
     let (code, preview) = call(
         "POST",
         "/preview",
-        Some(json!({ "agent": "http://example.org/north", "groups": ["contractor"],
-                     "shapes": [shape], "policy": policy })),
+        Some(
+            json!({ "agent": "http://example.org/north", "groups": ["contractor"],
+                     "shapes": [shape], "policy": policy }),
+        ),
     );
     assert_eq!(code, 200, "{preview}");
     assert_eq!(file(), before);
@@ -3745,7 +3748,11 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
         .unwrap()
         .clone();
     assert_eq!(
-        (&project["instances"], &project["visibleNow"], &project["visibleAfter"]),
+        (
+            &project["instances"],
+            &project["visibleNow"],
+            &project["visibleAfter"]
+        ),
         (&json!(3), &json!(3), &json!(1)),
         "{project}"
     );
@@ -3755,11 +3762,20 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
     // The contractors read but do not write.
     assert_eq!(project["sampledEditable"], 0);
     // A team member is not under the rule.
-    let (_, team) = call("POST", "/preview", Some(json!({ "agent": "http://example.org/t", "groups": "team", "shapes": [shape], "policy": policy })));
+    let (_, team) = call(
+        "POST",
+        "/preview",
+        Some(
+            json!({ "agent": "http://example.org/t", "groups": "team", "shapes": [shape], "policy": policy }),
+        ),
+    );
     assert_eq!(team["rowRulesAfter"], json!([]));
     // A shape that does not parse is a 422, and nothing is written.
     let broken = json!({ "id": "http://example.org/OwnArea", "turtle": "<http://example.org/OwnArea> sh:targetClass" });
-    assert_eq!(call("POST", "/preview", Some(json!({ "shapes": [broken] }))).0, 422);
+    assert_eq!(
+        call("POST", "/preview", Some(json!({ "shapes": [broken] }))).0,
+        422
+    );
     assert_eq!(call("PUT", "/shapes", Some(broken)).0, 400);
     assert_eq!(projects("north"), 3);
 
@@ -3795,14 +3811,21 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
         .find(|p| p["id"] == "http://example.org/Contractors")
         .unwrap()
         .clone();
-    assert_eq!(contractors["rowRules"][0]["shape"], "http://example.org/OwnArea");
+    assert_eq!(
+        contractors["rowRules"][0]["shape"],
+        "http://example.org/OwnArea"
+    );
     // A client that does not send row rules keeps them.
     let mut plain = policy.clone();
     plain.as_object_mut().unwrap().remove("rowRules");
     assert_eq!(call("PUT", "/policies", Some(plain)).0, 200);
     assert_eq!(projects("north"), 1);
     // The preview now compares with the rule in force.
-    let (_, now) = call("POST", "/preview", Some(json!({ "agent": "http://example.org/north", "groups": ["contractor"] })));
+    let (_, now) = call(
+        "POST",
+        "/preview",
+        Some(json!({ "agent": "http://example.org/north", "groups": ["contractor"] })),
+    );
     assert_eq!(now["rowRulesNow"].as_array().unwrap().len(), 1, "{now}");
     // A shape a rule uses cannot be removed; the rule first, then the shape.
     let (code, _) = call("DELETE", "/shapes?id=http://example.org/OwnArea", None);
@@ -3810,7 +3833,10 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
     let mut none = policy.clone();
     none["rowRules"] = json!([]);
     assert_eq!(call("PUT", "/policies", Some(none)).0, 200);
-    assert_eq!(call("DELETE", "/shapes?id=http://example.org/OwnArea", None).0, 204);
+    assert_eq!(
+        call("DELETE", "/shapes?id=http://example.org/OwnArea", None).0,
+        204
+    );
     assert_eq!(projects("north"), 3);
     assert!(!file().contains("OwnArea"), "{}", file());
 }

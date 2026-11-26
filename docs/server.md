@@ -2003,7 +2003,8 @@ Server admins (`tripletrail:admin`) read and change who may do what under `/$/ac
 the API the access pages use:
 
 - `GET /$/access`: for each dataset, its policies (as JSON: `id`, `agents`, `groups`,
-  `readAllGraphs`, `writeAllGraphs`, `readGraphs`, `writeGraphs`), the files they come from,
+  `readAllGraphs`, `writeAllGraphs`, `readGraphs`, `writeGraphs`, and the row rules
+  `rowRules`, `[{"rule": "sg:visibleIf", "shape": IRI}]`, with `hideReferences`), the files they come from,
   whether it has policies of its own, whether they can be edited (Turtle files only) and whether
   it is closed (policies are on and none apply to it); the API keys (label, agent, groups,
   datasets, expiry, and the first 8 hex digits of the hash as an id, never the hash); the
@@ -2019,7 +2020,28 @@ the API the access pages use:
   (a label) stay. A dataset without policies of its own first gets `policies/{name}.ttl` next
   to the configuration file, starting as a copy of the default policies, and the configuration
   names it (the JSON file is written again, with its keys sorted). An edit that would not load
-  puts every file back and answers 422. The change applies at once.
+  puts every file back and answers 422. The change applies at once. A policy's `rowRules`
+  (TripleTrail Enterprise) are written as given; a body without the key keeps those the file
+  has, so an older client never drops them. A policy whose rule names a shape written in place
+  (a blank node) is left to its file (422).
+- Row rule shapes (enterprise#8, TripleTrail Enterprise): `GET /$/access/datasets/{name}/shapes`
+  lists the node shapes of the dataset's policy files, each as Turtle with the policies whose
+  rules use it (`usedBy`), and the classes of the data with their instances (at most 200); with
+  `?class=IRI` also that class's properties, most used first, with a sample value and whether
+  values are IRIs or literals. `PUT …/shapes` with `{"id", "turtle"}` writes a shape: the
+  Turtle may use the file's prefixes and must describe only that shape and its blank nodes,
+  and is written again from its triples (`sh:` and `sg:` prefixes are added when missing).
+  `DELETE …/shapes?id=IRI` removes one; a shape a rule still uses cannot be removed (422).
+  Changing a file that has row rules needs a licence that covers `row-policies`.
+- `POST /$/access/datasets/{name}/preview` (TripleTrail Enterprise) shows what a change would
+  hide from a caller before it is saved. The body: `agent` and `groups` (as explain takes
+  them), and the change, `shapes` (`[{"id", "turtle"}]`) and `policy` (as `PUT …/policies`
+  takes it), applied to a copy of the policy file in memory. The answer has the row rules
+  now (`rowRulesNow`) and after (`rowRulesAfter`), and for each class (at most 200) its
+  `instances` and how many the caller sees now and after (`visibleNow`, `visibleAfter`). For
+  the first 20 classes it judges up to 100 instances one by one: `hidden` and `visible` give
+  up to three examples each, and `sampledEditable` how many of the `sampled` the caller could
+  change. The graphs the caller may read are those in force: the preview is about row rules.
 - `POST /$/access/keys` with `{"agent": IRI, "label", "groups", "datasets", "expires"}` (all
   but `agent` optional, as in `auth.apiKeys`) creates an API key: a random `mg_…` key that the
   answer (201, `{"id", "key"}`) shows once. Only its SHA-256 hash goes into the configuration's

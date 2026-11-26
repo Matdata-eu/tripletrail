@@ -463,7 +463,8 @@ impl Auth {
             .config
             .clone();
         let is_turtle = |f: &PathBuf| f.extension().and_then(|e| e.to_str()) == Some("ttl");
-        let read = |f: &PathBuf| std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()));
+        let read =
+            |f: &PathBuf| std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()));
         match config.datasets.get(name).filter(|d| d.policies.is_some()) {
             Some(d) => {
                 let holds = |f: &PathBuf| {
@@ -475,7 +476,9 @@ impl Auth {
                     .iter()
                     .position(|f| is_turtle(f) && holds(f))
                     .or_else(|| d.files.iter().position(is_turtle))
-                    .ok_or_else(|| format!("The policies of {name} are not in a Turtle (.ttl) file"))?;
+                    .ok_or_else(|| {
+                        format!("The policies of {name} are not in a Turtle (.ttl) file")
+                    })?;
                 let texts = d
                     .files
                     .iter()

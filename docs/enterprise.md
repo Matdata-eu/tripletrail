@@ -163,6 +163,11 @@ feature, `row-policies` in a licence (#818).
 - `GET /$/license` has `rowPolicies`: `inUse` (a policy has row rules), `enforced`, `editable`
   and, when they cannot be changed, the `reason`. The start log warns when row rules are in
   use and cannot be changed.
+- **The Access page** lists the row rules of each policy and builds new ones from the data,
+  without Turtle: a class, conditions on its properties, a preview of what a caller would see
+  before the rule is saved (see the guide's
+  [chapter 12](guide/12-access-control.md#try-a-rule-before-you-save-it)). The preview works
+  without a licence; saving needs one, as above.
 
 In the code, the open engine keeps what a query needs to apply row rules (the rules, the row
 filter the store scans with, the cache of compiled filters) and a `RowCompiler` hook;

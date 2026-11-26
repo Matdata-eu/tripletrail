@@ -100,7 +100,15 @@ impl Policy {
             hide_references: self
                 .rows
                 .iter()
-                .any(|r| matches!(r, RowRule::VisibleIf { references: false, .. }))
+                .any(|r| {
+                    matches!(
+                        r,
+                        RowRule::VisibleIf {
+                            references: false,
+                            ..
+                        }
+                    )
+                })
                 .then_some(false),
         })
     }

@@ -931,10 +931,13 @@ fn preview(
             let iri = tripletrail::oxigraph::model::NamedNode::new_unchecked(class.as_str());
             let sample = select_rows(
                 &entry.engine,
-                &format!("SELECT DISTINCT ?s WHERE {{ ?s a {iri} FILTER(isIRI(?s)) }} LIMIT {SAMPLED}"),
+                &format!(
+                    "SELECT DISTINCT ?s WHERE {{ ?s a {iri} FILTER(isIRI(?s)) }} LIMIT {SAMPLED}"
+                ),
                 None,
             )?;
-            let (mut hidden, mut visible, mut editable, mut judged) = (Vec::new(), Vec::new(), 0, 0);
+            let (mut hidden, mut visible, mut editable, mut judged) =
+                (Vec::new(), Vec::new(), 0, 0);
             for s in sample.into_iter().filter_map(|r| r[0].clone()) {
                 let Ok(node) = tripletrail::oxigraph::model::NamedNode::new(s.as_str()) else {
                     continue;

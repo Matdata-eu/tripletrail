@@ -386,13 +386,16 @@ curl -s -H 'Authorization: Bearer admin-secret-3' -H 'Content-Type: application/
 
 <!-- test: enterprise output contains -->
 ```text
-PREVIEW
+"class":"https://example.org/rail#Section","hidden":["https://example.org/rail#S01","https://example.org/rail#S02","https://example.org/rail#S05"],"instances":12
+"visible":["https://example.org/rail#S03","https://example.org/rail#S04"],"visibleAfter":2,"visibleNow":3
 ```
 
-For each class, the answer counts the instances, how many Bob sees now (`visibleNow`) and how
-many he would see after (`visibleAfter`). For the first classes it gives examples of what
-would be hidden and visible, and how many of the instances it judged he could change. Nothing
-is written: the rules in force stay until the policy is saved. `shapes` in the body adds or
+For each class, the answer (parts of it are shown) counts the instances, how many Bob sees
+now (`visibleNow`) and how many he would see after (`visibleAfter`): two sections instead of
+three, S03 and S04 of line 25. The stations do not change. For the first classes it gives
+examples of what would be hidden and visible, and how many of the instances it judged he
+could change (`sampledEditable`). Nothing is written: the rules in force stay until the
+policy is saved. `shapes` in the body adds or
 replaces shapes the same way, as `[{"id", "turtle"}]`.
 
 On the **Access** page, the **Row rules** section of a dataset does the same without Turtle.

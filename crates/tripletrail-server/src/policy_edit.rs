@@ -323,7 +323,11 @@ fn block(
         lines.push(format!("    {} {}", sg("writeGraph"), compact(g, prefixes)));
     }
     for r in rows {
-        lines.push(format!("    {} {}", sg(&r.rule), compact(&r.shape, prefixes)));
+        lines.push(format!(
+            "    {} {}",
+            sg(&r.rule),
+            compact(&r.shape, prefixes)
+        ));
     }
     if let Some(h) = hide_references {
         lines.push(format!("    {} {h}", sg("hideReferences")));
@@ -597,7 +601,11 @@ fn object(
             object(&t.object, triples, prefixes, depth + 1, seen)?
         ));
     }
-    Ok(format!("[\n{}\n{}]", lines.join(" ;\n"), "    ".repeat(depth)))
+    Ok(format!(
+        "[\n{}\n{}]",
+        lines.join(" ;\n"),
+        "    ".repeat(depth)
+    ))
 }
 
 /// The Turtle block of the shape `id`, from `triples`: those about it, with the blank nodes
@@ -627,7 +635,10 @@ fn shape_block(
         return Err(format!("The Turtle has no triples about the shape {id}"));
     }
     if !typed {
-        lines.insert(0, format!("    a {}", compact(&format!("{SHACL}NodeShape"), prefixes)));
+        lines.insert(
+            0,
+            format!("    a {}", compact(&format!("{SHACL}NodeShape"), prefixes)),
+        );
     }
     let written = triples.iter().filter(|t| match &t.subject {
         NamedOrBlankNode::NamedNode(n) => n.as_str() == id,
@@ -643,7 +654,11 @@ fn shape_block(
     Ok(if lines.is_empty() {
         format!("{} {first} .", compact(id, prefixes))
     } else {
-        format!("{} {first} ;\n{} .", compact(id, prefixes), lines.join(" ;\n"))
+        format!(
+            "{} {first} ;\n{} .",
+            compact(id, prefixes),
+            lines.join(" ;\n")
+        )
     })
 }
 
@@ -659,10 +674,9 @@ fn spans_about(text: &str, id: &str) -> Result<Vec<Span>, String> {
             continue;
         }
         let triples = triples(&directives, statement)?;
-        if triples
-            .first()
-            .is_some_and(|t| matches!(&t.subject, NamedOrBlankNode::NamedNode(n) if n.as_str() == id))
-        {
+        if triples.first().is_some_and(
+            |t| matches!(&t.subject, NamedOrBlankNode::NamedNode(n) if n.as_str() == id),
+        ) {
             found.push(span);
         }
     }
@@ -736,7 +750,9 @@ pub fn shapes(text: &str) -> Result<Vec<(String, String)>, String> {
             while let Some(s) = todo.pop() {
                 for t in all.iter().filter(|t| t.subject == s) {
                     if let Term::BlankNode(b) = &t.object
-                        && !keep.iter().any(|k| matches!(&k.subject, NamedOrBlankNode::BlankNode(x) if x == b))
+                        && !keep
+                            .iter()
+                            .any(|k| matches!(&k.subject, NamedOrBlankNode::BlankNode(x) if x == b))
                     {
                         todo.push(NamedOrBlankNode::BlankNode(b.clone()));
                     }
@@ -884,7 +900,10 @@ ex:OwnArea a sh:NodeShape ; sh:targetClass ex:Project ;
         }]);
         let changed = write(ROWS, &spec).unwrap();
         assert!(changed.contains("sg:editableIf ex:OwnArea"), "{changed}");
-        assert!(!changed.contains("visibleIf") && !changed.contains("hideReferences"), "{changed}");
+        assert!(
+            !changed.contains("visibleIf") && !changed.contains("hideReferences"),
+            "{changed}"
+        );
         // As JSON, and back.
         let json = spec.to_json();
         assert_eq!(json["rowRules"][0]["rule"], "sg:editableIf");
@@ -894,7 +913,14 @@ ex:OwnArea a sh:NodeShape ; sh:targetClass ex:Project ;
         // A shape written in place stays in its file.
         let inline = "@prefix sg: <https://matdata.eu/ns/sparql-guard#> .
             <urn:p> a sg:Policy ; sg:group \"g\" ; sg:visibleIf [ a <http://www.w3.org/ns/shacl#NodeShape> ] .";
-        let err = write(inline, &PolicySpec { id: "urn:p".to_owned(), groups: vec!["g".to_owned()], ..Default::default() });
+        let err = write(
+            inline,
+            &PolicySpec {
+                id: "urn:p".to_owned(),
+                groups: vec!["g".to_owned()],
+                ..Default::default()
+            },
+        );
         assert!(err.unwrap_err().contains("edit it in its file"));
     }
 
@@ -904,8 +930,15 @@ ex:OwnArea a sh:NodeShape ; sh:targetClass ex:Project ;
             ex:OwnArea a sh:NodeShape ; sh:targetClass ex:Project ;
               sh:property [ sh:path ( ex:assignedTo ex:area ) ; sh:in ( ex:north ex:east ) ] .";
         let written = write_shape(ROWS, "http://example.org/OwnArea", turtle).unwrap();
-        assert_eq!(written.matches("ex:OwnArea a sh:NodeShape").count(), 1, "{written}");
-        assert!(written.contains("sh:path ( ex:assignedTo ex:area )"), "{written}");
+        assert_eq!(
+            written.matches("ex:OwnArea a sh:NodeShape").count(),
+            1,
+            "{written}"
+        );
+        assert!(
+            written.contains("sh:path ( ex:assignedTo ex:area )"),
+            "{written}"
+        );
         assert!(written.contains("sh:in ( ex:north ex:east )"), "{written}");
         assert!(!written.contains("requestingAgent"), "{written}");
         assert!(written.contains("sg:visibleIf ex:OwnArea"), "{written}");
@@ -915,11 +948,21 @@ ex:OwnArea a sh:NodeShape ; sh:targetClass ex:Project ;
                 .for_slice(written.as_bytes())
                 .all(|t| t.is_ok())
         );
-        assert_eq!(find(&written, "http://example.org/Contractors").unwrap().rows.len(), 1);
+        assert_eq!(
+            find(&written, "http://example.org/Contractors")
+                .unwrap()
+                .rows
+                .len(),
+            1
+        );
         let listed = shapes(&written).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].0, "http://example.org/OwnArea");
-        assert!(listed[0].1.contains("sh:in ( ex:north ex:east )"), "{}", listed[0].1);
+        assert!(
+            listed[0].1.contains("sh:in ( ex:north ex:east )"),
+            "{}",
+            listed[0].1
+        );
         // A new shape is appended, with sh: added to a file without it.
         let fresh = write_shape(
             "@prefix ex: <http://example.org/> .\n",
@@ -927,11 +970,31 @@ ex:OwnArea a sh:NodeShape ; sh:targetClass ex:Project ;
             "<http://example.org/Open> <http://www.w3.org/ns/shacl#targetClass> ex:Doc .",
         )
         .unwrap();
-        assert!(fresh.contains("@prefix sh: <http://www.w3.org/ns/shacl#> ."), "{fresh}");
-        assert!(fresh.contains("ex:Open a sh:NodeShape ;\n    sh:targetClass ex:Doc ."), "{fresh}");
+        assert!(
+            fresh.contains("@prefix sh: <http://www.w3.org/ns/shacl#> ."),
+            "{fresh}"
+        );
+        assert!(
+            fresh.contains("ex:Open a sh:NodeShape ;\n    sh:targetClass ex:Doc ."),
+            "{fresh}"
+        );
         // Triples about anything else are refused, and so is Turtle that does not parse.
-        assert!(write_shape(ROWS, "http://example.org/OwnArea", "ex:Other a sh:NodeShape .").is_err());
-        assert!(write_shape(ROWS, "http://example.org/OwnArea", "ex:OwnArea sh:targetClass").is_err());
+        assert!(
+            write_shape(
+                ROWS,
+                "http://example.org/OwnArea",
+                "ex:Other a sh:NodeShape ."
+            )
+            .is_err()
+        );
+        assert!(
+            write_shape(
+                ROWS,
+                "http://example.org/OwnArea",
+                "ex:OwnArea sh:targetClass"
+            )
+            .is_err()
+        );
         let removed = remove_shape(&written, "http://example.org/OwnArea").unwrap();
         assert!(!removed.contains("ex:OwnArea a"), "{removed}");
         assert!(remove_shape(&removed, "http://example.org/OwnArea").is_err());
