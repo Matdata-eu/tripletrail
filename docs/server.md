@@ -239,6 +239,10 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   load sorts them on disk, under the dataset's directory, and writes the indexes straight to
   files, so a dataset larger than memory can be loaded. Without it everything is sorted in
   memory.
+- `tripletrail load` writes a progress line to standard error every minute while a file loads
+  (#232): the store's step (`reading`, `sorting`, `writing`, `entailing`), the triples read so
+  far, and how much of the file has been read. `Store::load_progress()` gives the same step
+  and count to code that loads through the store.
 - `tripletrail load` makes a new dataset that keeps a WKT literal only in binary form when
   its text can be written back from the geometry exactly (#152, from #370's `--render-wkt`):
   about the size of the text less on disk, and coordinates with at most 9 decimals are kept as

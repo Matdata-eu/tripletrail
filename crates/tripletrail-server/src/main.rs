@@ -1555,6 +1555,101 @@ fn export(
     Ok(())
 }
 
+/// How often a load writes its progress line.
+const LOAD_PROGRESS_EVERY: Duration = Duration::from_secs(60);
+
+/// Runs `load` while another thread writes a line to standard error every
+/// [`LOAD_PROGRESS_EVERY`]: the store's step and triples read (#232), and how much of the
+/// file has been read. A load that ends sooner writes none.
+fn with_load_progress(
+    engine: &Engine,
+    path: &Path,
+    size: u64,
+    read: &std::sync::atomic::AtomicU64,
+    started: std::time::Instant,
+    load: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let (done, wait) = std::sync::mpsc::channel::<()>();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                wait.recv_timeout(LOAD_PROGRESS_EVERY)
+            {
+                let read = read.load(std::sync::atomic::Ordering::Relaxed);
+                eprintln!(
+                    "{}",
+                    load_progress_line(engine, path, read, size, started.elapsed())
+                );
+            }
+        });
+        let result = load();
+        drop(done);
+        result
+    })
+}
+
+/// One progress line of a load, as `with_load_progress` writes it.
+fn load_progress_line(
+    engine: &Engine,
+    path: &Path,
+    read: u64,
+    size: u64,
+    elapsed: Duration,
+) -> String {
+    let store = match engine.store() {
+        tripletrail::store::Dataset::TripleTrail(s) => {
+            let p = s.load_progress();
+            format!("{}, {} triples, ", p.phase, grouped(p.quads))
+        }
+        _ => String::new(),
+    };
+    let gb = |b: u64| b as f64 / 1e9;
+    // The size of a pipe, or of a file whose metadata could not be read, is not known.
+    let read = if size > 0 {
+        format!(
+            "{:.1} of {:.1} GB read ({:.0} %)",
+            gb(read),
+            gb(size),
+            100.0 * read as f64 / size as f64
+        )
+    } else {
+        format!("{:.1} GB read", gb(read))
+    };
+    format!(
+        "loading {}: {store}{read}, {} s",
+        path.display(),
+        elapsed.as_secs()
+    )
+}
+
+/// `n` with a comma between each group of three digits.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A reader that counts the bytes read through it.
+struct Counted<'a, R> {
+    inner: R,
+    read: &'a std::sync::atomic::AtomicU64,
+}
+
+impl<R: std::io::Read> std::io::Read for Counted<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read
+            .fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+        Ok(n)
+    }
+}
+
 fn load_file_with(
     engine: &Engine,
     path: &Path,
@@ -1584,10 +1679,19 @@ fn load_file_with(
     match format {
         tripletrail_server::rdf_formats::Format::Rdf(format) => {
             let file = std::fs::File::open(path)?;
-            engine.load(
-                parser(format)?,
-                std::io::BufReader::with_capacity(1 << 20, file),
-            )?;
+            let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+            let read = std::sync::atomic::AtomicU64::new(0);
+            let reader = Counted {
+                inner: file,
+                read: &read,
+            };
+            with_load_progress(engine, path, size, &read, started, || {
+                engine.load(
+                    parser(format)?,
+                    std::io::BufReader::with_capacity(1 << 20, reader),
+                )?;
+                Ok(())
+            })?;
         }
         // RDF/JSON and TriX (#831): read whole, and loaded as N-Quads.
         extra => {
@@ -3990,8 +4094,42 @@ fn audit_report_text(report: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, lookup_joins_from_env, parse_size, read_basemaps};
+    use super::{
+        Cli, Command, grouped, load_progress_line, lookup_joins_from_env, parse_size, read_basemaps,
+    };
     use clap::Parser;
+
+    #[test]
+    fn a_load_progress_line_says_the_step_the_triples_and_the_bytes_read() {
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1_000), "1,000");
+        assert_eq!(grouped(5_000_008_711), "5,000,008,711");
+        let engine = tripletrail::Engine::new_tripletrail();
+        let line = load_progress_line(
+            &engine,
+            std::path::Path::new("planet.nt"),
+            232_000_000_000,
+            932_000_000_000,
+            std::time::Duration::from_secs(3_600),
+        );
+        assert_eq!(
+            line,
+            "loading planet.nt: idle, 0 triples, 232.0 of 932.0 GB read (25 %), 3600 s"
+        );
+        // A pipe: its size is not known.
+        let line = load_progress_line(
+            &engine,
+            std::path::Path::new("/dev/stdin"),
+            200_000_000,
+            0,
+            std::time::Duration::from_secs(60),
+        );
+        assert_eq!(
+            line,
+            "loading /dev/stdin: idle, 0 triples, 0.2 GB read, 60 s"
+        );
+    }
 
     #[test]
     fn a_basemap_may_name_its_last_zoom() {
