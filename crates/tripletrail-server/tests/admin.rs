@@ -3390,3 +3390,107 @@ fn branded_pages_carry_the_operators_name_logo_and_colour() {
         .unwrap();
     assert_eq!(favicon.content_type(), "image/svg+xml");
 }
+
+/// Notices and links (#262): `--banner`, `--site-link`, `--support-url` and `--contact-email`
+/// reach the web UI, the OGC API and describe pages, `/$/ui/config.json` and the catalog; an
+/// image URL's origin is allowed by the REST API and GraphQL pages' `img-src`.
+#[test]
+fn banner_footer_links_and_contact_reach_the_pages() {
+    let engine = Engine::new_tripletrail();
+    engine
+        .load(
+            RdfFormat::Turtle,
+            &b"@prefix geo: <http://www.opengis.net/ont/geosparql#> .
+               <http://example.com/s1> a <http://example.com/Station> ;
+                 <http://www.w3.org/2000/01/rdf-schema#label> \"Brussels\" ;
+                 geo:hasGeometry [ geo:asWKT \"POINT(4.35 50.85)\"^^geo:wktLiteral ] ."[..],
+        )
+        .unwrap();
+    let branding = tripletrail_server::branding::Branding::new(
+        Some("Rail KG"),
+        Some("https://cdn.example.org/favicon.png"),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+    .with_notices(
+        Some("Demo: data is reset <nightly>"),
+        Some("warning"),
+        None,
+        &["Privacy|https://example.org/privacy".to_owned()],
+        Some("https://example.org/help"),
+        Some("data@example.org"),
+    )
+    .unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        [("kg".to_owned(), engine)],
+        Options {
+            branding,
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let get = |p: &str| {
+        ureq::get(&format!("{base}{p}"))
+            .set("Accept", "text/html")
+            .call()
+            .unwrap()
+    };
+    let page = get("/$/ui/").into_string().unwrap();
+    assert!(page.contains("class=\"site-banner warning\""), "{page}");
+    assert!(page.contains("<span>Demo: data is reset &lt;nightly&gt;</span>"));
+    assert!(page.contains(
+        "<footer class=\"site-footer\"><a href=\"https://example.org/privacy\">Privacy</a></footer>"
+    ));
+    assert!(page.contains("data-support-url=\"https://example.org/help\""));
+    assert!(page.contains("data-contact-email=\"data@example.org\""));
+    let api = get("/$/ui/api/kg");
+    assert!(
+        api.header("Content-Security-Policy")
+            .unwrap()
+            .contains("img-src 'self' data: https://cdn.example.org;"),
+        "{:?}",
+        api.header("Content-Security-Policy")
+    );
+    let ogc = get("/kg/ogc/collections?f=html").into_string().unwrap();
+    assert!(
+        ogc.contains(" · Rail KG</title><link rel=\"icon\" href=\"/$/ui/brand/favicon\">"),
+        "{ogc}"
+    );
+    assert!(ogc.contains("<a href=\"https://example.org/privacy\">Privacy</a>"));
+    let describe = get("/kg/describe?iri=http%3A%2F%2Fexample.com%2Fs1")
+        .into_string()
+        .unwrap();
+    assert!(
+        describe.contains("<title>Brussels · Rail KG</title>"),
+        "{describe}"
+    );
+    assert!(describe.contains("<a href=\"https://example.org/privacy\">Privacy</a>"));
+    let catalog = ureq::get(&format!("{base}/.well-known/dcat"))
+        .set("Accept", "application/n-triples")
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(catalog.contains("<mailto:data@example.org>"), "{catalog}");
+    let config: Value = serde_json::from_str(
+        &ureq::get(&format!("{base}/$/ui/config.json"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        config["site"]["banner"]["text"],
+        "Demo: data is reset <nightly>"
+    );
+    assert_eq!(
+        config["site"]["links"][0]["url"],
+        "https://example.org/privacy"
+    );
+}

@@ -2196,6 +2196,7 @@ fn route(
                     &aliases,
                     state.options.catalog.as_deref(),
                     state.options.branding.name.as_deref(),
+                    state.options.branding.contact_email.as_deref(),
                 )?;
                 drop(registry);
                 let body = service_description::serialize(&triples, format)?;
@@ -2341,6 +2342,7 @@ fn route(
                     rows: rows.as_ref(),
                     shapes: &shapes,
                     ui: state.options.ui,
+                    brand: &state.options.branding,
                     dataset: &entry.name,
                     basemap: state.options.map_tiles.as_deref().map(|t| {
                         (
@@ -3146,6 +3148,7 @@ fn dereference(
             rows: rows.as_ref(),
             shapes: &shapes,
             ui: state.options.ui,
+            brand: &state.options.branding,
             dataset: &entry.name,
             basemap: state.options.map_tiles.as_deref().map(|t| {
                 (

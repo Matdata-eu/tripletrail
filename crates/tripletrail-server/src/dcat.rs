@@ -27,6 +27,8 @@ const FOAF: &str = "http://xmlns.com/foaf/0.1/";
 const SPARQL_PROTOCOL: &str = "https://www.w3.org/TR/sparql11-protocol/";
 const NQUADS: &str = "http://www.iana.org/assignments/media-types/application/n-quads";
 
+const VCARD: &str = "http://www.w3.org/2006/vcard/ns#";
+
 fn dcat(name: &str) -> NamedNode {
     NamedNode::new_unchecked(format!("{DCAT}{name}"))
 }
@@ -67,6 +69,7 @@ pub(crate) fn describe(
     aliases: &[(&str, &str)],
     file: Option<&str>,
     site_name: Option<&str>,
+    contact_email: Option<&str>,
 ) -> Result<Vec<Triple>, HttpError> {
     // The origin comes from the request's Host (or X-Forwarded-Host): not an IRI, the
     // request is wrong.
@@ -177,6 +180,30 @@ pub(crate) fn describe(
                 dct("title"),
                 Literal::new_simple_literal(*name).into(),
             ));
+        }
+        // `--contact-email` (#262): DCAT-AP recommends a contact point for each dataset.
+        if let Some(email) = contact_email
+            && !has(&out, ds, &dcat("contactPoint"))
+        {
+            let contact: NamedOrBlankNode = iri(format!("{origin}/#contact")).into();
+            add.push(t(ds, dcat("contactPoint"), contact.clone().into()));
+            if !add.iter().any(|x| x.subject == contact) {
+                add.push(t(
+                    &contact,
+                    rdf::TYPE.into(),
+                    iri(format!("{VCARD}Kind")).into(),
+                ));
+                add.push(t(
+                    &contact,
+                    iri(format!("{VCARD}fn")),
+                    Literal::new_simple_literal(site_name.unwrap_or("Contact")).into(),
+                ));
+                add.push(t(
+                    &contact,
+                    iri(format!("{VCARD}hasEmail")),
+                    iri(format!("mailto:{email}")).into(),
+                ));
+            }
         }
         if !has(&out, ds, &dct("description")) {
             add.push(t(
@@ -298,6 +325,7 @@ mod tests {
             &[("live", "kg"), ("secalias", "secret")],
             Some(file),
             None,
+            None,
         )
         .unwrap();
         let text: Vec<String> = triples.iter().map(ToString::to_string).collect();
@@ -333,16 +361,25 @@ mod tests {
 
     #[test]
     fn a_host_that_is_no_iri_is_the_requests_fault() {
-        let e = describe("http://a b<>", &["kg"], &["kg"], &[], None, None).unwrap_err();
+        let e = describe("http://a b<>", &["kg"], &["kg"], &[], None, None, None).unwrap_err();
         assert_eq!(e.0, 400);
     }
 
     #[test]
     fn without_a_file_the_mandatory_properties_are_there() {
-        let triples = describe("http://h", &["kg"], &["kg"], &[], None, None).unwrap();
+        let triples = describe("http://h", &["kg"], &["kg"], &[], None, None, None).unwrap();
         let text: Vec<String> = triples.iter().map(ToString::to_string).collect();
         // --site-name titles the catalog when the file does not (#262).
-        let named = describe("http://h", &["kg"], &["kg"], &[], None, Some("Rail KG")).unwrap();
+        let named = describe(
+            "http://h",
+            &["kg"],
+            &["kg"],
+            &[],
+            None,
+            Some("Rail KG"),
+            Some("data@example.org"),
+        )
+        .unwrap();
         assert!(named.iter().any(|t| {
             t.to_string()
                 .ends_with("<http://purl.org/dc/terms/title> \"Rail KG\"")

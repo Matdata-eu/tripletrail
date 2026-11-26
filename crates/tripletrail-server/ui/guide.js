@@ -8,6 +8,10 @@
   const REPO = "https://github.com/Matdata-eu/tripletrail";
   const VERSION = document.currentScript.dataset.version;
   const MATGUI = document.currentScript.dataset.matgui;
+  // The server's own name, help page and e-mail (--site-name, --support-url, --contact-email; #262).
+  const SITE = document.documentElement.dataset.siteName || "TripleTrail";
+  const SUPPORT = document.documentElement.dataset.supportUrl || "";
+  const CONTACT = document.documentElement.dataset.contactEmail || "";
   const TOUR_KEY = "tripletrail-tour";
   const TOUR_VERSION = "2026-11-11"; // bump when the pages change enough to show them again
   const NEWS_KEY = "tripletrail-whats-new-seen";
@@ -241,8 +245,14 @@
           ", or read the ", link(`${REPO}/blob/main/docs/server.md`, "server guide"), "."),
         el("p", {}, whatsNewLink(d), ": what is new, improved and fixed in each release."),
         el("h3", {}, "Feedback"),
-        el("p", {}, "Found a bug, missing a feature or have a question? Open an issue on ",
-          link(`${REPO}/issues/new`, "GitHub"), ". Source code and documentation: ", link(REPO, REPO.replace(/^https:\/\//, "")), "."),
+        // --support-url and --contact-email (#262): this server's own help first.
+        SUPPORT || CONTACT
+          ? el("p", {}, "Found a bug, missing a feature or have a question? ",
+            ...(SUPPORT ? ["Ask ", link(SUPPORT, SITE), CONTACT ? " or write to " : "."] : ["Write to "]),
+            ...(CONTACT ? [link(`mailto:${CONTACT}`, CONTACT), "."] : []),
+            " TripleTrail's source code and documentation: ", link(REPO, REPO.replace(/^https:\/\//, "")), ".")
+          : el("p", {}, "Found a bug, missing a feature or have a question? Open an issue on ",
+            link(`${REPO}/issues/new`, "GitHub"), ". Source code and documentation: ", link(REPO, REPO.replace(/^https:\/\//, "")), "."),
         el("h3", {}, "Support the project"),
         el("p", {}, "tripletrail and the tools next to it, such as ", link("https://github.com/Matdata-eu/Matgui", "MatGUI"),
           " and ", link("https://github.com/Matdata-eu/rinf-atlas", "RINF Atlas"),

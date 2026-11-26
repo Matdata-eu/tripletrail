@@ -1162,6 +1162,34 @@ struct ServeArgs {
     /// text must read on it (contrast at least 4.5:1); the dark theme uses lighter shades.
     #[arg(long, env = "TRIPLETRAIL_SITE_COLOR", value_name = "#RRGGBB")]
     site_color: Option<String>,
+    /// One line of plain text over every page of the web UI, e.g. "Public read-only demo:
+    /// data is reset nightly". Viewers may dismiss it for their browser session.
+    #[arg(long, env = "TRIPLETRAIL_BANNER", value_name = "TEXT")]
+    banner: Option<String>,
+    /// How the banner looks: info (the accent colour) or warning (amber).
+    #[arg(long, env = "TRIPLETRAIL_BANNER_LEVEL", value_name = "info|warning")]
+    banner_level: Option<String>,
+    /// An http(s) URL the banner's text links to.
+    #[arg(long, env = "TRIPLETRAIL_BANNER_LINK", value_name = "URL")]
+    banner_link: Option<String>,
+    /// A link in the footer of the web UI and of the OGC API and describe pages, as
+    /// `LABEL|URL` (plain text and an http(s) URL), e.g. `Privacy|https://example.org/privacy`.
+    /// Repeat it for more; in the environment, one per line.
+    #[arg(
+        long = "site-link",
+        env = "TRIPLETRAIL_SITE_LINKS",
+        value_delimiter = '\n',
+        value_name = "LABEL|URL"
+    )]
+    site_links: Vec<String>,
+    /// Where the About dialog sends a viewer with a bug or a question, in place of
+    /// TripleTrail's GitHub issues: an http(s) URL (a helpdesk, a contact page).
+    #[arg(long, env = "TRIPLETRAIL_SUPPORT_URL", value_name = "URL")]
+    support_url: Option<String>,
+    /// The e-mail address of whoever runs this server: shown in the About dialog, and the
+    /// datasets' contact point in the DCAT catalog when --catalog gives none.
+    #[arg(long, env = "TRIPLETRAIL_CONTACT_EMAIL", value_name = "ADDRESS")]
+    contact_email: Option<String>,
     /// Write one JSON line per request to standard output (time, method, path, dataset,
     /// status, ms, query_hash).
     #[arg(long, env = "TRIPLETRAIL_LOG_REQUESTS")]
@@ -2176,6 +2204,12 @@ fn serve(args: ServeArgs) -> Result<()> {
         site_logo,
         site_logo_dark,
         site_color,
+        banner,
+        banner_level,
+        banner_link,
+        site_links,
+        support_url,
+        contact_email,
         log_requests,
         shutdown_grace,
         base_iris,
@@ -2502,6 +2536,14 @@ fn serve(args: ServeArgs) -> Result<()> {
                 site_logo.as_deref(),
                 site_logo_dark.as_deref(),
                 site_color.as_deref(),
+            )?
+            .with_notices(
+                banner.as_deref(),
+                banner_level.as_deref(),
+                banner_link.as_deref(),
+                &site_links,
+                support_url.as_deref(),
+                contact_email.as_deref(),
             )?,
             log_requests,
             shutdown_grace: Duration::try_from_secs_f64(shutdown_grace)

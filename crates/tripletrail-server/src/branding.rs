@@ -1,6 +1,7 @@
 //! Server branding (#262): the name, favicon, logo and accent colour an operator gives the web UI
 //! and the other HTML pages (`--site-name`, `--site-favicon`, `--site-logo`, `--site-logo-dark`,
-//! `--site-color`).
+//! `--site-color`), and the notices and links on them (`--banner`, `--site-link`,
+//! `--support-url`, `--contact-email`).
 //!
 //! Values are plain text or checked `http(s)` URLs, never HTML. Image files are read once at
 //! start-up and served from `/$/ui/brand/{favicon,logo,logo-dark}` with a strict content type;
@@ -50,6 +51,19 @@ pub struct Branding {
     pub(crate) logo: Option<Image>,
     pub(crate) logo_dark: Option<Image>,
     pub(crate) color: Option<Color>,
+    pub(crate) banner: Option<Banner>,
+    /// `--site-link`: (label, URL) for the pages' footer.
+    pub(crate) links: Vec<(String, String)>,
+    pub(crate) support_url: Option<String>,
+    pub(crate) contact_email: Option<String>,
+}
+
+/// One line of notice over every page of the web UI (`--banner`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Banner {
+    pub(crate) text: String,
+    pub(crate) warning: bool,
+    pub(crate) link: Option<String>,
 }
 
 impl Branding {
@@ -81,7 +95,150 @@ impl Branding {
                 .map(|v| image("--site-logo-dark", v))
                 .transpose()?,
             color: color.map(parse_color).transpose()?,
+            ..Branding::default()
         })
+    }
+
+    /// Adds the notices and links: a banner of one line of plain text (`info` or `warning`,
+    /// with an optional link), footer links as `LABEL|URL`, the support link that the About
+    /// dialog's feedback points to, and the contact e-mail. URLs are `http(s)`.
+    pub fn with_notices(
+        mut self,
+        banner: Option<&str>,
+        banner_level: Option<&str>,
+        banner_link: Option<&str>,
+        links: &[String],
+        support_url: Option<&str>,
+        contact_email: Option<&str>,
+    ) -> Result<Branding, String> {
+        let warning = match banner_level.map(str::trim) {
+            None | Some("" | "info") => false,
+            Some("warning") => true,
+            Some(other) => {
+                return Err(format!("--banner-level takes info or warning, not {other}"));
+            }
+        };
+        let link = banner_link
+            .map(|u| checked_url("--banner-link", u))
+            .transpose()?;
+        self.banner = match banner.map(str::trim) {
+            None | Some("") => {
+                if link.is_some() || warning {
+                    return Err("--banner-level and --banner-link need --banner".to_owned());
+                }
+                None
+            }
+            Some(text) => Some(Banner {
+                text: one_line("--banner", text, 200)?,
+                warning,
+                link,
+            }),
+        };
+        self.links = links
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let (label, url) = l.split_once('|').ok_or_else(|| {
+                    format!("--site-link takes LABEL|URL, as Privacy|https://example.org/privacy, not {l}")
+                })?;
+                Ok((
+                    one_line("--site-link", label.trim(), 40)?,
+                    checked_url("--site-link", url)?,
+                ))
+            })
+            .collect::<Result<_, String>>()?;
+        self.support_url = support_url
+            .map(|u| checked_url("--support-url", u))
+            .transpose()?;
+        self.contact_email = match contact_email.map(str::trim) {
+            None | Some("") => None,
+            Some(e) => {
+                let ok = e.len() <= 254
+                    && e.split('@').count() == 2
+                    && e.split('@').all(|p| !p.is_empty())
+                    && e.split('@').nth(1).is_some_and(|d| d.contains('.'))
+                    && !e.chars().any(|c| {
+                        c.is_whitespace()
+                            || c.is_control()
+                            || matches!(
+                                c,
+                                '"' | '<'
+                                    | '>'
+                                    | '\\'
+                                    | ','
+                                    | ';'
+                                    | '('
+                                    | ')'
+                                    | '{'
+                                    | '}'
+                                    | '|'
+                                    | '^'
+                                    | '`'
+                            )
+                    });
+                if !ok {
+                    return Err(format!("--contact-email: {e} is not an e-mail address"));
+                }
+                Some(e.to_owned())
+            }
+        };
+        Ok(self)
+    }
+
+    /// The banner over the web UI's pages, which a viewer may dismiss for the browser session.
+    /// Empty without `--banner`.
+    pub(crate) fn banner_html(&self) -> String {
+        let Some(b) = &self.banner else {
+            return String::new();
+        };
+        let text = escape(&b.text);
+        let text = match &b.link {
+            Some(url) => format!(
+                "<a href=\"{}\" target=\"_blank\" rel=\"noopener\">{text}</a>",
+                escape(url)
+            ),
+            None => text,
+        };
+        format!(
+            "<div class=\"site-banner {}\" id=\"site-banner\" role=\"status\" data-text=\"{}\">\
+             <span>{text}</span><button type=\"button\" class=\"site-banner-close\" \
+             aria-label=\"Dismiss\" title=\"Dismiss\">×</button></div>",
+            if b.warning { "warning" } else { "info" },
+            escape(&b.text),
+        )
+    }
+
+    /// The footer of `--site-link`s, for the web UI and the server's other HTML pages. Empty
+    /// without them.
+    pub(crate) fn footer_html(&self) -> String {
+        if self.links.is_empty() {
+            return String::new();
+        }
+        let links: Vec<String> = self
+            .links
+            .iter()
+            .map(|(label, url)| format!("<a href=\"{}\">{}</a>", escape(url), escape(label)))
+            .collect();
+        format!("<footer class=\"site-footer\">{}</footer>", links.join(" "))
+    }
+
+    /// The origins of the brand's images given as URLs, for the `img-src` of pages with a
+    /// strict `Content-Security-Policy`: a favicon follows its redirect.
+    pub(crate) fn image_origins(&self) -> String {
+        let mut origins: Vec<String> = [&self.favicon, &self.logo, &self.logo_dark]
+            .into_iter()
+            .filter_map(|i| match i {
+                Some(Image::Url(u)) => {
+                    let (scheme, rest) = u.split_once("://")?;
+                    let host = rest.split(['/', '?', '#']).next()?;
+                    Some(format!(" {}://{host}", scheme.to_ascii_lowercase()))
+                }
+                _ => None,
+            })
+            .collect();
+        origins.sort();
+        origins.dedup();
+        origins.concat()
     }
 
     /// The name the pages carry: `--site-name`, or TripleTrail.
@@ -105,6 +262,16 @@ impl Branding {
             "/$/ui/brand/favicon"
         } else {
             "/$/ui/icon.svg"
+        }
+    }
+
+    /// The favicon `<link>` of the OGC API and describe pages: only with `--site-favicon`, so
+    /// that they name no path of the web UI otherwise.
+    pub(crate) fn favicon_link(&self) -> &'static str {
+        if self.favicon.is_some() {
+            "<link rel=\"icon\" href=\"/$/ui/brand/favicon\">"
+        } else {
+            ""
         }
     }
 
@@ -179,10 +346,55 @@ impl Branding {
                 "logo": path("logo", &self.logo),
                 "logoDark": path("logo-dark", &self.logo_dark),
                 "color": self.color.as_ref().map(|c| c.hex.clone()),
+                "banner": self.banner.as_ref().map(|b| json!({
+                    "text": b.text,
+                    "level": if b.warning { "warning" } else { "info" },
+                    "link": b.link,
+                })),
+                "links": self.links.iter().map(|(label, url)| json!({ "label": label, "url": url })).collect::<Vec<_>>(),
+                "supportUrl": self.support_url,
+                "contactEmail": self.contact_email,
             },
             "version": env!("CARGO_PKG_VERSION"),
         })
     }
+}
+
+/// Plain text for HTML: `&`, `<`, `>` and `"` escaped.
+pub(crate) fn escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// One line of plain text, at most `max` characters.
+fn one_line(option: &str, text: &str, max: usize) -> Result<String, String> {
+    if text.is_empty() {
+        return Err(format!("{option} takes some text"));
+    }
+    if text.chars().count() > max {
+        return Err(format!("{option} takes at most {max} characters"));
+    }
+    if text.chars().any(char::is_control) {
+        return Err(format!("{option} takes one line of text"));
+    }
+    Ok(text.to_owned())
+}
+
+/// An `http(s)` URL that can go in an HTML attribute as it is.
+fn checked_url(option: &str, value: &str) -> Result<String, String> {
+    let value = value.trim();
+    let lower = value.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://"))
+        || value
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '"' | '<' | '>' | '\\'))
+        || value.split("://").nth(1).is_none_or(|rest| rest.is_empty())
+    {
+        return Err(format!("{option} takes an http(s) URL, not {value}"));
+    }
+    Ok(value.to_owned())
 }
 
 fn image(option: &str, value: &str) -> Result<Image, String> {
@@ -192,7 +404,15 @@ fn image(option: &str, value: &str) -> Result<Image, String> {
         if value
             .chars()
             .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '"' | '<' | '>' | '\\'))
-            || value.split("://").nth(1).is_none_or(|rest| rest.is_empty())
+            || value.split("://").nth(1).is_none_or(|rest| {
+                // The host goes into a Content-Security-Policy as it is: letters, digits,
+                // dots, dashes, a port and an IPv6 address's brackets only.
+                let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+                host.is_empty()
+                    || !host.chars().all(|c| {
+                        c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']')
+                    })
+            })
         {
             return Err(format!("{option}: {value} is not a URL"));
         }
@@ -351,12 +571,137 @@ mod tests {
             ("javascript:alert(1)", "file or an http(s) URL"),
             ("ftp://example.org/x.svg", "file or an http(s) URL"),
             ("https://example.org/a\"b.svg", "not a URL"),
+            ("https://example.org;script-src/x.svg", "not a URL"),
+            ("https://user@example.org/x.svg", "not a URL"),
+            ("https://a.org,b.org/x.svg", "not a URL"),
             ("logo.gif", "not an SVG"),
             ("/no/such/logo.svg", "cannot read"),
         ] {
             let e = Branding::new(None, None, Some(value), None, None).unwrap_err();
             assert!(e.contains(says), "{value}: {e}");
         }
+    }
+
+    #[test]
+    fn notices_are_plain_text_and_checked_urls() {
+        let none = || Branding::new(None, None, None, None, None).unwrap();
+        let b = none()
+            .with_notices(
+                Some("Demo <b>data</b> resets nightly"),
+                Some("warning"),
+                Some("https://example.org/status"),
+                &[
+                    "Privacy|https://example.org/privacy".to_owned(),
+                    "Contact & help|https://example.org/c?a=1&b=2".to_owned(),
+                ],
+                Some("https://example.org/help"),
+                Some("data@example.org"),
+            )
+            .unwrap();
+        let banner = b.banner_html();
+        assert!(banner.contains("class=\"site-banner warning\""), "{banner}");
+        assert!(
+            banner.contains(">Demo &lt;b&gt;data&lt;/b&gt; resets nightly</a>"),
+            "{banner}"
+        );
+        assert!(banner.contains("href=\"https://example.org/status\""));
+        let footer = b.footer_html();
+        assert!(
+            footer.contains("<a href=\"https://example.org/c?a=1&amp;b=2\">Contact &amp; help</a>"),
+            "{footer}"
+        );
+        let config = b.config_json();
+        assert_eq!(config["site"]["banner"]["level"], "warning");
+        assert_eq!(config["site"]["links"][0]["label"], "Privacy");
+        assert_eq!(config["site"]["supportUrl"], "https://example.org/help");
+        assert_eq!(config["site"]["contactEmail"], "data@example.org");
+        assert_eq!(none().banner_html(), "");
+        assert_eq!(none().footer_html(), "");
+        let refused = |banner: Option<&str>,
+                       level: Option<&str>,
+                       link: Option<&str>,
+                       links: &[&str],
+                       support: Option<&str>,
+                       email: Option<&str>| {
+            let links: Vec<String> = links.iter().map(|l| (*l).to_owned()).collect();
+            none()
+                .with_notices(banner, level, link, &links, support, email)
+                .unwrap_err()
+        };
+        assert!(
+            refused(Some("x"), Some("loud"), None, &[], None, None).contains("info or warning")
+        );
+        assert!(
+            refused(
+                Some("x"),
+                None,
+                Some("javascript:alert(1)"),
+                &[],
+                None,
+                None
+            )
+            .contains("http(s) URL")
+        );
+        assert!(
+            refused(None, None, Some("https://example.org/"), &[], None, None)
+                .contains("need --banner")
+        );
+        assert!(refused(Some("a\nb"), None, None, &[], None, None).contains("one line"));
+        assert!(
+            refused(
+                None,
+                None,
+                None,
+                &["Privacy https://example.org/"],
+                None,
+                None
+            )
+            .contains("LABEL|URL")
+        );
+        assert!(
+            refused(
+                None,
+                None,
+                None,
+                &["Privacy|ftp://example.org/"],
+                None,
+                None
+            )
+            .contains("http(s) URL")
+        );
+        assert!(refused(None, None, None, &[], Some("example.org"), None).contains("http(s) URL"));
+        for bad in [
+            "nobody",
+            "a@b",
+            "a b@example.org",
+            "<a@example.org>",
+            "a@b@example.org",
+            "a{b}@example.org",
+            "a|b@example.org",
+            "a^b`c@example.org",
+        ] {
+            assert!(
+                refused(None, None, None, &[], None, Some(bad)).contains("e-mail"),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_urls_give_their_origins_for_img_src() {
+        let b = Branding::new(
+            None,
+            Some("https://cdn.example.org/brand/favicon.png"),
+            Some("https://cdn.example.org/brand/logo.svg"),
+            Some("http://Other.example.org:8080/logo-dark.svg?v=2"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            b.image_origins(),
+            " http://Other.example.org:8080 https://cdn.example.org"
+        );
+        assert_eq!(Branding::default().image_origins(), "");
     }
 
     #[test]

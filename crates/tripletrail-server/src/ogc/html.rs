@@ -22,6 +22,7 @@ pub(super) fn page(
     params: &Params,
     base: &str,
     reply: Reply,
+    brand: &crate::branding::Branding,
 ) -> Result<Reply, HttpError> {
     let crs = reply
         .headers
@@ -87,9 +88,14 @@ pub(super) fn page(
         out,
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>{}</title><style>{STYLE}</style>\
+         <title>{}{}</title>{}<style>{STYLE}</style>\
          <link rel=\"alternate\" type=\"application/json\" href=\"{}\"></head><body><nav>",
         escape(&title),
+        brand
+            .name
+            .as_deref()
+            .map_or(String::new(), |n| format!(" · {}", escape(n))),
+        brand.favicon_link(),
         escape(&json_url),
     );
     if !rest.is_empty() {
@@ -104,9 +110,10 @@ pub(super) fn page(
     let _ = writeln!(
         out,
         "</nav><main><h1>{}</h1>{main}</main><footer>This page as \
-         <a href=\"{}\">JSON</a></footer></body></html>",
+         <a href=\"{}\">JSON</a></footer>{}</body></html>",
         escape(&title),
         escape(&json_url),
+        brand.footer_html(),
     );
     let mut reply = Reply::bytes(200, HTML, out.into_bytes());
     reply.headers = headers;

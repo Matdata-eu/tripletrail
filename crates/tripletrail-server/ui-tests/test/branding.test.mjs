@@ -31,7 +31,10 @@ before(async () => {
   const logo = join(dir, "logo.svg");
   writeFileSync(logo, '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="24"><rect width="96" height="24" fill="#00634f"/></svg>');
   server = spawn(bin, ["serve", "--bind", "127.0.0.1:0", "--load", network,
-    "--site-name", "Rail KG", "--site-logo", logo, "--site-color", "#00634f"], { stdio: ["ignore", "pipe", "pipe"] });
+    "--site-name", "Rail KG", "--site-logo", logo, "--site-color", "#00634f",
+    "--banner", "Demo: data is reset nightly", "--banner-level", "warning",
+    "--site-link", "Privacy|https://example.org/privacy", "--support-url", "https://example.org/help",
+    "--contact-email", "data@example.org"], { stdio: ["ignore", "pipe", "pipe"] });
   base = await new Promise((resolve, reject) => {
     let seen = "";
     const look = (chunk) => {
@@ -79,5 +82,37 @@ test("the pages carry the server's name, logo and colour", async (t) => {
 
   await page.locator(".tabs a[data-page=query]").click();
   await page.waitForFunction(() => document.title === "Query · Rail KG");
+  assert.deepEqual(errors, [], "errors on the page");
+});
+
+test("the banner can be dismissed for the session, and the footer and About name the operator", async (t) => {
+  const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  await context.addInitScript(() => localStorage.setItem("tripletrail-tour", "9999"));
+  await context.route("**/*", (route) =>
+    route.request().url().startsWith(base) ? route.continue() : route.abort());
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  t.after(() => context.close());
+
+  await page.goto(base + "/$/ui/map");
+  const banner = page.locator("#site-banner");
+  await banner.waitFor();
+  assert.equal((await banner.textContent()).replace("×", "").trim(), "Demo: data is reset nightly");
+  // Full-height pages make room for it.
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--banner-h").trim()), "33px");
+  await page.locator(".site-banner-close").click();
+  assert.ok(await banner.isHidden());
+  await page.reload();
+  await page.locator("#main").waitFor();
+  assert.ok(await page.locator("#site-banner").isHidden(), "still dismissed after a reload");
+  assert.equal(await page.locator(".site-footer a").getAttribute("href"), "https://example.org/privacy");
+
+  // About points feedback to the operator's help and e-mail.
+  await page.locator("#about-btn").click();
+  const about = page.locator("dialog.about-dialog");
+  await about.waitFor({ timeout: 5000 });
+  assert.ok(await about.locator("a[href='https://example.org/help']").count() === 1);
+  assert.ok(await about.locator("a[href='mailto:data@example.org']").count() === 1);
   assert.deepEqual(errors, [], "errors on the page");
 });
