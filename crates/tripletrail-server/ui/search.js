@@ -45,7 +45,9 @@
       if (!r.ok) return;
       datasets = (await r.json()).datasets.map((d) => d.name).filter((n) => !n.startsWith("$"));
     } catch (e) { datasets = []; }
-    const current = fromPath() || store.get(DS_KEY) || datasets[0];
+    // The server's --default-dataset when the viewer may see it, else the first.
+    const preferred = document.documentElement.dataset.defaultDataset;
+    const current = fromPath() || store.get(DS_KEY) || (datasets.includes(preferred) ? preferred : datasets[0]);
     select.replaceChildren(...datasets.map((n) => {
       const o = document.createElement("option");
       o.value = n; o.textContent = n; o.selected = n === current;

@@ -66,7 +66,7 @@ window.TripleTrailRecords = (function () {
     let datasets = [];
     try { datasets = (await ui.api("GET", "/$/datasets")).datasets.map((d) => d.name); } catch (e) { ui.fail(e); }
     let ds = args[0] ? decodeURIComponent(args[0]) : null;
-    if (!ds || !datasets.includes(ds)) ds = state && datasets.includes(state.ds) ? state.ds : datasets[0];
+    if (!ds || !datasets.includes(ds)) ds = state && datasets.includes(state.ds) ? state.ds : ui.preferred(datasets);
     if (!ds) { root.replaceChildren(el("p", { class: "muted loading" }, "No dataset yet.")); return; }
     root.replaceChildren(el("p", { class: "muted loading" }, "Loading the classes…"));
     let classes;

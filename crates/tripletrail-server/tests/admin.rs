@@ -3494,3 +3494,64 @@ fn banner_footer_links_and_contact_reach_the_pages() {
         "https://example.org/privacy"
     );
 }
+
+/// `--default-dataset`, `--ui-home`, `--ui-theme` and `--map-view` (#262) reach the web UI's
+/// page for its scripts, and `/$/ui/config.json`; without them the page keeps its defaults.
+#[test]
+fn viewer_defaults_reach_the_web_ui() {
+    let start = |branding| {
+        let server = Server::bind(
+            "127.0.0.1:0",
+            [
+                ("a".to_owned(), Engine::new_tripletrail()),
+                ("rail".to_owned(), Engine::new_tripletrail()),
+            ],
+            Options {
+                branding,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        let base = format!("http://{}", server.address());
+        server.spawn();
+        base
+    };
+    let get = |base: &str, p: &str| {
+        ureq::get(&format!("{base}{p}"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap()
+    };
+    let base = start(
+        tripletrail_server::branding::Branding::default()
+            .with_defaults(Some("rail"), Some("map"), Some("dark"), Some("7/50.8/4.4"))
+            .unwrap(),
+    );
+    let page = get(&base, "/$/ui/");
+    for attribute in [
+        "data-ui-home=\"map\"",
+        "data-ui-theme=\"dark\"",
+        "data-default-dataset=\"rail\"",
+        "data-map-view=\"7/50.8/4.4\"",
+        "<a class=\"brand\" data-route href=\"/$/ui/map\">",
+    ] {
+        assert!(page.contains(attribute), "{attribute} in {page}");
+    }
+    let config: Value = serde_json::from_str(&get(&base, "/$/ui/config.json")).unwrap();
+    assert_eq!(
+        config["site"]["defaults"],
+        serde_json::json!({ "dataset": "rail", "home": "map", "theme": "dark", "mapView": "7/50.8/4.4" })
+    );
+
+    let base = start(tripletrail_server::branding::Branding::default());
+    let page = get(&base, "/$/ui/");
+    for attribute in [
+        "data-ui-home=\"datasets\"",
+        "data-ui-theme=\"auto\"",
+        "data-default-dataset=\"\"",
+        "data-map-view=\"\"",
+    ] {
+        assert!(page.contains(attribute), "{attribute} in {page}");
+    }
+}

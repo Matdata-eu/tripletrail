@@ -1190,6 +1190,21 @@ struct ServeArgs {
     /// datasets' contact point in the DCAT catalog when --catalog gives none.
     #[arg(long, env = "TRIPLETRAIL_CONTACT_EMAIL", value_name = "ADDRESS")]
     contact_email: Option<String>,
+    /// The dataset the web UI's pages (Query, Map, Search, Explore, Records, Import) open on
+    /// for a new viewer, in place of the first in the list.
+    #[arg(long, env = "TRIPLETRAIL_DEFAULT_DATASET", value_name = "NAME")]
+    default_dataset: Option<String>,
+    /// The page / and /$/ui/ open: datasets (the default), query, map, search or explore.
+    #[arg(long, env = "TRIPLETRAIL_UI_HOME", value_name = "PAGE")]
+    ui_home: Option<String>,
+    /// The web UI's theme on a viewer's first visit: auto (the system's, the default), light
+    /// or dark. The viewer's own choice wins.
+    #[arg(long, env = "TRIPLETRAIL_UI_THEME", value_name = "auto|light|dark")]
+    ui_theme: Option<String>,
+    /// The Map page's start view when the data's extent is unknown, as ZOOM/LAT/LON, e.g.
+    /// 5/50.8/4.4.
+    #[arg(long, env = "TRIPLETRAIL_MAP_VIEW", value_name = "ZOOM/LAT/LON")]
+    map_view: Option<String>,
     /// Write one JSON line per request to standard output (time, method, path, dataset,
     /// status, ms, query_hash).
     #[arg(long, env = "TRIPLETRAIL_LOG_REQUESTS")]
@@ -2210,6 +2225,10 @@ fn serve(args: ServeArgs) -> Result<()> {
         site_links,
         support_url,
         contact_email,
+        default_dataset,
+        ui_home,
+        ui_theme,
+        map_view,
         log_requests,
         shutdown_grace,
         base_iris,
@@ -2544,6 +2563,12 @@ fn serve(args: ServeArgs) -> Result<()> {
                 &site_links,
                 support_url.as_deref(),
                 contact_email.as_deref(),
+            )?
+            .with_defaults(
+                default_dataset.as_deref(),
+                ui_home.as_deref(),
+                ui_theme.as_deref(),
+                map_view.as_deref(),
             )?,
             log_requests,
             shutdown_grace: Duration::try_from_secs_f64(shutdown_grace)

@@ -45,7 +45,7 @@ window.TripleTrailImport = (function () {
       datasets = (await ui.api("GET", "/$/datasets")).datasets.map((d) => d.name).filter((n) => !n.startsWith("$"));
     } catch (e) { ui.fail(e); }
     let want = args[0] ? decodeURIComponent(args[0]) : null;
-    if (!want || !datasets.includes(want)) want = ds && datasets.includes(ds) ? ds : datasets[0];
+    if (!want || !datasets.includes(want)) want = ds && datasets.includes(ds) ? ds : ui.preferred(datasets);
     if (!want) { root.replaceChildren(el("p", { class: "muted loading" }, "No dataset to import into yet.")); return; }
     if (want !== ds) forget();
     ds = want;

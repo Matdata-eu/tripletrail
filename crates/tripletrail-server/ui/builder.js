@@ -64,7 +64,7 @@ window.TripleTrailSearch = (function () {
     let datasets = [];
     try { datasets = (await ui.api("GET", "/$/datasets")).datasets.map((d) => d.name); } catch (e) { ui.fail(e); }
     let ds = args[0] ? decodeURIComponent(args[0]) : null;
-    if (!ds || !datasets.includes(ds)) ds = shown && datasets.includes(shown.ds) ? shown.ds : datasets[0];
+    if (!ds || !datasets.includes(ds)) ds = shown && datasets.includes(shown.ds) ? shown.ds : ui.preferred(datasets);
     if (!ds) { root.replaceChildren(el("p", { class: "muted loading" }, "No dataset to search yet.")); return; }
     if (decodeURIComponent((location.pathname.split("/")[4] || "")) !== ds) {
       history.replaceState(null, "", "/$/ui/search/" + encodeURIComponent(ds) + location.search);

@@ -764,6 +764,32 @@ curl -s 'http://localhost:7878/$/ui/config.json' | jq -c '.site | {banner, links
 A viewer may close the banner; it stays closed for the browser session, until its text
 changes. The About dialog still names TripleTrail, its version and the licences of what it
 ships.
+
+The Datasets page, where the web UI opens, is an admin's page. A server for end users can open
+somewhere else: `--ui-home` picks the page (`query`, `map`, `search` or `explore`),
+`--default-dataset` the dataset the pages open on in place of the first in the list,
+`--ui-theme dark` (or `light`) the theme of a first visit, and `--map-view ZOOM/LAT/LON` where
+the Map page starts when the data's extent is unknown or spans half the world:
+
+<!-- test: serve -->
+```sh
+tripletrail serve --location data --dataset rail_v1 --ui-home map --default-dataset rail_v1 \
+  --ui-theme dark --map-view 7/50.8/4.4
+```
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/$/ui/config.json' | jq -c '.site.defaults'
+```
+
+<!-- test: output -->
+```text
+{"dataset":"rail_v1","home":"map","mapView":"7/50.8/4.4","theme":"dark"}
+```
+
+A viewer's own choices still win: the dataset they picked, the theme they set and the place a
+map link names.
+
 Every option also works as an environment variable (`TRIPLETRAIL_SITE_NAME`, ...) and as a key
 of the `--config` file. See [the web UI](../server.md#web-ui).
 
@@ -778,7 +804,8 @@ of the `--config` file. See [the web UI](../server.md#web-ui).
   publisher and licence.
 - `--site-name`, `--site-logo`, `--site-favicon` and `--site-color` give the pages your
   service's name and look; `--banner`, `--site-link`, `--support-url` and `--contact-email`
-  its notices and links.
+  its notices and links; `--ui-home`, `--default-dataset`, `--ui-theme` and `--map-view` where
+  a new viewer starts.
 - The enterprise edition is a separate build that reads an offline licence and never stops
   the server when it expires; its audit log records who changed what, in a chain that shows
   tampering.

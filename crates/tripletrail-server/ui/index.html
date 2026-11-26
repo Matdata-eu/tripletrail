@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-site-name="{{SITE_NAME}}" data-support-url="{{SUPPORT}}" data-contact-email="{{CONTACT}}">
+<html lang="en" data-site-name="{{SITE_NAME}}" data-support-url="{{SUPPORT}}" data-contact-email="{{CONTACT}}" data-ui-home="{{UI_HOME}}" data-ui-theme="{{UI_THEME}}" data-default-dataset="{{DEFAULT_DATASET}}" data-map-view="{{MAP_VIEW}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,8 +11,8 @@
 <script>
   // Apply the stored theme before anything paints (same key and values as MatGUI).
   (function () {
-    var pref = "auto";
-    try { pref = localStorage.getItem("tripletrail-theme") || "auto"; } catch (e) {}
+    var pref = document.documentElement.getAttribute("data-ui-theme") || "auto";
+    try { pref = localStorage.getItem("tripletrail-theme") || pref; } catch (e) {}
     var dark = pref === "dark" || (pref === "auto" && window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
   })();
@@ -37,7 +37,7 @@
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" data-route href="/$/ui/datasets">{{LOGO}}<span>{{TOPBAR_NAME}}</span></a>
+  <a class="brand" data-route href="/$/ui/{{UI_HOME}}">{{LOGO}}<span>{{TOPBAR_NAME}}</span></a>
   <nav class="tabs" aria-label="Pages">
     <a href="/$/ui/datasets" data-route data-page="datasets">Datasets</a>
     <a href="/$/ui/query" data-route data-page="query">Query</a>

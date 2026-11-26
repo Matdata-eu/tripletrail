@@ -107,7 +107,7 @@ window.TripleTrailMap = (function () {
       datasets = (await ui.api("GET", "/$/datasets")).datasets.map((d) => d.name);
     } catch (e) { ui.fail(e); }
     let name = args[0] ? decodeURIComponent(args[0]) : null;
-    if (!name || !datasets.includes(name)) name = datasets.includes(shown) ? shown : datasets[0];
+    if (!name || !datasets.includes(name)) name = datasets.includes(shown) ? shown : ui.preferred(datasets);
     if (!name) {
       leave();
       root.replaceChildren(el("p", { class: "muted loading" }, "No dataset to map yet."));
@@ -182,8 +182,8 @@ window.TripleTrailMap = (function () {
       container: canvas,
       style,
       hash: true,
-      center: [0, 20],
-      zoom: 1,
+      center: START ? START.center : [0, 20],
+      zoom: START ? START.zoom : 1,
       transformRequest: (url) => (url.startsWith(location.origin) ? { url, headers: headers() } : { url }),
     });
     loaded = false;
@@ -867,7 +867,14 @@ window.TripleTrailMap = (function () {
     return "/$/ui/search/" + encodeURIComponent(ds) + "?m=" + encodeURIComponent(JSON.stringify({ class: c.class, where: [], show: [], area }));
   }
 
-  /** Fits the map to the collections' extents (from the OGC API), or keeps the world. */
+  // The start view the server gives (--map-view ZOOM/LAT/LON), for data without a known extent
+  // or spread over half the world or more.
+  const START = (() => {
+    const [zoom, lat, lon] = (document.documentElement.dataset.mapView || "").split("/").map(Number);
+    return [zoom, lat, lon].every(Number.isFinite) ? { zoom, center: [lon, lat] } : null;
+  })();
+
+  /** Fits the map to the collections' extents (from the OGC API), or keeps the start view. */
   async function fit(ds, animate) {
     try {
       const out = await getJson(service(ds, "ogc/collections"));
@@ -876,6 +883,10 @@ window.TripleTrailMap = (function () {
         const bbox = c.extent && c.extent.spatial && c.extent.spatial.bbox && c.extent.spatial.bbox[0];
         if (!bbox || bbox.length < 4 || !bbox.every(Number.isFinite)) continue;
         b = b ? [Math.min(b[0], bbox[0]), Math.min(b[1], bbox[1]), Math.max(b[2], bbox[2]), Math.max(b[3], bbox[3])] : bbox.slice(0, 4);
+      }
+      if (START && (!b || b[2] - b[0] >= 180 || b[3] - b[1] >= 90)) {
+        if (map && shown === ds) map.jumpTo(START);
+        return;
       }
       if (b && map && shown === ds) map.fitBounds([[b[0], Math.max(b[1], -85)], [b[2], Math.min(b[3], 85)]], { padding: 40, maxZoom: 16, animate: !!animate });
     } catch (e) { /* the world view stays */ }

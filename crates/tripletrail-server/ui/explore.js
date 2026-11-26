@@ -590,7 +590,7 @@ window.TripleTrailExplore = (function () {
     el("button", { class: "btn primary", type: "submit" }, "Explore"));
     ui.api("GET", "/$/datasets").then((r) => {
       const names = r.datasets.map((d) => d.name).filter((n) => !n.startsWith("$"));
-      form.querySelector("select").replaceChildren(...names.map((n) => el("option", { value: n, selected: n === ds }, n)));
+      form.querySelector("select").replaceChildren(...names.map((n) => el("option", { value: n, selected: n === (ds || ui.preferred(names)) }, n)));
     }).catch(() => {});
     if (!ds || !start) {
       state = null;

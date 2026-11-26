@@ -295,6 +295,16 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
                     "{{CONTACT}}",
                     &html_attribute(brand.contact_email.as_deref().unwrap_or_default()),
                 )
+                .replace("{{UI_HOME}}", brand.defaults.home.unwrap_or("datasets"))
+                .replace("{{UI_THEME}}", brand.defaults.theme.unwrap_or("auto"))
+                .replace(
+                    "{{MAP_VIEW}}",
+                    brand.defaults.map_view.as_deref().unwrap_or_default(),
+                )
+                .replace(
+                    "{{DEFAULT_DATASET}}",
+                    &html_attribute(brand.defaults.dataset.as_deref().unwrap_or_default()),
+                )
                 .replace("{{SITE_NAME}}", &html_attribute(brand.name()));
             let mut reply = page("text/html; charset=utf-8", &html);
             reply.headers.push((
