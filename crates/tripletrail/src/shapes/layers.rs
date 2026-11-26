@@ -887,6 +887,23 @@ pub fn check(graph: &Graph) -> Vec<String> {
             }
         }
     }
+    // A label pattern that is no regular expression would strip nothing, quietly (#260).
+    for t in graph.triples_for_predicate(&tts("labelStrip")) {
+        match t.object {
+            TermRef::Literal(l) => {
+                if let Err(e) = regex::Regex::new(l.value()) {
+                    errors.push(format!(
+                        "{}: tts:labelStrip is not a regular expression: {e}",
+                        name(t.subject)
+                    ));
+                }
+            }
+            _ => errors.push(format!(
+                "{}: tts:labelStrip is not a string",
+                name(t.subject)
+            )),
+        }
+    }
     errors.sort();
     errors.dedup();
     errors

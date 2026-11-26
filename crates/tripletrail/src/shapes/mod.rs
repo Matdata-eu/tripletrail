@@ -26,7 +26,7 @@ mod atlas;
 mod layers;
 mod turtle;
 
-pub use atlas::{ATLAS, from_atlas};
+pub use atlas::{ATLAS, VALIDITY, from_atlas};
 pub use layers::{
     Override, QUALITY_KEY, SetFile, Upgrade, add_quality, add_rollups, check, check_select,
     files_of, hide_generated, inline_select, load, overlay, upgrade,

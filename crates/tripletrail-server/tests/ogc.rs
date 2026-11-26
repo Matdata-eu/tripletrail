@@ -3181,3 +3181,142 @@ fn part_facets_roll_up_to_the_parent() {
         other => panic!("{other:?}"),
     }
 }
+
+/// The map's labels (#260): a facet value's label in the reader's language (`lang`, else the
+/// browser's `Accept-Language`), else English, else one without a language, else any; and
+/// without what the shapes' `tts:labelStrip` matches, in facets and search alike.
+#[test]
+fn map_labels_follow_the_language_and_the_label_strip() {
+    let dir = tripletrail_testdir::tempdir("ogc-labels");
+    let ttl = "@prefix ex: <http://example.com/> .\n\
+               @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+               @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+               @prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+               ex:DEU skos:prefLabel \"ألمانيا\"@ar , \"Germany\"@en , \"Allemagne\"@fr , \"Deutschland\"@de .\n\
+               ex:BEL skos:prefLabel \"بلجيكا\"@ar , \"Belgien\"@de .\n\
+               ex:LUX skos:prefLabel \"Luxembourg\" , \"لوكسمبورغ\"@ar .\n\
+               ex:s1 a ex:Station ; ex:country ex:DEU ; rdfs:label \"Köln Hbf (from 2022-12-11 until 2078-12-31)\" ;\n\
+                 geo:hasGeometry [ geo:asWKT \"POINT(6.95 50.94)\"^^geo:wktLiteral ] .\n\
+               ex:s2 a ex:Station ; ex:country ex:BEL ; rdfs:label \"Bruxelles-Ouest | Brussel-West (from 2022-12-11 until 2078-12-31)\" ;\n\
+                 geo:hasGeometry [ geo:asWKT \"POINT(4.32 50.85)\"^^geo:wktLiteral ] .\n\
+               ex:s3 a ex:Station ; ex:country ex:LUX ; rdfs:label \"Luxembourg\" ;\n\
+                 geo:hasGeometry [ geo:asWKT \"POINT(6.13 49.6)\"^^geo:wktLiteral ] .\n";
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 4,
+            admin_token: Some("t".to_owned()),
+            location: Some(dir.join("data")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let own = format!(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+         @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+         @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+         <urn:my:stations> a sh:NodeShape ; sh:targetClass <http://example.com/Station> ;\n\
+           tts:key \"station\" ; tts:labelStrip {:?} ;\n\
+           tts:geometry [ sh:path ( geo:hasGeometry geo:asWKT ) ] ;\n\
+           sh:property [ sh:path <http://example.com/country> ; tts:key \"country\" ;\n\
+             tts:facet tts:Facet-Values ] .\n",
+        tripletrail::shapes::VALIDITY
+    );
+    ureq::put(&format!("{base}/$/datasets/kg/shapes/files/mine.ttl"))
+        .set("Authorization", "Bearer t")
+        .send_string(&own)
+        .unwrap();
+    let countries = |query: &str, accept: Option<&str>| -> Vec<(String, String)> {
+        let mut request = ureq::get(&format!("{base}/kg/tiles/facets/station{query}"));
+        if let Some(accept) = accept {
+            request = request.set("Accept-Language", accept);
+        }
+        let out: Value =
+            serde_json::from_str(&request.call().unwrap().into_string().unwrap()).unwrap();
+        let mut values: Vec<(String, String)> = out["facets"][0]["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                (
+                    v["value"]
+                        .as_str()
+                        .unwrap()
+                        .replace("http://example.com/", ""),
+                    v["label"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect();
+        values.sort();
+        values
+    };
+    let pairs = |p: &[(&str, &str)]| -> Vec<(String, String)> {
+        p.iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect()
+    };
+    // English by default; a label without a language before another language.
+    assert_eq!(
+        countries("", None),
+        pairs(&[
+            ("BEL", "Belgien"),
+            ("DEU", "Germany"),
+            ("LUX", "Luxembourg")
+        ])
+    );
+    // The browser's language, then English; `lang` before the browser's.
+    assert_eq!(
+        countries("", Some("fr-BE,fr;q=0.9,en;q=0.8")),
+        pairs(&[
+            ("BEL", "Belgien"),
+            ("DEU", "Allemagne"),
+            ("LUX", "Luxembourg")
+        ])
+    );
+    assert_eq!(
+        countries("?lang=de", Some("fr")),
+        pairs(&[
+            ("BEL", "Belgien"),
+            ("DEU", "Deutschland"),
+            ("LUX", "Luxembourg")
+        ])
+    );
+    // The labels kept for the data version follow a write (and a language asked again).
+    assert_eq!(
+        countries("?lang=nl", None)[1],
+        ("DEU".to_owned(), "Germany".to_owned())
+    );
+    ureq::post(&format!("{base}/kg/update"))
+        .set("Authorization", "Bearer t")
+        .set("Content-Type", "application/sparql-update")
+        .send_string(
+            "INSERT DATA { <http://example.com/DEU> \
+             <http://www.w3.org/2004/02/skos/core#prefLabel> \"Duitsland\"@nl }",
+        )
+        .unwrap();
+    assert_eq!(
+        countries("?lang=nl", None)[1],
+        ("DEU".to_owned(), "Duitsland".to_owned())
+    );
+    // The same labels when several collections are asked at once.
+    let both = get(&format!("{base}/kg/tiles/facets?collection=station")).2;
+    assert!(both.to_string().contains("\"Germany\""), "{both}");
+    // Search shows the labels without RINF's validity period.
+    let found = get(&format!("{base}/kg/tiles/search?q=brussel")).2;
+    assert_eq!(
+        found["results"][0]["label"], "Bruxelles-Ouest | Brussel-West",
+        "{found}"
+    );
+    // The map page strips the labels it looks up itself with the same pattern.
+    let style = get(&format!("{base}/kg/tiles/style.json")).2;
+    assert_eq!(
+        style["metadata"]["tripletrail:labelStrip"],
+        format!("(?:{})", tripletrail::shapes::VALIDITY),
+        "{style}"
+    );
+}
