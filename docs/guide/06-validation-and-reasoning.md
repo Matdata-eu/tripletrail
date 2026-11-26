@@ -84,6 +84,22 @@ ttsh:shapeIri <https://example.org/rail#SectionShape-1928b564a0725f04> ;
 
 The name changes only when that property shape changes.
 
+The report also sums the run up: how many results and failing focus nodes it has in all, and one
+`ttsh:cell` for each rule, severity and constraint component with results, which links to its
+first results as `ttsh:sample`. Here there is one cell, the speed warning:
+
+<!-- test: run fails -->
+```sh
+tripletrail validate --data network.ttl --shapes shapes.ttl --stats
+```
+
+<!-- test: output contains -->
+```text
+ttsh:severity sh:Warning ;
+ttsh:component sh:MaxInclusiveConstraintComponent ;
+ttsh:results 1 ;
+```
+
 To validate a dataset on disk instead of files, give its location and the named graph that
 holds the shapes: `tripletrail validate --location db --dataset rail --shapes-graph
 https://example.org/graph/shapes`. A running server validates too:

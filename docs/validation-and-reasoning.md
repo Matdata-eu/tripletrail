@@ -90,6 +90,40 @@ per shape (`shape`, `shape_iri`, `property`, `focus_nodes`, `value_nodes`,
 `distinct_focus_nodes`, `failing_focus_nodes`); the server's JSON answer has `shapeIri`,
 `distinctFocusNodes` and `failingFocusNodes`.
 
+### Run summary and cell index
+
+With `--stats`, the report also sums up the run, counted while the results are found rather
+than read back from the report afterwards. On the report node, `ttsh:results` gives the number
+of results (those in `sh:detail`s, which explain their parent, are not counted) and
+`ttsh:failingFocusNodes` the distinct focus nodes with a result. Then comes one `ttsh:cell` per
+rule, severity and constraint component that has results, the most results first. Each cell has
+`ttsh:shapeIri`, `ttsh:severity`, `ttsh:component`, `ttsh:results`, `ttsh:failingFocusNodes`,
+and `ttsh:sample` linking to its first three results in the report:
+
+```turtle
+[] a sh:ValidationReport ;
+  ttsh:results 1 ; ttsh:failingFocusNodes 1 ;
+  ttsh:cell <urn:tripletrail:cell:...:0> .
+<urn:tripletrail:cell:...:0> ttsh:shapeIri ex:SectionShape-1928b564a0725f04 ;
+  ttsh:severity sh:Warning ; ttsh:component sh:MaxInclusiveConstraintComponent ;
+  ttsh:results 1 ; ttsh:failingFocusNodes 1 ; ttsh:sample _:result1 .
+```
+
+The cell properties are TripleTrail's own (`ttsh:severity`, not `sh:resultSeverity`), so a
+query that counts `sh:resultSeverity` still counts results only. Each result costs a hash of
+its cell and one of its focus node; each distinct focus node takes 8 bytes for the run and 8
+for each cell it is in. With the ERA shapes on the SHACL benchmark's data, `--stats` with the
+summary took 1.4% longer than without it on Germany (894,300 results: 308 against 304 s, the
+mean of two runs each) and the same within noise on Norway (31,783 results, 16.6 against
+16.5 s).
+
+In Python, `report.summary` (with `statistics=True`) is a dict with `results`,
+`failing_focus_nodes`, `by_severity` (severity IRI to results) and `cells` (each with
+`shape_iri`, `severity`, `component`, `results`, `failing_focus_nodes`, and `samples`: dicts
+with `focus_node`, `value` and `key`). The server's JSON answer has the same as `summary`
+(`failingFocusNodes`, `bySeverity`, `shapeIri`, `focusNode`). In Rust, feed each result to
+`Cells::add` and call `Cells::finish` for the `Summary`, or use `ReportWriter::with_cells`.
+
 ### Finding keys
 
 To compare two runs, or the same data under two sets of shapes, each result has a finding key

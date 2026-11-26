@@ -66,5 +66,14 @@ def test_shape_counts():
     # A shape with an IRI is its own; an inline property shape is named from its node shape.
     assert counts["http://example.com/Car"]["shape_iri"] == "http://example.com/Car"
     assert all(c["shape_iri"].startswith("http://example.com/Car#") for c in props)
+    # The summary: each property shape's one result is a cell of its own.
+    s = report.summary
+    assert (s["results"], s["failing_focus_nodes"]) == (2, 2)
+    assert s["by_severity"] == {SH + "Violation": 1, SH + "Warning": 1}
+    assert sorted(c["results"] for c in s["cells"]) == [1, 1]
+    assert all(c["shape_iri"].startswith("http://example.com/Car#") and len(c["samples"]) == 1 for c in s["cells"])
+    assert e.validate(shapes).summary is None
+    cells = [t for t in report.triples() if t.predicate.value == "http://w3id.org/tripletrail/shacl#cell"]
+    assert len(cells) == 2
     stats = [t for t in report.triples() if t.predicate.value == "http://w3id.org/tripletrail/shacl#shapeStatistics"]
     assert len(stats) == 4 and all(isinstance(t.object, ox.NamedNode) for t in stats)

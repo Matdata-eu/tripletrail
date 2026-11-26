@@ -432,7 +432,8 @@ enum Command {
         /// (`ttsh:shapeStatistics`, `ttsh:focusNodes`, `ttsh:valueNodes`), its IRI, the same in
         /// every run even for a blank node shape (`ttsh:shapeIri`), its distinct focus
         /// nodes and those of its results (`ttsh:distinctFocusNodes`,
-        /// `ttsh:failingFocusNodes`), conforming shapes included.
+        /// `ttsh:failingFocusNodes`), conforming shapes included; and the run's summary
+        /// (`ttsh:results`) with one `ttsh:cell` per rule, severity and constraint component.
         #[arg(long)]
         stats: bool,
     },

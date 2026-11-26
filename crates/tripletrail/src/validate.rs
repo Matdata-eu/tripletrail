@@ -738,12 +738,19 @@ impl Engine {
         statistics: bool,
         sink: &mut dyn FnMut(Triple),
     ) -> Result<bool, Error> {
-        let mut writer = ReportWriter::new();
+        let mut writer = if statistics {
+            ReportWriter::new().with_cells()
+        } else {
+            ReportWriter::new()
+        };
         let counts = self.validate_counted_with(shapes, data, lookups, statistics, &mut |r| {
             writer.result(&r, sink)
         })?;
         if statistics {
             writer.statistics(&counts, sink);
+            if let Some(summary) = writer.take_summary() {
+                writer.summary(&summary, sink);
+            }
         }
         Ok(writer.finish(sink))
     }

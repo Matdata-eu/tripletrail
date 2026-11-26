@@ -1042,7 +1042,10 @@ scratch store (#401):
   `messages`, `key` (the [finding key](validation-and-reasoning.md#finding-keys), 32
   hexadecimal digits), and for a failure of `sh:node`, `sh:and`, `sh:or`, `sh:xone` or `sh:qualifiedValueShape` its `details`: the
   value node's results against the nested shapes, as `sh:detail` gives them), `shapes` (focus and
-  value nodes each shape was checked against) and `coverage`: `untargetedClasses`, the
+  value nodes each shape was checked against), `summary` (the run's
+  [summary and cell index](validation-and-reasoning.md#run-summary-and-cell-index):
+  `results`, `failingFocusNodes`, `bySeverity`, and `cells` with `shapeIri`, `severity`,
+  `component`, `results`, `failingFocusNodes` and `samples`) and `coverage`: `untargetedClasses`, the
   classes with instances that no shape targets, directly or through a superclass, and
   `emptyShapes`, the node shapes that matched no focus node.
 - Both answer RDF by `Accept` (or `format=turtle`…): the W3C validation report with shape
