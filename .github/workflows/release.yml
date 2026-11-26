@@ -16,6 +16,15 @@ name: Release
 #
 # The binaries are not signed yet: cosign keyless signing would write the repository's name
 # and commits to Sigstore's public log, so it waits until the repository is public (#150).
+#
+# The same run builds the Python package (wheels for Linux, macOS and Windows, and the source)
+# and packs the JavaScript client. After the GitHub release, a tag publishes them to PyPI
+# (`tripletrail`) and npm (`@tripletrail/client`), each only while its repository variable is
+# `true`: PUBLISH_PYPI, PUBLISH_NPM. Both log in with trusted publishing (OIDC, no token);
+# npm takes the NPM_TOKEN secret instead while it is set, for the first upload, before the
+# package exists and can be given a trusted publisher. A pre-release (`v1.2.3-rc.1`) goes to
+# npm under the `next` tag, so `latest` stays on the last release. The Rust crates are not
+# published: they need the patched Oxigraph crates in vendor/, which crates.io cannot use.
 
 on:
   push:
@@ -28,6 +37,10 @@ on:
         default: true
       windows:
         description: Build for Windows (GitHub runner, 2x minutes)
+        type: boolean
+        default: true
+      python:
+        description: Build the Python wheels
         type: boolean
         default: true
 
@@ -186,6 +199,88 @@ jobs:
           name: windows
           path: dist/*
 
+  # Python wheels: one per platform (abi3, so every Python from 3.9), with on-disk stores
+  # (RocksDB) and GeoParquet, as `pip install ./python` builds them. Linux wheels are built in
+  # manylinux_2_28 containers (glibc 2.28), aarch64 natively on GitHub's Arm runner.
+  python-wheels:
+    needs: check
+    if: github.event_name == 'push' || inputs.python
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: "2_28" }
+          - { os: ubuntu-24.04-arm, target: aarch64, manylinux: "2_28" }
+          - { os: macos-latest, target: universal2-apple-darwin, manylinux: "" }
+          - { os: windows-latest, target: x64, manylinux: "" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The license files go into the wheel's metadata (maturin picks up LICENSE* and NOTICE*).
+      - name: License files
+        shell: bash
+        run: cp LICENSE NOTICE python/
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --locked --out dist
+          # RocksDB's bindings are generated with bindgen, which needs libclang.
+          before-script-linux: dnf install -y clang-devel
+      - name: The wheel imports
+        shell: bash
+        run: |
+          python -m pip install --no-index --find-links python/dist tripletrail
+          python -c "import tripletrail; e = tripletrail.Engine(); print(e.query('ASK {}'))"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: python/dist/*.whl
+
+  python-sdist:
+    needs: check
+    if: github.event_name == 'push' || inputs.python
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp LICENSE NOTICE python/
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-sdist
+          path: python/dist/*.tar.gz
+
+  # The JavaScript client as npm would publish it, kept as `tripletrail-client-<version>.tgz`.
+  npm-pack:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Pack
+        working-directory: clients/js
+        run: |
+          cp ../../LICENSE ../../NOTICE .
+          npm pack --json | tee pack.json
+          ls -l ./*.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm
+          path: clients/js/*.tgz
+
   release:
     needs: [check, linux, macos, windows]
     # macOS and Windows may be skipped on a dry run; a tag needs them all.
@@ -237,3 +332,58 @@ jobs:
           path: |
             dist/*
             notes.md
+
+  # PyPI with trusted publishing: the project's publisher on pypi.org names this repository,
+  # this workflow (release.yml) and the environment `pypi`. Only after the GitHub release.
+  publish-pypi:
+    needs: [release, python-wheels, python-sdist]
+    if: github.event_name == 'push' && vars.PUBLISH_PYPI == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tripletrail/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: python-*
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  # npm with trusted publishing (npm 11.5 or later, the package's publisher on npmjs.com names
+  # this repository, release.yml and the environment `npm`), or the NPM_TOKEN secret while it
+  # is set. --provenance links the package to this run.
+  publish-npm:
+    needs: [check, release, npm-pack]
+    if: github.event_name == 'push' && vars.PUBLISH_NPM == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@tripletrail/client
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm
+      - name: Publish
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm install -g npm@11
+          case "$VERSION" in *-*) tag=next ;; *) tag=latest ;; esac
+          # Without a token, npm logs in with the workflow's OIDC identity.
+          if [ -z "$NODE_AUTH_TOKEN" ]; then unset NODE_AUTH_TOKEN; fi
+          npm publish ./tripletrail-client-*.tgz --access public --provenance --tag "$tag"

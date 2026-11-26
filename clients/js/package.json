@@ -1,14 +1,25 @@
 {
   "name": "@tripletrail/client",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "TripleTrail client for browsers and Node: SPARQL queries and updates, the Graph Store Protocol and the admin API",
   "license": "Apache-2.0",
+  "author": "MatData BV",
   "repository": {
     "type": "git",
     "url": "https://github.com/Matdata-eu/tripletrail",
     "directory": "clients/js"
   },
-  "private": true,
+  "homepage": "https://tripletrail.eu",
+  "bugs": {
+    "url": "https://github.com/Matdata-eu/tripletrail/issues"
+  },
+  "keywords": [
+    "sparql",
+    "rdf",
+    "geosparql",
+    "knowledge-graph",
+    "tripletrail"
+  ],
   "type": "module",
   "main": "./src/index.js",
   "types": "./src/index.d.ts",
@@ -18,11 +29,18 @@
       "default": "./src/index.js"
     }
   },
-  "files": ["src"],
+  "files": [
+    "src",
+    "NOTICE"
+  ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "test": "node --test"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

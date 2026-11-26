@@ -214,6 +214,12 @@ ds.parse("kg.ttl")
 
 The GIL is released during updates, loads and `explain`.
 
+## Install
+
+`pip install tripletrail` installs a ready-made wheel from PyPI (Linux x86_64 and aarch64, macOS,
+Windows x86_64; Python 3.9 and later), with on-disk stores and GeoParquet. The `rdflib` extra
+adds the rdflib store plugin: `pip install "tripletrail[rdflib]"`.
+
 ## Build
 
 ```sh
