@@ -1811,11 +1811,13 @@ dependencies = [
 name = "tripletrail"
 version = "0.1.0"
 dependencies = [
+ "md-5",
  "oxigraph",
  "oxiri",
  "oxsdatatypes",
  "regex",
  "rust-stemmers",
+ "sha1",
  "sha2",
  "spareval",
  "spargebra",
