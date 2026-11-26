@@ -1420,6 +1420,12 @@ struct ServeArgs {
     /// and --admin-token keep working as keys of those groups.
     #[arg(long, env = "TRIPLETRAIL_AUTH_CONFIG")]
     auth_config: Option<PathBuf>,
+    /// Let the Import page turn an uploaded XML Schema, JSON Schema, OpenAPI document or ASN.1
+    /// module into OWL, SHACL and SKOS with the optional Python tools on the `PATH` (`xsd2rdf`,
+    /// `jsonschema2rdf`, `openapi2rdf`, `asn2rdf`; `POST /{ds}/import/{id}/schema`). Off by
+    /// default: they are programs outside the server.
+    #[arg(long, env = "TRIPLETRAIL_SCHEMA_TOOLS")]
+    schema_tools: bool,
     /// Turn off the workbench's workspaces (/$/workspaces).
     #[arg(long, env = "TRIPLETRAIL_NO_WORKSPACES")]
     no_workspaces: bool,
@@ -2388,6 +2394,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         max_rows,
         auth_config,
         no_workspaces,
+        schema_tools,
         workspace_dir,
         workspace_ttl_hours,
         workspace_max,
@@ -2676,6 +2683,7 @@ fn serve(args: ServeArgs) -> Result<()> {
             cors_origins,
             update_token: update_token.filter(|t| !t.is_empty()),
             max_body: Some(max_body),
+            schema_tools,
             max_upload,
             git_fetch: (git_fetch_mb > 0).then_some(git_fetch_mb << 20),
             admin_token: admin_token.filter(|t| !t.is_empty()),

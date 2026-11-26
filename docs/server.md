@@ -2751,15 +2751,18 @@ reading and writing every graph): callers whose policies give them only some gra
 under row rules, are answered 403, as a mapping's `WHERE` could read past them. A read-only
 dataset answers 405.
 
-- `GET /{ds}/import`: `{"maxBytes", "kept"}`, the largest file it takes (`--max-body`, at most
-  256 MiB) and how many files it keeps.
+- `GET /{ds}/import`: `{"maxBytes", "kept", "schemaTools"}`, the largest file it takes
+  (`--max-body`, at most 256 MiB), how many files it keeps, and whether the server runs the
+  schema tools (`--schema-tools`).
 - `POST /{ds}/import?name=NAME[&options=…][&namespace=IRI]`: the file as the body. `NAME`
   (ASCII letters, digits, `.`, `-`, `_`; other names are refused) chooses the format as a file name does; `options` are
-  Facade-X options (`csv.headers=true` by default for `.csv` and `.tsv`); options that name
+  Facade-X options (`csv.headers=true` by default for `.csv` and `.tsv`,
+  `media-type=application/xml` for `.xsd`, `media-type=text/plain` for `.asn`); options that name
   another source (`location`, `from-archive`, `content`, `table`, `sql`...) are refused.
   Answers 201 with `id`, `name`, `bytes`, `options`, `location` (`upload:NAME`), `tree` (the
-  first 300 triples, as N-Triples), `triples`, `truncated`, `namespace`, `kinds`, `schema` and
-  `query`, the drafted lift (below). A file that cannot be read is answered 422.
+  first 300 triples, as N-Triples), `triples`, `truncated`, `namespace`, `kinds`, `schema`,
+  `schemaTool` (`xsd`, `jsonschema`, `openapi` or `asn1` when the file is itself a schema the
+  [schema tools](rml.md#schema-files) read, else `null`) and `query`, the drafted lift (below). A file that cannot be read is answered 422.
 - `POST /{ds}/import/{id}/draft`: `{"namespace": IRI, "keys": {KIND: COLUMN or null}}` as the
   body; the lift drafted again (`{"namespace", "kinds", "query"}`), in another namespace or
   with other key columns (`null`: none). A kind left out of `keys` gets the one found.
@@ -2768,6 +2771,16 @@ dataset answers 405.
 - `POST /{ds}/import/{id}/run?graph=IRI`: adds the triples of the `CONSTRUCT` (without `FROM`)
   to the graph, in one update, and answers `{"after", "before", "graph"}`: the graph's size
   before and after.
+- `POST /{ds}/import/{id}/schema`: `{"kind", "namespace", "write"}` as the body, all optional.
+  Runs the schema tool of `kind` (from `schemaTool` by default) on the file, as
+  `tripletrail schema KIND` does, in a temporary folder, without downloading what a schema
+  imports, for at most 120 seconds (or `timeout`). It answers `kind`, `tool`, `namespace` (the
+  upload's by default), `counts` (`ontology`, `shapes`, `skos`, `provenance` triples),
+  `schemes`, `warnings`, and the `ontology`, `shapes` and `skos` as Turtle. With
+  `"write": true`, it also replaces the source's schema graphs: `{namespace}schema/owl`,
+  `…/shapes`, `…/skos` and `…/provenance`, listed in `graphs`. Only when the server was started
+  with `--schema-tools` (403 otherwise). A tool that is not installed answers 501 with how to
+  install it, a schema it cannot read 422, and a run over its time 503.
 - `DELETE /{ds}/import/{id}`: forgets the file (204).
 
 The drafted lift (#275) is the file in its own vocabulary, mechanically: nothing is

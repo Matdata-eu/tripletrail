@@ -436,9 +436,21 @@ tripletrail schema xsd stations.xsd --namespace https://data.example.org/station
 a concept scheme per enumeration, and `schema/provenance.ttl` the XSD component and XML name
 each comes from. Schemas the XSD imports from the web are not downloaded unless you add
 `--allow-download`. Give `--date 2026-11-26` to keep the files' dates, so that a rerun on an
-unchanged schema says `0 triples added, 0 removed`. The guide's tests can't install the
-tools, so they don't run this example; `tests/schema_tools.rs` does, in CI. See
-[schema files](../rml.md#schema-files).
+unchanged schema says `0 triples added, 0 removed`. 
+
+The web UI does the same for a server started with `tripletrail serve --schema-tools`, with the
+tools installed where it runs. Drop the `.xsd` (or JSON Schema, OpenAPI document or `.asn`
+module) on **Add data**, and the Import page shows a **Schema to RDF** card. **Make OWL, SHACL
+and SKOS** shows what the tool makes; **Add to the dataset** writes it to the source's schema
+graphs, `https://data.example.org/src/stations/schema/owl`, `…/shapes`, `…/skos` and
+`…/provenance`, replacing what they held. The source namespace is the one the data file
+of the same name gets, so the lift of `stations.xml` and the schema of `stations.xsd` share
+it.
+
+The guide's tests can't install the tools, so they don't run these examples;
+`tests/schema_tools.rs` and the browser tests do, with a stand-in tool and, in CI, the real
+ones. See [schema files](../rml.md#schema-files) and
+[the import API](../server.md#importing-files).
 
 ## Useful options
 

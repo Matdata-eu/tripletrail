@@ -19,6 +19,7 @@ window.TripleTrailImport = (function () {
   let queue = []; // files "Add data" handed over, still to lift
   let queueFor = null; // the dataset they go into
   const maxBytes = {}; // per dataset, the largest file the import takes
+  const schemaTools = {}; // per dataset, whether the server runs the schema tools (#276)
   /** The most of a file too large to import that a draft is made from: its first lines. */
   const SAMPLE = 1 << 20;
   const page = () => document.getElementById("page-import");
@@ -88,7 +89,11 @@ window.TripleTrailImport = (function () {
 
   async function limit() {
     if (maxBytes[ds] == null) {
-      try { maxBytes[ds] = JSON.parse(await send("GET", base())).maxBytes; } catch { maxBytes[ds] = Infinity; }
+      try {
+        const info = JSON.parse(await send("GET", base()));
+        maxBytes[ds] = info.maxBytes;
+        schemaTools[ds] = !!info.schemaTools;
+      } catch { maxBytes[ds] = Infinity; }
     }
     return maxBytes[ds];
   }
@@ -162,6 +167,41 @@ window.TripleTrailImport = (function () {
     } catch (e) { status(""); fail(e); }
   }
 
+  /** The schema tools' names, by the kind the server gives. */
+  const TOOLS = { xsd: ["an XML Schema", "xsd2rdf"], jsonschema: ["a JSON Schema", "jsonschema2rdf"], openapi: ["an OpenAPI document", "openapi2rdf"], asn1: ["an ASN.1 module", "asn2rdf"] };
+
+  /** A file that is a schema: its ontology, shapes and code lists, made by the schema tool. */
+  function schemaCard(u) {
+    const [what, tool] = TOOLS[u.schemaTool] || ["a schema", "the schema tool"];
+    const out = el("div", { id: "imp-schema-made" });
+    const make = async (write) => {
+      out.replaceChildren(el("p", { class: "muted small" }, write ? "Adding…" : `Running ${tool}…`));
+      try {
+        const m = JSON.parse(await send("POST", base() + "/" + encodeURIComponent(u.id) + "/schema",
+          JSON.stringify({ kind: u.schemaTool, namespace: ($("imp-ns") || {}).value || u.namespace, write })));
+        const c = m.counts;
+        out.replaceChildren(
+          el("p", {}, `${ui.fmtNum(c.ontology)} ontology, ${ui.fmtNum(c.shapes)} shape, ${ui.fmtNum(c.skos)} SKOS (${m.schemes.length} concept schemes) and ${ui.fmtNum(c.provenance)} provenance triples.`),
+          m.warnings.length ? el("details", {}, el("summary", {}, `${m.warnings.length} warnings`), el("ul", {}, ...m.warnings.map((w) => el("li", {}, w)))) : null,
+          m.graphs
+            ? el("p", { id: "imp-schema-graphs" }, "Written to ", ...m.graphs.flatMap((g, i) => [i ? ", " : "", el("code", {}, g)]), ".")
+            : el("div", { class: "sb-actions" },
+              el("button", { class: "btn primary", type: "button", id: "imp-schema-write", onclick: () => make(true) }, "Add to the dataset"),
+              el("span", { class: "muted small" }, "Into the source's schema graphs, replacing what they held.")),
+          el("details", {}, el("summary", {}, "The shapes"), el("pre", { class: "imp-tree" }, m.shapes)));
+      } catch (e) { out.replaceChildren(el("p", { class: "error" }, e.message || String(e))); }
+    };
+    return el("div", { class: "card imp-card", id: "imp-schema-card" },
+      el("div", { class: "toolbar" }, el("h2", {}, "Schema to RDF"), el("span", { class: "grow" }),
+        el("span", { class: "muted small" }, `The file is ${what}.`)),
+      schemaTools[ds]
+        ? el("div", { class: "sb-actions" },
+          el("button", { class: "btn", type: "button", id: "imp-schema-make", onclick: () => make(false) }, "Make OWL, SHACL and SKOS"),
+          el("span", { class: "muted small" }, `An ontology, shapes and code lists, made by ${tool} on the server.`))
+        : el("p", { class: "muted small" }, `The server can make an ontology, shapes and code lists of it when it is started with --schema-tools and ${tool} is installed (pip install ${tool}). Or run tripletrail schema ${u.schemaTool} with the file.`),
+      out);
+  }
+
   function show() {
     const u = upload;
     const graph = "urn:import:" + u.name.replace(/\.[^.]*$/, "");
@@ -176,6 +216,7 @@ window.TripleTrailImport = (function () {
         u.schema ? el("p", { class: "muted small", id: "imp-schema" }, `The file names ${schemaNames[u.schema.kind] || "a schema"}` + (u.schema.location ? ": " + u.schema.location : "") + ". Generating an ontology and shapes from it is a step of its own (schema to RDF).") : null,
         el("details", { open: true }, el("summary", {}, "The file as triples" + (u.truncated ? " (the first ones)" : "")),
           el("pre", { class: "imp-tree", id: "imp-tree" }, u.tree))),
+      u.schemaTool ? schemaCard(u) : null,
       el("div", { class: "card imp-card" },
         el("div", { class: "toolbar" }, el("h2", {}, "In its own vocabulary"), el("span", { class: "grow" }),
           el("span", { class: "muted small" }, "A class per kind of record and a property per key, under the source's namespace.")),

@@ -315,3 +315,159 @@ fn the_tools_give_an_ontology_shapes_and_code_lists_that_load() {
         );
     }
 }
+
+/// The Import page's way (#276): a server started with `--schema-tools` runs the tool found on
+/// its `PATH` on an uploaded schema, answers what it made and, asked to, writes it to the
+/// source's schema graphs; without the option it refuses.
+#[test]
+fn an_uploaded_schema_becomes_the_sources_schema_graphs() {
+    let dir = tripletrail_testdir::tempdir("schema-tools-server");
+    let bin = dir.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let tool = bin.join("xsd2rdf");
+    std::fs::write(&tool, FAKE).unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let args_file = dir.join("args.txt");
+    let serve = |extra: &[&str]| {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let child = Command::new(env!("CARGO_BIN_EXE_tripletrail"))
+            .args([
+                "serve",
+                "--bind",
+                &format!("127.0.0.1:{port}"),
+                "--dataset",
+                "ds",
+                "--no-workspaces",
+            ])
+            .args(extra)
+            .env("PATH", &path)
+            .env("FAKE_ARGS", &args_file)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let base = format!("http://127.0.0.1:{port}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while ureq::get(&format!("{base}/$/ready")).call().is_err() {
+            assert!(std::time::Instant::now() < deadline, "not ready");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        (child, base)
+    };
+    let post = |url: &str, body: &str| match ureq::post(url).send_string(body) {
+        Ok(r) => (r.status(), r.into_string().unwrap()),
+        Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap()),
+        Err(e) => panic!("{e}"),
+    };
+    let xsd = "<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'/>";
+
+    // Off by default.
+    let (mut child, base) = serve(&[]);
+    let (code, body) = post(&format!("{base}/ds/import?name=stations.xsd"), xsd);
+    assert_eq!(code, 201, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (code, body) = post(&format!("{base}/ds/import/{id}/schema"), "");
+    assert_eq!(code, 403, "{body}");
+    assert!(body.contains("--schema-tools"), "{body}");
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let (mut child, base) = serve(&["--schema-tools"]);
+    let limits: serde_json::Value = serde_json::from_str(
+        &ureq::get(&format!("{base}/ds/import"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(limits["schemaTools"], true);
+    let (_, body) = post(&format!("{base}/ds/import?name=stations.xsd"), xsd);
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // A look first: what it makes, nothing written. The kind comes from the file's name.
+    let (code, body) = post(&format!("{base}/ds/import/{id}/schema"), "{}");
+    assert_eq!(code, 200, "{body}");
+    let made: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let ns = "https://data.example.org/src/stations/";
+    assert_eq!(made["kind"], "xsd");
+    assert_eq!(made["namespace"], ns);
+    assert_eq!(made["counts"]["shapes"], 3);
+    assert_eq!(made["schemes"], serde_json::json!(["Kind"]));
+    assert_eq!(
+        made["warnings"],
+        serde_json::json!(["xs:any is not translated"])
+    );
+    assert!(made["graphs"].is_null());
+    let said = std::fs::read_to_string(&args_file).unwrap();
+    assert!(said.contains("--no-download"), "{said}");
+    let count = |graph: &str| -> String {
+        ureq::get(&format!("{base}/ds/query"))
+            .query(
+                "query",
+                &format!("SELECT (COUNT(*) AS ?n) {{ GRAPH <{graph}> {{ ?s ?p ?o }} }}"),
+            )
+            .set("Accept", "text/csv")
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap()
+            .lines()
+            .nth(1)
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(count(&format!("{ns}schema/owl")), "0");
+    // Written, twice: the graphs hold what the schema says, not two copies.
+    for _ in 0..2 {
+        let (code, body) = post(
+            &format!("{base}/ds/import/{id}/schema"),
+            r#"{"write": true}"#,
+        );
+        assert_eq!(code, 200, "{body}");
+    }
+    for (part, n) in [
+        ("owl", "1"),
+        ("shapes", "3"),
+        ("skos", "2"),
+        ("provenance", "1"),
+    ] {
+        assert_eq!(count(&format!("{ns}schema/{part}")), n, "{part}");
+    }
+    // An ASN.1 module uploads as text, and its tool is the one asked for.
+    let (code, body) = post(
+        &format!("{base}/ds/import?name=stations.asn"),
+        "Stations DEFINITIONS ::= BEGIN END\n",
+    );
+    assert_eq!(code, 201, "{body}");
+    // A file that is no schema, and a tool that is not there.
+    let (_, body) = post(&format!("{base}/ds/import?name=a.csv"), "id\n1\n");
+    let csv = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (code, body) = post(&format!("{base}/ds/import/{csv}/schema"), "{}");
+    assert_eq!(code, 400, "{body}");
+    let (code, body) = post(
+        &format!("{base}/ds/import/{csv}/schema"),
+        r#"{"kind": "asn1"}"#,
+    );
+    assert_eq!(code, 501, "{body}");
+    assert!(body.contains("pip install asn2rdf"), "{body}");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}

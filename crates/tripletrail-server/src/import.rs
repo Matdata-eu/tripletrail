@@ -122,6 +122,7 @@ pub(crate) fn route(
             let body = serde_json::json!({
                 "maxBytes": state.options.max_body.map_or(MAX_TOTAL, |m| m.min(MAX_TOTAL)),
                 "kept": MAX_UPLOADS,
+                "schemaTools": state.options.schema_tools,
             });
             Ok(Reply::bytes(
                 200,
@@ -193,6 +194,16 @@ pub(crate) fn route(
                 {
                     "csv.headers=true".to_owned()
                 }
+                // A schema is read as what it is written in, for the schema tools (#276).
+                None if name.to_ascii_lowercase().ends_with(".xsd") => {
+                    "media-type=application/xml".to_owned()
+                }
+                None if [".asn", ".asn1"]
+                    .iter()
+                    .any(|e| name.to_ascii_lowercase().ends_with(e)) =>
+                {
+                    "media-type=text/plain".to_owned()
+                }
                 None => String::new(),
             };
             if options.contains(['<', '>', ' ', '{', '}']) {
@@ -250,12 +261,108 @@ pub(crate) fn route(
                 "namespace": namespace,
                 "kinds": d.kinds.iter().map(crate::import_draft::KindInfo::json).collect::<Vec<_>>(),
                 "schema": schema(&upload.bytes),
+                // The file is itself a schema the schema tools read (#276).
+                "schemaTool": schema_tool(&upload.name, &upload.bytes).map(|t| t.name()),
                 "query": d.query,
             });
             keep(id, upload);
             let mut reply = Reply::bytes(201, "application/json", body.to_string().into_bytes());
             reply.headers.push(("Cache-Control", "no-store".to_owned()));
             Ok(reply)
+        }
+        (Method::Post, [id, "schema"]) => {
+            context.operation = Some(crate::Operation::Update);
+            if !state.options.schema_tools {
+                return Err(HttpError(
+                    403,
+                    "Schema tools are off: start the server with --schema-tools".to_owned(),
+                ));
+            }
+            let upload = find(id, entry.id)?;
+            let body = crate::read_body(request, state.options.max_body)?;
+            let body: serde_json::Value = if body.trim().is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::from_str(&body)
+                    .map_err(|e| HttpError::bad_request(format!("The body: {e}")))?
+            };
+            let tool = match body.get("kind").and_then(|k| k.as_str()) {
+                Some(k) => crate::schema_tools::Tool::from_name(k).ok_or_else(|| {
+                    HttpError::bad_request("kind: xsd, jsonschema, openapi or asn1")
+                })?,
+                None => schema_tool(&upload.name, &upload.bytes).ok_or_else(|| {
+                    HttpError::bad_request(
+                        "This file is no schema the tools read: give kind (xsd, jsonschema, openapi or asn1)",
+                    )
+                })?,
+            };
+            let namespace = match body.get("namespace").and_then(|n| n.as_str()) {
+                Some(n) => tripletrail::oxigraph::model::NamedNode::new(n)
+                    .map_err(|e| HttpError::bad_request(format!("namespace: {e}")))?
+                    .into_string(),
+                None => crate::import_draft::default_namespace(&upload.name),
+            };
+            let write = body.get("write").and_then(|w| w.as_bool()).unwrap_or(false);
+            // The tool reads a file: the upload, under its own name, in a folder of its own.
+            let folder = scratch_folder()?;
+            let file = folder.0.join(&upload.name);
+            std::fs::write(&file, &upload.bytes[..]).map_err(|e| HttpError(500, e.to_string()))?;
+            let made = crate::schema_tools::run(
+                tool,
+                &file,
+                &crate::schema_tools::Run {
+                    program: None,
+                    namespace: namespace.clone(),
+                    date: None,
+                    download: false,
+                    timeout: timeout.unwrap_or(SCHEMA_TIMEOUT).min(SCHEMA_TIMEOUT),
+                },
+            )
+            .map_err(|e| match e {
+                crate::schema_tools::Error::NotInstalled(m) => HttpError(501, m),
+                crate::schema_tools::Error::Timeout(_) => HttpError(503, e.to_string()),
+                e => HttpError(422, e.to_string()),
+            })?;
+            drop(folder);
+            let [ontology, shapes, skos, provenance] = made.counts;
+            let graphs = [
+                ("owl", &made.ontology),
+                ("shapes", &made.shapes),
+                ("skos", &made.skos),
+                ("provenance", &made.provenance),
+            ]
+            .map(|(part, text)| (format!("{namespace}schema/{part}"), text));
+            if write {
+                crate::update_within_quota(context, || false)?;
+                for (graph, text) in &graphs {
+                    let g = tripletrail::oxigraph::model::NamedNode::new(graph.as_str())
+                        .map_err(|e| HttpError(500, e.to_string()))?;
+                    // Replaced, so that making them again gives what the schema says now.
+                    engine.update(&format!("DROP SILENT GRAPH {g}"))?;
+                    engine.load_into(
+                        g,
+                        tripletrail::oxigraph::io::RdfFormat::Turtle,
+                        text.as_bytes(),
+                    )?;
+                }
+            }
+            let body = serde_json::json!({
+                "kind": tool.name(),
+                "tool": tool.program(),
+                "namespace": namespace,
+                "counts": {"ontology": ontology, "shapes": shapes, "skos": skos, "provenance": provenance},
+                "schemes": made.schemes,
+                "warnings": made.warnings,
+                "graphs": write.then(|| graphs.iter().map(|(g, _)| g.clone()).collect::<Vec<_>>()),
+                "ontology": made.ontology,
+                "shapes": made.shapes,
+                "skos": made.skos,
+            });
+            Ok(Reply::bytes(
+                200,
+                "application/json",
+                body.to_string().into_bytes(),
+            ))
         }
         (Method::Delete, [id]) => {
             context.operation = Some(crate::Operation::Read);
@@ -505,6 +612,44 @@ fn checked_namespace(n: &str) -> Result<String, HttpError> {
 /// The schema the file names, if any, for the page to offer generating an ontology and shapes
 /// from it (#276): an XML Schema (`xsi:schemaLocation`, `xsi:noNamespaceSchemaLocation`), a
 /// JSON Schema (`"$schema"`), or the file is an OpenAPI document. Read from its first 64 KiB.
+/// Longest a schema tool may run for a request.
+const SCHEMA_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The tool that reads the uploaded file as a schema, by its name and what it holds.
+fn schema_tool(name: &str, bytes: &[u8]) -> Option<crate::schema_tools::Tool> {
+    use crate::schema_tools::Tool;
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".xsd") {
+        return Some(Tool::Xsd);
+    }
+    if lower.ends_with(".asn") || lower.ends_with(".asn1") {
+        return Some(Tool::Asn1);
+    }
+    if !(lower.ends_with(".json") || lower.ends_with(".yaml") || lower.ends_with(".yml")) {
+        return None;
+    }
+    match schema(bytes)?.get("kind")?.as_str()? {
+        "openapi" => Some(Tool::OpenApi),
+        "json-schema" => Some(Tool::JsonSchema),
+        _ => None,
+    }
+}
+
+/// A temporary folder, removed when dropped.
+struct Folder(std::path::PathBuf);
+
+impl Drop for Folder {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch_folder() -> Result<Folder, HttpError> {
+    let dir = std::env::temp_dir().join(format!("tripletrail-schema-upload-{}", random_id()?));
+    std::fs::create_dir(&dir).map_err(|e| HttpError(500, e.to_string()))?;
+    Ok(Folder(dir))
+}
+
 fn schema(bytes: &[u8]) -> Option<serde_json::Value> {
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(64 << 10)]);
     let quoted = |after: &str| -> Option<String> {

@@ -169,6 +169,10 @@ pub struct Options {
     /// Largest query, update or form body accepted, in bytes; `None` for no limit. Larger
     /// bodies are answered with 413.
     pub max_body: Option<usize>,
+    /// Run the optional schema tools (`xsd2rdf`, `jsonschema2rdf`, `openapi2rdf`, `asn2rdf`
+    /// found on the `PATH`) on an uploaded schema, `POST /{ds}/import/{id}/schema` (#276).
+    /// Off by default: they are programs outside the server.
+    pub schema_tools: bool,
     /// Largest Graph Store upload (`PUT`/`POST` on `/data`) accepted, in bytes; `None` for
     /// no limit. An upload is held in memory while it is checked, so this bounds that too.
     pub max_upload: Option<usize>,
@@ -359,6 +363,7 @@ impl Default for Options {
             cors_origins: Vec::new(),
             update_token: None,
             max_body: Some(16 << 20),
+            schema_tools: false,
             max_upload: None,
             git_fetch: Some(256 << 20),
             admin_token: None,
