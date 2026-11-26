@@ -2375,10 +2375,14 @@ fn geometries(
         let query = format!(
             "SELECT DISTINCT ?f ?w WHERE {{ VALUES ?f {{ {} }} {} }}",
             values.join(" "),
-            collection
-                .geometry
-                .only("?f", &values)
-                .chosen("?f", "?w", "", !all),
+            {
+                let ways = collection.geometry.only("?f", &values);
+                if all {
+                    ways.pattern("?f", "?w")
+                } else {
+                    ways.chosen("?f", "?w", "")
+                }
+            },
         );
         for row in run(entry, &query, timeout, view)? {
             if let (Some(Term::NamedNode(f)), Some(w @ Term::Literal(_))) = (&row[0], &row[1]) {

@@ -6,9 +6,10 @@
 
 use crate::View;
 use crate::admin::Entry;
+use crate::geometry_ways::Rank;
 use crate::ogc::{Collection, Facet, collections_for, data_version, run, visible};
 use crate::{HttpError, Params, Reply, State};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tripletrail::geo::mvt::{Feature, as_mvt_geom_simplified, encode_tile};
@@ -2151,6 +2152,9 @@ fn detail(wkt: &str) -> (usize, usize) {
     (wkt.matches(',').count(), wkt.len())
 }
 
+/// A tile's chosen geometry of each feature, with the [`Rank`] of its alternative.
+type Chosen = HashMap<NamedNode, (Rank, Term)>;
+
 /// Layer tiles by collection id.
 type Layers = Vec<(String, Vec<u8>)>;
 
@@ -2262,14 +2266,11 @@ fn group_tiles(
         format!("?f a ?c . FILTER(?c IN ({}))", values.join(", "))
     };
     let limit = MAX_FEATURES * classes.len();
+    let ways = group[0].geometry.near(entry, view, "?f", &window);
+    let intersects = format!("FILTER(<{GEOF}sfIntersects>(?w, \"{window}\"^^<{WKT}>))");
     let query = format!(
-        "SELECT ?c ?f ?w WHERE {{ {} {classes_check}{filter} }} LIMIT {}",
-        group[0].geometry.near(entry, view, "?f", &window).chosen(
-            "?f",
-            "?w",
-            &format!("FILTER(<{GEOF}sfIntersects>(?w, \"{window}\"^^<{WKT}>))"),
-            true,
-        ),
+        "SELECT ?c ?f ?w ?r WHERE {{ {} {classes_check}{filter} }} LIMIT {}",
+        ways.ranked("?f", "?w", &intersects, "?r"),
         limit + 1,
     );
     let rows = run(entry, &query, timeout, view)?;
@@ -2278,27 +2279,65 @@ fn group_tiles(
     }
     // Per class, one geometry per feature: of the first alternative of the path with one, the
     // most detailed, as the items do (#316).
-    let mut by_class: HashMap<NamedNode, (Vec<NamedNode>, HashMap<NamedNode, Term>)> =
-        HashMap::new();
+    let mut by_class: HashMap<NamedNode, (Vec<NamedNode>, Chosen)> = HashMap::new();
     for row in rows {
         let (Some(Term::NamedNode(c)), Some(Term::NamedNode(f)), Some(w @ Term::Literal(l))) =
             (&row[0], &row[1], &row[2])
         else {
             continue;
         };
+        let rank = match &row[3] {
+            Some(Term::Literal(r)) => r.value().parse().unwrap_or(0),
+            _ => 0,
+        };
         let (order, chosen) = by_class.entry(c.clone()).or_default();
         match chosen.get(f) {
             None => {
                 order.push(f.clone());
-                chosen.insert(f.clone(), w.clone());
+                chosen.insert(f.clone(), (rank, w.clone()));
             }
-            Some(Term::Literal(old)) => {
+            Some((old_rank, Term::Literal(old))) => {
                 let (a, b) = (detail(l.value()), detail(old.value()));
-                if a > b || (a == b && l.value() < old.value()) {
-                    chosen.insert(f.clone(), w.clone());
+                if rank < *old_rank
+                    || (rank == *old_rank && (a > b || (a == b && l.value() < old.value())))
+                {
+                    chosen.insert(f.clone(), (rank, w.clone()));
                 }
             }
             Some(_) => {}
+        }
+    }
+    // A feature kept with a later alternative's geometry whose earlier alternative gives it one
+    // outside the tile is not drawn here: it is drawn where that one is.
+    let mut later: HashMap<Rank, Vec<String>> = HashMap::new();
+    for (_, chosen) in by_class.values() {
+        for (f, (rank, _)) in chosen {
+            if ways.earlier("?f", *rank).is_some() {
+                later.entry(*rank).or_default().push(f.to_string());
+            }
+        }
+    }
+    let mut elsewhere: HashSet<NamedNode> = HashSet::new();
+    for (rank, features) in later {
+        let Some(earlier) = ways.earlier("?f", rank) else {
+            continue;
+        };
+        for chunk in features.chunks(MAX_FEATURES) {
+            let query = format!(
+                "SELECT DISTINCT ?f WHERE {{ VALUES ?f {{ {} }} {earlier} }}",
+                chunk.join(" ")
+            );
+            for row in run(entry, &query, timeout, view)? {
+                if let Some(Term::NamedNode(f)) = &row[0] {
+                    elsewhere.insert(f.clone());
+                }
+            }
+        }
+    }
+    if !elsewhere.is_empty() {
+        for (order, chosen) in by_class.values_mut() {
+            order.retain(|f| !elsewhere.contains(f));
+            chosen.retain(|f, _| !elsewhere.contains(f));
         }
     }
     let (x1, y1, x2, y2) = bounds(z, x, y, 0.0);
@@ -2360,7 +2399,7 @@ fn group_tiles(
         // there replaces it.
         let mut at: HashMap<String, usize> = HashMap::new();
         for f in order {
-            let Some(geometry) = chosen.get(f).and_then(parse_wkt_literal) else {
+            let Some(geometry) = chosen.get(f).and_then(|(_, w)| parse_wkt_literal(w)) else {
                 continue;
             };
             let Some(geometry) = as_mvt_geom_simplified(
