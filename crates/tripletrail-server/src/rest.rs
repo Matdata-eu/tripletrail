@@ -18,7 +18,7 @@
 pub(crate) mod graphql;
 pub(crate) mod search;
 mod write;
-pub(crate) use write::{Method as WriteMethod, Request as WriteRequest, write};
+pub(crate) use write::{Method as WriteMethod, Request as WriteRequest, percent_encode, write};
 
 use crate::View;
 use crate::admin::Entry;

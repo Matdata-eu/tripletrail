@@ -67,6 +67,9 @@ fn closures_on_ids_give_the_evaluators_rows() {
         "?s a ex:C1 . ?s ex:up+ ?o",
         "?o a ex:C1 . ?s ^ex:up+ ?o",
         "?s ex:id ?x . ?s ex:up+ ?o MINUS { ?o ex:id \"top\" }",
+        // Triples that share no variable, joined through an alternative path (#257).
+        "?s a ex:C1 . ?o ex:id ?x . ?s (ex:up|^ex:up) ?o",
+        "?o a ex:C2 . ?s ex:id ?x . ?s ^(ex:up|^ex:nothing)/ex:id ?x",
     ] {
         let q = format!("PREFIX ex: <http://example.org/> SELECT * WHERE {{ {body} }}");
         let off = format!("#pragma tt.id-rewrites off\n{q}");
@@ -149,4 +152,45 @@ fn a_level_past_the_memory_limit_is_left_to_the_evaluator() {
     // 200,050 pairs take about a million ids in the search; under a limit of 1 MiB
     // (131,072 ids) it gives up before the level and the evaluator counts them streaming.
     assert_eq!(rows(&e.with_query_memory(1 << 20), q), n);
+}
+
+/// Triples that share no variable, written before the path that joins them, are joined
+/// through the path, not as the product of their rows (#257: a rolled-up facet joined every
+/// section with every value of every track).
+#[test]
+fn triples_apart_are_joined_through_the_path_between_them() {
+    let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
+    for i in 0..4000 {
+        ttl.push_str(&format!(
+            "ex:s{i} a ex:Section . ex:t{i} ex:isPartOf ex:s{i} . ex:t{i} ex:speed {i} .\n"
+        ));
+        ttl.push_str(&format!(
+            "ex:s{i} ex:hasPart ex:u{i} . ex:u{i} ex:speed {} .\n",
+            i + 1
+        ));
+    }
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let time = |body: &str| {
+        let q =
+            format!("PREFIX ex: <http://example.org/> SELECT (COUNT(*) AS ?n) WHERE {{ {body} }}");
+        let start = std::time::Instant::now();
+        let n = rows(&e, &q);
+        let off = format!("#pragma tt.id-rewrites off\n{q}");
+        assert_eq!(n, rows(&e, &off), "{body}");
+        (start.elapsed(), n)
+    };
+    let (apart, n) = time("?f a ex:Section . ?t ex:speed ?v . ?t (ex:isPartOf|^ex:hasPart) ?f");
+    let (through, m) = time("?f a ex:Section . ?t (ex:isPartOf|^ex:hasPart) ?f . ?t ex:speed ?v");
+    assert_eq!(n, m);
+    assert_eq!(
+        n,
+        vec!["?n=\"8000\"^^<http://www.w3.org/2001/XMLSchema#integer>".to_owned()]
+    );
+    // The same join through triples alone, to time the others against: the product of the
+    // sections and the speeds is 32 million rows.
+    let (triples, _) = time("?f a ex:Section . ?t ex:isPartOf ?f . ?t ex:speed ?v");
+    let bound = triples * 20 + std::time::Duration::from_millis(250);
+    assert!(apart < bound, "{apart:?} against {triples:?}");
+    assert!(through < bound, "{through:?} against {triples:?}");
 }
