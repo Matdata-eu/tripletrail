@@ -153,6 +153,54 @@ const CORNER: &str =
     r#""POLYGON((-0.5 -0.5, 2.5 -0.5, 2.5 2.5, -0.5 2.5, -0.5 -0.5))"^^geo:wktLiteral"#;
 
 #[test]
+fn constant_test_counts_the_rows_a_small_triple_fans_out_to() {
+    // #209: 2,000 stations run by 20 operators in 4 countries. `?o ex:country ?c` has the
+    // fewest matches (20), but the stations it reaches bind 2,000 geometries: the polygon's
+    // ~120 candidates are injected rather than tested 2,000 times by the FILTER.
+    let e = Engine::new_tripletrail();
+    let mut quads = grid("s", "Station", 2000, 50, 0.0, 0.0, 1.0);
+    let quad = |s: String, p: &str, o: String| {
+        Quad::new(
+            nn(s),
+            nn(format!("{EX}{p}")),
+            nn(o),
+            GraphName::DefaultGraph,
+        )
+    };
+    for i in 0..2000 {
+        quads.push(quad(
+            format!("{EX}s{i}"),
+            "operator",
+            format!("{EX}op{}", i % 20),
+        ));
+    }
+    for j in 0..20 {
+        quads.push(quad(
+            format!("{EX}op{j}"),
+            "country",
+            format!("{EX}c{}", j % 4),
+        ));
+    }
+    e.load_quads(quads).unwrap();
+    let window =
+        r#""POLYGON((-0.5 -0.5, 10.5 -0.5, 10.5 10.5, -0.5 10.5, -0.5 -0.5))"^^geo:wktLiteral"#;
+    let joined = format!(
+        "SELECT ?c (COUNT(*) AS ?n) WHERE {{ ?s ex:operator ?o . ?o ex:country ?c . \
+         ?s geo:hasGeometry/geo:asWKT ?w FILTER(geof:sfIntersects(?w, {window})) }} GROUP BY ?c"
+    );
+    let (n, decisions) = check(&e, &joined);
+    assert_eq!(n, 4);
+    let (candidates, rows, inject) = constant(&decisions);
+    assert!(candidates > 32 && rows >= 1000.0 && inject, "{decisions:?}");
+    // The same answers as the sub-select that starts from the polygon.
+    let nested = format!(
+        "SELECT ?c (COUNT(*) AS ?n) WHERE {{ {{ SELECT ?s WHERE {{ ?s geo:hasGeometry/geo:asWKT ?w \
+         FILTER(geof:sfIntersects(?w, {window})) }} }} ?s ex:operator ?o . ?o ex:country ?c }} GROUP BY ?c"
+    );
+    assert_eq!(sorted(&e, &joined), sorted(&e, &nested));
+}
+
+#[test]
 fn constant_test_is_left_to_the_filter_when_the_rest_binds_fewer_rows() {
     for e in [Engine::new_tripletrail(), Engine::new_oxigraph().unwrap()] {
         // 400 stations in a 20 x 20 grid, one of them named.

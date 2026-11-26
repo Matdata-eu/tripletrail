@@ -4402,6 +4402,30 @@ impl SpatialContext for Engine {
         Some(n as f64)
     }
 
+    fn estimate_join(
+        &self,
+        triples: &[spargebra::term::TriplePattern],
+        all_graphs: bool,
+    ) -> Option<f64> {
+        if !self.spatial.costed.load(Ordering::Relaxed) {
+            return None;
+        }
+        let Dataset::TripleTrail(store) = &self.store else {
+            return None;
+        };
+        let snapshot = store.snapshot();
+        let compiled = snapshot.compile_bgp(triples, &[])?;
+        if compiled.empty {
+            return Some(0.0);
+        }
+        let graph = if all_graphs || self.union_default_graph() {
+            tripletrail_store::GraphSelector::All
+        } else {
+            tripletrail_store::GraphSelector::Default
+        };
+        Some(snapshot.estimate_rows(&compiled.triples, graph))
+    }
+
     fn values_of(
         &self,
         pattern: &spargebra::algebra::GraphPattern,
@@ -4712,6 +4736,14 @@ impl SpatialContext for Scoped<'_> {
 
     fn estimate(&self, pattern: &spargebra::term::TriplePattern, all_graphs: bool) -> Option<f64> {
         self.engine.estimate(pattern, all_graphs)
+    }
+
+    fn estimate_join(
+        &self,
+        triples: &[spargebra::term::TriplePattern],
+        all_graphs: bool,
+    ) -> Option<f64> {
+        self.engine.estimate_join(triples, all_graphs)
     }
 
     fn sweep_join(&self) -> bool {

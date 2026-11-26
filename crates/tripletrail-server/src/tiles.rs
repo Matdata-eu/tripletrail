@@ -1131,6 +1131,21 @@ fn facet_counts(
     );
     let scope = scope_filter(entry, view, collection, layers, None, params, true)?;
     let all = facet_filter(collection, params, true, None, &scope)?;
+    // The unfiltered counts are kept for the data version (#258): the warm-up counts them, and
+    // the first visitor's map is answered from them whatever the result cache let go since.
+    let unfiltered = version
+        .filter(|_| {
+            scope.signature.is_empty() && all.signature.is_empty() && all.color_key.is_none()
+        })
+        .map(|v| (entry.id, view.fingerprint(), v, collection.id.clone()));
+    if let Some(key) = &unfiltered
+        && let Some(counts) = UNFILTERED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+    {
+        return Ok(counts.clone());
+    }
     let number = |t: &Option<Term>| match t {
         Some(Term::Literal(l)) => l.value().parse::<u64>().unwrap_or(0),
         _ => 0,
@@ -1386,9 +1401,22 @@ fn facet_counts(
         collection.geometry.pattern("?f", "?g"),
         all.sparql,
     );
-    Ok(
-        json!({ "collection": collection.id, "features": features, "facets": facets, "query": query }),
-    )
+    let counts = json!({ "collection": collection.id, "features": features, "facets": facets, "query": query });
+    // Kept only when every facet was counted: a computed facet that failed may pass next time.
+    if let Some(key) = unfiltered
+        && counts["facets"]
+            .as_array()
+            .is_some_and(|f| f.iter().all(|f| f.get("error").is_none()))
+    {
+        let mut kept = UNFILTERED.lock().unwrap_or_else(|e| e.into_inner());
+        // The dataset's older data versions are answered no more.
+        kept.retain(|k, _| k.0 != key.0 || k.2 == key.2);
+        if kept.len() >= UNFILTERED_KEPT {
+            kept.clear();
+        }
+        kept.insert(key, counts.clone());
+    }
+    Ok(counts)
 }
 
 /// Collections one request for facets takes at most.
@@ -1530,6 +1558,14 @@ fn capped(timeout: Option<Duration>, computed: bool) -> Option<Duration> {
         timeout
     }
 }
+
+/// Collections' unfiltered facet counts kept, at most (#258).
+const UNFILTERED_KEPT: usize = 4096;
+/// Dataset, grants' fingerprint, data version and collection.
+type UnfilteredKey = (u64, Option<u64>, crate::ogc::DataVersion, String);
+/// The unfiltered facet counts of each collection, for the data version they were counted on.
+static UNFILTERED: LazyLock<Mutex<HashMap<UnfilteredKey, serde_json::Value>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Failures of computed facets kept, at most.
 const FAILED_KEPT: usize = 1024;
