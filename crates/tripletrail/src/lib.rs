@@ -43,6 +43,7 @@ pub mod shapes;
 mod st_service;
 pub mod statagg;
 mod statistics;
+pub mod temporal;
 pub mod text;
 pub mod ttfn;
 pub mod udf;
@@ -784,6 +785,7 @@ pub fn extension_functions() -> Vec<NamedNode> {
                 }),
         )
         .chain(ttfn::rewritten())
+        .chain(temporal::names())
         .collect()
 }
 
@@ -900,6 +902,9 @@ pub struct Engine {
     /// How many vectors of one length an index needs before it makes a graph of them
     /// ([`Engine::set_vector_graph_min`]).
     vector_graph_min: Arc<std::sync::atomic::AtomicUsize>,
+    /// The offset, in minutes east of UTC, that the temporal functions read values without a
+    /// timezone at ([`Engine::set_time_offset`]; UTC by default).
+    time_offset: Arc<std::sync::atomic::AtomicI64>,
     /// How many queries ordered by `tt:cosine` the vector index answered.
     cosine_orders: Arc<AtomicU64>,
     /// How many parts of queries by callers limited to some graphs or rows the count and
@@ -1208,6 +1213,7 @@ impl Engine {
             text_view_work: Arc::default(),
             vectors: Arc::default(),
             vector_graph_min: Arc::new(std::sync::atomic::AtomicUsize::new(vector::GRAPH_MIN)),
+            time_offset: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             cosine_orders: Arc::new(AtomicU64::new(0)),
             view_shortcuts: Arc::new(AtomicU64::new(0)),
             view_filters: Arc::new(Mutex::new(Vec::new())),
@@ -1380,7 +1386,12 @@ impl Engine {
             )
             .with_custom_aggregate_function(NamedNode::new_unchecked(MAKE_LINE), make_line);
             let mut evaluator = tripletrail_fx::register_functions(evaluator);
-            for (name, f) in xfn::functions().into_iter().chain(ttfn::functions()) {
+            let temporal = temporal::functions(Arc::clone(&self.time_offset));
+            for (name, f) in xfn::functions()
+                .into_iter()
+                .chain(ttfn::functions())
+                .chain(temporal)
+            {
                 evaluator = evaluator.with_custom_function(name, move |args| f(args));
             }
             for (name, make) in statagg::aggregates() {
@@ -3872,6 +3883,22 @@ impl Engine {
     pub fn set_vector_graph_min(&self, n: usize) {
         let n = if n == 0 { usize::MAX } else { n };
         self.vector_graph_min.store(n, Ordering::Relaxed);
+    }
+
+    /// The offset the temporal functions (`tt:period` and the rest, #300) read a date or
+    /// date-time without a timezone at, in minutes east of UTC (0, UTC, by default):
+    /// `"2026-11-26"^^xsd:date` is the day from 2026-11-25T23:00:00Z at 60. A call that gives
+    /// its own (`tt:period(x, "+01:00")`) uses that. [`temporal::parse_offset`] reads `+01:00`.
+    pub fn set_time_offset(&self, minutes: i64) {
+        if self.time_offset.swap(minutes, Ordering::Relaxed) != minutes {
+            // Answers kept at another offset would be wrong now.
+            self.results.clear();
+        }
+    }
+
+    /// The offset of [`Engine::set_time_offset`], in minutes.
+    pub fn time_offset(&self) -> i64 {
+        self.time_offset.load(Ordering::Relaxed)
     }
 
     /// Turns the spatial FILTER rewrite on or off (on by default; off is for comparisons).

@@ -199,11 +199,12 @@ fn dataset(d: &Yaml) -> Result<Vec<(&'static str, String)>, String> {
         let ok = matches!(k, Yaml::String(k) if [
             "name", "path", "read-only", "read_only", "union-default-graph", "union_default_graph",
             "rdfs", "owl-rl", "owl_rl", "aliases", "alias", "text-properties", "text_properties",
-            "examples", "default-query", "default_query", "map-view", "map_view",
+            "examples", "default-query", "default_query", "map-view", "map_view", "time-offset",
+            "time_offset",
         ].contains(&k.as_str()));
         if !ok {
             return Err(format!(
-                "datasets: unknown key {k:?}; a dataset has name, path, read-only, union-default-graph, rdfs, owl-rl, aliases, text-properties, examples, default-query and map-view"
+                "datasets: unknown key {k:?}; a dataset has name, path, read-only, union-default-graph, rdfs, owl-rl, aliases, text-properties, examples, default-query, map-view and time-offset"
             ));
         }
     }
@@ -278,6 +279,15 @@ fn dataset(d: &Yaml) -> Result<Vec<(&'static str, String)>, String> {
             ));
         }
     }
+    match get("time-offset") {
+        None | Some(Yaml::Null) => {}
+        Some(Yaml::String(o)) => out.push(("time-offset", format!("{name}={o}"))),
+        Some(_) => {
+            return Err(format!(
+                "datasets: {name}: time-offset is Z or ±hh:mm, in quotes (\"+01:00\")"
+            ));
+        }
+    }
     let aliases = match get("aliases").or_else(|| get("alias")) {
         None | Some(Yaml::Null) => Vec::new(),
         Some(Yaml::String(a)) => vec![a.clone()],
@@ -325,7 +335,35 @@ mod tests {
             o("examples", true, None),
             o("default-query", true, None),
             o("map-view", true, None),
+            o("time-offset", true, None),
         ]
+    }
+
+    #[test]
+    fn a_dataset_takes_a_time_offset() {
+        let text = "datasets:\n  - name: rinf\n    time-offset: \"+01:00\"\n";
+        let got: Vec<String> = expand(&args(&["tripletrail", "serve"]), text, &opts())
+            .unwrap()
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "tripletrail",
+                "serve",
+                "--dataset",
+                "rinf",
+                "--time-offset",
+                "rinf=+01:00"
+            ]
+        );
+        let bad = "datasets:\n  - name: rinf\n    time-offset: 1\n";
+        assert!(
+            expand(&args(&["tripletrail", "serve"]), bad, &opts())
+                .unwrap_err()
+                .contains("time-offset is Z or")
+        );
     }
 
     fn args(a: &[&str]) -> Vec<OsString> {

@@ -332,6 +332,44 @@ partition without one. The results match PostgreSQL's for the same rows.
 | `win:firstValue (?x ?out)`, `win:lastValue` | ✅ | Over the frame. |
 | `win:sum`, `win:avg`, `win:min`, `win:max`, `win:count` `(?x ?out)` | ✅ | Over the frame, skipping unbound values as SQL skips NULL. Exact for integers and decimals; a value that is not a number makes the result unbound. Linear in the rows for any frame. |
 
+### D.4 Temporal (#300)
+
+A period is a half-open interval `[start, end)` on a timeline of whole milliseconds, each side
+possibly open, as PostgreSQL's discrete ranges and SQL:2011's `PERIOD`. An instant `t` is
+`[t, t + 1 ms)`; finer fractions are truncated. Periods are literals of the datatype `tt:period`
+(`http://w3id.org/tripletrail/fn#period`), written `start/end` with `..` for an open side, as the
+OGC API's `datetime`: `"2022-12-11/2078-12-31"^^tt:period` holds on 31 December 2078. The form
+the functions give is UTC stamps: `2022-12-11T00:00:00Z/2079-01-01T00:00:00Z`.
+
+Every function takes any temporal value where it takes a period: an `xsd:dateTime` or
+`xsd:dateTimeStamp` (an instant), an `xsd:date`, `xsd:gYearMonth` or `xsd:gYear` (its whole
+day, month or year), a `tt:period`, or a plain string of one of these. A value without a
+timezone is read in UTC, or at the dataset's `--time-offset` (`+01:00`); IANA zone names are
+not planned. Years run from -999999 to 999999, year 0 being 1 BCE as in XSD 1.1. A value that
+is none of these, or an empty period, gives no value (an error, as a bad cast does).
+
+| Function | Status | Notes |
+|---|---|---|
+| `tt:period(x [, offset])` | ✅ | The period of a temporal value; `offset` (`"+01:00"`, `"Z"`) for this call. |
+| `tt:period(start, end [, offset])` | ✅ | From two values; an unbound variable for an open side. A date, month or year as the end covers its whole span ("until 2078-12-31" includes that day); an instant as the end is not in the period. A period as a side gives its start, or its end. |
+| `tt:periodStart`, `tt:periodEnd` | ✅ | `xsd:dateTimeStamp` in UTC; no value for an open side. |
+| `tt:periodDuration` | ✅ | `xsd:dayTimeDuration`; no value when a side is open. |
+| `tt:isOpenStart`, `tt:isOpenEnd`, `tt:isInstant` | ✅ | |
+| `tt:periodBefore`, `periodAfter`, `periodMeets`, `periodMetBy`, `periodOverlaps`, `periodOverlappedBy`, `periodStarts`, `periodStartedBy`, `periodDuring`, `periodStrictlyContains`, `periodFinishes`, `periodFinishedBy`, `periodEquals` | ✅ | Allen's 13 relations, exactly one of which holds between two periods. `periodOverlaps` is Allen's, strict (the first starts first and ends inside the second), not SQL's `OVERLAPS`. `periodStrictlyContains` is Allen's *contains*, the inverse of `periodDuring`. An open start comes before, and an open end after, every instant. |
+| `tt:periodIntersects(a, b)` | ✅ | An instant in common: SQL's `OVERLAPS`, PostgreSQL's `&&`. |
+| `tt:periodContains(a, b)` | ✅ | Every instant of `b` in `a`, as PostgreSQL's `@>`: "valid on a day" is `tt:periodContains(tt:period(?from, ?until), "2026-11-26"^^xsd:date)`. |
+| Set operations (`span`, `gap`, `intersection`), the ISWC 2025 `tfn:` functions | ⬜ | #304. |
+| OWL-Time instants and intervals read as one period | ⬜ | #301. |
+
+SPARQL's own `=` and `ORDER BY` see a `tt:period` as a literal of a datatype they do not know:
+`"2020/2021"^^tt:period` is not `=` to its canonical form, and periods sort by their text.
+Compare them with `tt:periodEquals` and order by `tt:periodStart(?p)`; a value order of
+periods comes with the validity column of #303. The offset is the dataset's when a function is
+called, so SHACL constraints and rules, user-defined functions and queries all read at it.
+
+The relations and the two checks are tested against a truth table made from PostgreSQL's
+`tstzrange` operators (`crates/tripletrail/tests/data/period_relations.sql`).
+
 ### D.3 Property functions (#232)
 
 `list:` = `http://jena.apache.org/ARQ/list#`, `apf:` = `http://jena.apache.org/ARQ/property#`.
