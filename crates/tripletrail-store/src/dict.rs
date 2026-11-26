@@ -46,6 +46,9 @@ pub(crate) struct Piece {
     /// The piece's saved index, read from a checkpoint; `None` when its keys are in the
     /// table on the heap.
     index: Option<SavedIndex>,
+    /// Its keys are in a file a load spilled them to ([`Dictionary::map_tail`]), mapped
+    /// without readahead (see `Spill::map_keys`).
+    spilled: bool,
 }
 
 /// A saved hash index of a dictionary piece: open addressing with linear probing over
@@ -918,6 +921,7 @@ impl Dictionary {
                 bytes: Buf::default(),
                 ends: vec![0].into(),
                 index: None,
+                spilled: false,
             });
         }
         let last = pieces.last_mut().expect("a dictionary has a piece");
@@ -974,7 +978,25 @@ impl Dictionary {
         debug_assert_eq!(bytes.len(), last.bytes.len());
         last.bytes = bytes;
         last.ends = ends;
+        last.spilled = true;
         Ok(())
+    }
+
+    /// Runs `f`, which reads the keys in order (a checkpoint writes them), with readahead on
+    /// the keys a load spilled: they are mapped without it for the load's lookups (#232),
+    /// and one page at a time a pass over hundreds of GB of keys would wait on every page.
+    pub(crate) fn reading_in_order<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.advise_spilled(true);
+        let result = f();
+        self.advise_spilled(false);
+        result
+    }
+
+    fn advise_spilled(&self, in_order: bool) {
+        for p in self.pieces.iter().filter(|p| p.spilled) {
+            p.bytes.advise_in_order(in_order);
+            p.ends.advise_in_order(in_order);
+        }
     }
 
     /// Bytes of the checkpoint files this dictionary maps (0 when held on the heap).
@@ -1013,6 +1035,7 @@ impl Dictionary {
                 bytes,
                 ends,
                 index,
+                spilled: false,
             });
             first += n;
         }
@@ -1035,6 +1058,7 @@ impl Dictionary {
                 bytes: bytes.into(),
                 ends: ends.into(),
                 index: None,
+                spilled: false,
             });
         }
         debug_assert!(pieces.last().map(|p| p.first as usize - 1 + p.len()) >= Some(self.len()));
@@ -1139,6 +1163,7 @@ impl Dictionary {
                 bytes: Buf::default(),
                 ends: vec![0].into(),
                 index: None,
+                spilled: false,
             }],
             table: HashTable::new(),
             hasher: Hasher::default(),
@@ -1190,6 +1215,12 @@ fn build_table(
     let mut table = HashTable::with_capacity(capacity.max(len + 1));
     let mut hashes = Vec::with_capacity(CHUNK.min(len));
     for p in unindexed {
+        // Read in order: with readahead on keys a load spilled (see
+        // `Dictionary::reading_in_order`).
+        if p.spilled {
+            p.bytes.advise_in_order(true);
+            p.ends.advise_in_order(true);
+        }
         let first = p.first as usize;
         for start in (first..first + p.len()).step_by(CHUNK) {
             let end = (start + CHUNK).min(first + p.len());
@@ -1201,6 +1232,10 @@ fn build_table(
                 // There is room: the table never grows here.
                 table.insert_unique(h, o as u32, |_| unreachable!("the table has room"));
             }
+        }
+        if p.spilled {
+            p.bytes.advise_in_order(false);
+            p.ends.advise_in_order(false);
         }
     }
     table

@@ -497,6 +497,30 @@ impl Handle {
         shapes::install_folder(&self.state, &entry, dir)
     }
 
+    /// Builds the string ranks of the dataset `name` (the order of its IRIs and strings, which
+    /// `MIN`, `MAX` and `ORDER BY` read) ahead of the first query that needs them (`serve`,
+    /// unless `--no-warm-up`), for a dictionary of at most 16 million terms (128 MB). Answers
+    /// what was done, `None` when nothing was.
+    pub fn warm_ranks(&self, name: &str) -> Option<String> {
+        const MAX_TERMS: usize = 1 << 24;
+        let entry = self
+            .state
+            .registry
+            .read_unpoisoned()
+            .datasets
+            .get(name)
+            .cloned()?;
+        let tripletrail::store::Dataset::TripleTrail(store) = entry.engine.store() else {
+            return None;
+        };
+        let started = std::time::Instant::now();
+        let terms = store.snapshot().warm_string_ranks(MAX_TERMS)?;
+        Some(format!(
+            "string ranks of {terms} terms in {:.2} s",
+            started.elapsed().as_secs_f64()
+        ))
+    }
+
     /// Makes the map of the dataset `name` ahead of its first visitor (#92, `serve`, unless
     /// `--no-warm-up`): its collections and their unfiltered facet counts, kept in the caches
     /// requests read, each facet query under the dataset's timeout and the whole in at most

@@ -981,20 +981,30 @@ impl PyEngine {
             let mut rows = Vec::new();
             let mut triples = Vec::new();
             let mut writer = tripletrail::shacl::ReportWriter::new();
+            if statistics {
+                writer = writer.with_cells();
+            }
             let counts = engine.validate_counted(&shapes, data.as_ref(), statistics, &mut |r| {
                 rows.push(ResultRow {
                     focus_node: r.focus_node.clone(),
                     result_path: r.result_path.as_ref().map(|p| p.to_sparql()),
                     value: r.value.clone(),
                     source_shape: r.source_shape.clone(),
+                    shape_iri: r.source_shape_iri.as_str().to_owned(),
                     source_constraint_component: r.source_constraint_component.clone(),
                     severity: r.severity.clone(),
                     messages: r.messages.to_vec(),
+                    key: format!("{:032x}", r.key()),
                 });
                 writer.result(&r, &mut |t| triples.push(t));
             })?;
+            let mut summary = None;
             if statistics {
                 writer.statistics(&counts, &mut |t| triples.push(t));
+                summary = writer.take_summary();
+                if let Some(s) = &summary {
+                    writer.summary(s, &mut |t| triples.push(t));
+                }
             }
             let conforms = writer.finish(&mut |t| triples.push(t));
             if let Some(g) = into {
@@ -1005,6 +1015,7 @@ impl PyEngine {
                 rows,
                 triples,
                 counts,
+                summary,
             })
         })
         .map_err(to_py_err)
@@ -1308,9 +1319,11 @@ struct ResultRow {
     result_path: Option<String>,
     value: Option<Term>,
     source_shape: Term,
+    shape_iri: String,
     source_constraint_component: Term,
     severity: Term,
     messages: Vec<Term>,
+    key: String,
 }
 
 /// A query parsed once by `Engine.prepare`, run by `Engine.query`.
@@ -1340,6 +1353,7 @@ struct PyValidationReport {
     rows: Vec<ResultRow>,
     triples: Vec<Triple>,
     counts: Vec<tripletrail::shacl::ShapeCount>,
+    summary: Option<tripletrail::shacl::Summary>,
 }
 
 #[pymethods]
@@ -1352,8 +1366,9 @@ impl PyValidationReport {
 
     /// One dict per result, ready for `pandas.DataFrame`: `focus_node`, `result_path` (as a
     /// SPARQL path, or None), `value`, `source_shape`, `source_constraint_component`,
-    /// `severity` (terms) and `message` (the first message, or None; `messages`
-    /// holds them all).
+    /// `severity` (terms), `message` (the first message, or None; `messages`
+    /// holds them all), `shape_iri` (the source shape's stable IRI) and `key` (the finding key,
+    /// 32 hexadecimal digits, the same for the same result in every run).
     #[getter]
     fn results<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let term = |t: &Term| py_term(py, t.clone());
@@ -1365,6 +1380,7 @@ impl PyValidationReport {
                 d.set_item("result_path", &r.result_path)?;
                 d.set_item("value", r.value.as_ref().map(term).transpose()?)?;
                 d.set_item("source_shape", term(&r.source_shape)?)?;
+                d.set_item("shape_iri", &r.shape_iri)?;
                 d.set_item(
                     "source_constraint_component",
                     term(&r.source_constraint_component)?,
@@ -1375,6 +1391,7 @@ impl PyValidationReport {
                     "messages",
                     r.messages.iter().map(term).collect::<PyResult<Vec<_>>>()?,
                 )?;
+                d.set_item("key", &r.key)?;
                 Ok(d)
             })
             .collect()
@@ -1402,6 +1419,61 @@ impl PyValidationReport {
                 Ok(d)
             })
             .collect()
+    }
+
+    /// With `Engine.validate(..., statistics=True)`, the run in figures, made while the results
+    /// were found: `results`, `failing_focus_nodes` (distinct focus nodes with a result),
+    /// `by_severity` (severity IRI to results) and `cells`, one dict per rule, severity and
+    /// constraint component with results, the most first (`shape_iri`, `severity`, `component`,
+    /// `results`, `failing_focus_nodes`, and `samples`: up to 3 dicts with `focus_node`, `value`
+    /// and `key`). None otherwise.
+    #[getter]
+    fn summary<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(s) = &self.summary else {
+            return Ok(None);
+        };
+        let d = PyDict::new(py);
+        d.set_item("results", s.results)?;
+        d.set_item("failing_focus_nodes", s.failing_focus_nodes)?;
+        let by = PyDict::new(py);
+        for (severity, n) in s.by_severity() {
+            let key = match &severity {
+                Term::NamedNode(n) => n.as_str().to_owned(),
+                other => other.to_string(),
+            };
+            by.set_item(key, n)?;
+        }
+        d.set_item("by_severity", by)?;
+        let cells = s
+            .cells
+            .iter()
+            .map(|c| {
+                let cell = PyDict::new(py);
+                cell.set_item("shape_iri", c.shape_iri.as_str())?;
+                cell.set_item("severity", py_term(py, c.severity.clone())?)?;
+                cell.set_item("component", py_term(py, c.component.clone())?)?;
+                cell.set_item("results", c.results)?;
+                cell.set_item("failing_focus_nodes", c.focus_nodes)?;
+                let samples = c
+                    .samples
+                    .iter()
+                    .map(|x| {
+                        let one = PyDict::new(py);
+                        one.set_item("focus_node", py_term(py, x.focus_node.clone())?)?;
+                        one.set_item(
+                            "value",
+                            x.value.clone().map(|v| py_term(py, v)).transpose()?,
+                        )?;
+                        one.set_item("key", format!("{:032x}", x.key))?;
+                        Ok(one)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?;
+                cell.set_item("samples", samples)?;
+                Ok(cell)
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        d.set_item("cells", cells)?;
+        Ok(Some(d))
     }
 
     fn __len__(&self) -> usize {

@@ -4392,6 +4392,8 @@ pub(crate) struct Pick<'a> {
     ranks: Option<std::sync::Arc<tripletrail_store::StringRanks>>,
     /// Pairs compared by their text so far, without ranks.
     by_text: usize,
+    /// Whether this started the background build of the ranks.
+    building: bool,
     /// The numbers [`Self::extreme`] read as the evaluator does, `None` for other terms.
     numbers: HashMap<TermId, Option<spareval::ExpressionTerm>>,
 }
@@ -4403,6 +4405,7 @@ impl<'a> Pick<'a> {
             terms: HashMap::new(),
             ranks: None,
             by_text: 0,
+            building: false,
             numbers: HashMap::new(),
         }
     }
@@ -4411,6 +4414,8 @@ impl<'a> Pick<'a> {
     /// building them reads the whole dictionary (75 ms for 250,000 terms), more than a
     /// `MIN` over a few groups' rows costs by text (#10).
     const RANK_AFTER: usize = 1 << 18;
+    /// [`Pick::RANK_AFTER`] while the ranks are being built: most of the build is done.
+    const RANK_AFTER_BUILDING: usize = 1 << 12;
 
     /// `SAMPLE(?var)`: the first bound value (`UNBOUND` if there is none).
     pub(crate) fn sample(t: &Table, rows: &[u32], var: &Variable) -> TermId {
@@ -4613,12 +4618,17 @@ impl<'a> Pick<'a> {
             if self.ranks.is_none() && self.by_text == 0 {
                 self.ranks = self.snapshot.string_ranks_built();
                 if self.ranks.is_none() {
-                    self.snapshot.string_ranks_in_background();
+                    self.building = self.snapshot.string_ranks_in_background();
                 }
             }
             if self.ranks.is_none() {
                 self.by_text += 1;
-                if self.by_text > Self::RANK_AFTER {
+                // While another query has them built, wait for them sooner.
+                if self.by_text > Self::RANK_AFTER
+                    || (self.by_text > Self::RANK_AFTER_BUILDING
+                        && !self.building
+                        && self.snapshot.string_ranks_building())
+                {
                     self.ranks = Some(self.snapshot.string_ranks());
                 }
             }

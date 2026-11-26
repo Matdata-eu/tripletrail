@@ -1529,6 +1529,21 @@ fn write_checkpoint(
     previous: Option<(&Path, &[DictPiece])>,
     render_wkt: bool,
 ) -> io::Result<Vec<DictPiece>> {
+    // The keys, their index and geometries are read in order.
+    dict.reading_in_order(|| {
+        write_checkpoint_files(target, dict, quads, geometries, previous, render_wkt)
+    })
+}
+
+/// [`write_checkpoint`], once the dictionary reads ahead.
+fn write_checkpoint_files(
+    target: &Path,
+    dict: &Dictionary,
+    quads: &QuadIndex,
+    geometries: EncodeGeometry<'_>,
+    previous: Option<(&Path, &[DictPiece])>,
+    render_wkt: bool,
+) -> io::Result<Vec<DictPiece>> {
     fs::create_dir_all(target)?;
     // Segment files are linked only into a checkpoint of the store itself; a copy elsewhere
     // (`save_to`, a backup) shares no file with the store, so that damage to one does not
@@ -2714,6 +2729,13 @@ impl Spill {
         w.into_inner().map_err(io::IntoInnerError::into_error)?;
         let mapped = Mapped::open(path.clone()).map_err(io::Error::other)?;
         let _ = fs::remove_file(&path);
+        // A load looks its keys up in no order, so the kernel's readahead of about 100 KB a
+        // page fault mostly reads keys nothing asks for, and pushes the ones it needs out of
+        // a small page cache (#232: 7.8 TB read for 932 GB of N-Triples at 5B triples). Only
+        // the page asked for is read; with the lookups on many threads (`Store::find_keys`),
+        // those reads wait side by side.
+        #[cfg(unix)]
+        let _ = mapped.map.advise(memmap2::Advice::Random);
         let bad = || io::Error::other("dictionary keys written short");
         Ok((
             Buf::mapped(&mapped.map, 0, bytes.len()).ok_or_else(bad)?,

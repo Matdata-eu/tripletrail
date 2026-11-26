@@ -143,6 +143,9 @@ def test_dataset(server):
     assert b"<http://e/g>" in ds.dump()
     report = ds.validate(tripletrail.NamedNode(E + "shapes"))
     assert not report.conforms and report.results[0]["focus_node"] == tripletrail.NamedNode(E + "y")
+    assert len(report.results[0]["key"]) == 32
+    assert report.summary["results"] == len(report.results)
+    assert report.summary["cells"][0]["samples"][0]["key"] in {r["key"] for r in report.results}
     with pytest.raises(remote.RemoteError):
         ds.query("SELECT nonsense")
 

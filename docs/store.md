@@ -187,9 +187,11 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   its rank is in the range `Snapshot::string_prefix` finds by binary search; language
   strings and strings without a rank are read from the dictionary; other values are an
   error. On 300 k labels: `REGEX(?o, "^C")` count 52 → 6.5 ms, `MIN` of a string predicate
-  16 → 6.4 ms. The first query to need the ranks starts building them in the background
+  16 → 6.4 ms. `serve` builds the ranks as a dataset opens (dictionaries of up to 16 million
+  terms, 0.14 s for 460 k); otherwise the first query to need them starts building them in the background
   (one sort of the strings, about 80 ms for 250 k terms); `MIN` and `MAX` compare texts
-  until they are ready, and build them in place only after 2^18 text comparisons.
+  until they are ready (without waiting on the build), and build them in place only after
+  2^18 text comparisons, or wait for them after 2^12 when another query started the build.
   `SUM` and `AVG` of a condition (`SUM(?o > 0)`, `AVG(BOUND(?v))`) are answered on ids
   without evaluating it: a condition is a boolean, not a number, so the aggregate is
   unbound over any row and 0 over none, as in the evaluator.
@@ -601,10 +603,33 @@ not the store. Two things to fix next, neither of which blocks the switch:
 - **Stream the bulk load.** A load read its whole chunk and parsed every quad before
   interning them, so peak memory during a load (11.6 GB for all of RINF in 1 GB chunks) was three
   times what the store keeps afterwards. Done since: N-Triples and N-Quads are read and parsed
-  64 MB at a time, with each block's terms looked up in the dictionary by the parsing threads
-  (only new terms are added one by one), and the index permutations are built one after
+  64 MB at a time on every core, while one thread adds each block's terms to the dictionary,
+  and the index permutations are built one after
   another in one buffer. Loading the generated 60x60 grid (2.5 M triples, 359 MB of N-Triples)
   with `tripletrail load` now peaks at 350 MB instead of 1,267 MB, and takes 3.7 s instead of 4.0 s.
+
+Once a load's dictionary keys are in mapped files (past an eighth of `--memory-limit`), a term
+seen before is read back from those files at random. The thread that adds the terms did those
+reads one at a time, each one waiting for the disk alone, so a load of 5B triples on a network
+volume ran 39 hours at about 560 reads a second with a third of a core busy (#232). Now the
+terms of each block are first looked up on the lookup threads (`TRIPLETRAIL_LOOKUP_THREADS`),
+as the quad loads already did, and the adding thread only adds the new ones. Those mapped files
+are also read without readahead (`MADV_RANDOM`): each page fault read about 100 KB around the
+key, mostly keys nothing asked for, and pushed the ones it needed out of a small page cache.
+On 48.9M synthetic triples (6.7 GB of N-Triples) with `--memory-limit 256M` and the process's
+memory capped at 1.2 GB, 4 cores, two runs each, with the same answers:
+
+| | load | read from disk | major page faults |
+|---|---:|---:|---:|
+| before | 91 to 92 s | 38 GB | 0.35M |
+| no readahead only | 98 to 109 s | 15 GB | 1.3 to 1.4M |
+| lookups on the lookup threads only | 79 to 85 s | 49 to 51 GB | 0.46 to 0.49M |
+| both (now) | 71 to 78 s | 15 to 16 GB | 1.5 to 1.6M |
+
+Without readahead each page fault reads less, but there are about four times as many; only
+with the lookups side by side does that pay. The passes that read those keys in order (the
+checkpoint at the end of the load, a rebuild of the dictionary's table) turn readahead back on
+for their length: without it the checkpoint of the load above took 15 to 23 s instead of 10.
 
 ### Streaming bulk load on all of RINF
 

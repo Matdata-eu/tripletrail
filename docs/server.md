@@ -158,7 +158,10 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   over `--max-body` (16 MiB by default) are answered with 413. Cancellation is checked at each
   store access, while the spatial rewrite plans the query, in the routing algorithms and in
   long-running geo functions.
-- Once the datasets are open, `serve` makes each one's map in the background, one dataset
+- Once the datasets are open, `serve` builds each one's string ranks (the order of its IRIs
+  and strings, which `MIN`, `MAX` and `ORDER BY` on the id executor read; 8 bytes a term, for
+  dictionaries of up to 16 million terms; logged as `{ds}: string ranks of N terms in S s`,
+  0.14 s for 460,000 terms) and then makes its map in the background, one dataset
   after the other (#92): the map's collections (the profile of the data) and the unfiltered
   facet counts of each, kept in the caches that requests read, so the first visitor does not
   wait for them. Each facet query gets the dataset's timeout, as a map request does, and a
@@ -166,7 +169,7 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   first request that needs them. The log says `{ds}: map ready: N collections and their facets
   in S s`, or which collections ran out of time, with the facets that failed (a computed facet
   that times out). `--no-warm-up`
-  (`TRIPLETRAIL_NO_WARM_UP`) leaves it to the first map request. A dataset that is not on
+  (`TRIPLETRAIL_NO_WARM_UP`) leaves both to the first query or map request that needs them. A dataset that is not on
   TripleTrail's store keeps no such caches and is skipped.
 - `--cors <origin>` (repeatable) allows cross-origin requests from those origins, `--cors`
   alone from every origin. Pages may send `Authorization`, `Content-Type`, `Accept` and `X-API-Key`, and
@@ -814,9 +817,10 @@ curl -X POST -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/jso
   at a time on the server, at most an hour; the others wait. `validation` has `status`
   (`queued`, `running`, `done`, `failed` with an `error`, or `interrupted` when the server
   stopped before it was done), `before` and `after` (how many results each set gives), and
-  `new` and `gone`: results told apart by focus node, path, value, source shape (a blank one
-  written out), constraint component and severity, IRIs as they are and other terms as in
-  N-Triples. With them come `newByShape` (the 20 shapes with the most new results) and
+  `new` and `gone`: results told apart by their
+  [finding key](validation-and-reasoning.md#finding-keys) (focus node, path, value, source
+  shape by its stable IRI, constraint component and severity). In the answer, a blank source
+  shape is written out, IRIs are as they are and other terms as in N-Triples. With them come `newByShape` (the 20 shapes with the most new results) and
   `newResults` (the first 20), and `ms`. Results are counted as they are found, some 40 bytes
   for each distinct one (about 75 MB for 3 million results on 1 million nodes); past 4 million
   distinct results, `compared` is `false` and `moreByShape` gives the shapes with more results
@@ -1041,10 +1045,14 @@ scratch store (#401):
 - `…/validate` checks the data, plus what the rules of `rules/` infer (`rules=false` for the
   data alone), against `shapes/`. JSON: `conforms`, `resultCount`, `results` (the first
   10,000, `limit=` for more: `focusNode`, `resultPath` as a SPARQL path, `value`,
-  `sourceShape`, `sourceConstraintComponent`, `severity`, `messages`, and for a failure
-  of `sh:node`, `sh:and`, `sh:or`, `sh:xone` or `sh:qualifiedValueShape` its `details`: the
+  `sourceShape`, `shapeIri` (its stable IRI), `sourceConstraintComponent`, `severity`,
+  `messages`, `key` (the [finding key](validation-and-reasoning.md#finding-keys), 32
+  hexadecimal digits), and for a failure of `sh:node`, `sh:and`, `sh:or`, `sh:xone` or `sh:qualifiedValueShape` its `details`: the
   value node's results against the nested shapes, as `sh:detail` gives them), `shapes` (focus and
-  value nodes each shape was checked against) and `coverage`: `untargetedClasses`, the
+  value nodes each shape was checked against), `summary` (the run's
+  [summary and cell index](validation-and-reasoning.md#run-summary-and-cell-index):
+  `results`, `failingFocusNodes`, `bySeverity`, and `cells` with `shapeIri`, `severity`,
+  `component`, `results`, `failingFocusNodes` and `samples`) and `coverage`: `untargetedClasses`, the
   classes with instances that no shape targets, directly or through a superclass, and
   `emptyShapes`, the node shapes that matched no focus node.
 - Both answer RDF by `Accept` (or `format=turtle`…): the W3C validation report with shape

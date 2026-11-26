@@ -627,3 +627,108 @@ fn blank_shapes_get_stable_iris() {
     let anonymous = shape_iris("[] sh:targetNode ex:a ; sh:class ex:Car .");
     assert!(anonymous[0].starts_with("urn:x-tripletrail-shacl:shape:"));
 }
+
+/// The finding keys of validating `data` with `shapes`, sorted.
+fn finding_keys(shapes: &str, data: &str) -> Vec<u128> {
+    let shapes = Shapes::compile(&graph(shapes)).unwrap();
+    let data = graph(data);
+    let mut keys = Vec::new();
+    Validator::new(&shapes, &data).report(&mut |r| keys.push(r.key()));
+    keys.sort_unstable();
+    keys
+}
+
+#[test]
+fn finding_keys_are_stable() {
+    let shapes = "ex:S sh:targetClass ex:Car ;
+        sh:property [ sh:path ex:p ; sh:maxInclusive 1 ] ;
+        sh:property [ sh:path ex:q ; sh:minCount 1 ] .";
+    let data = "ex:a a ex:Car ; ex:p 2, 3 . ex:b a ex:Car ; ex:p 1 ; ex:q 1 .";
+    let keys = finding_keys(shapes, data);
+    // ex:a: two values over 1 and no ex:q; each result has its own key.
+    assert_eq!(keys.len(), 3);
+    assert!(keys.windows(2).all(|w| w[0] != w[1]));
+    // A new read of the shapes (new blank node labels) gives the same keys.
+    assert_eq!(finding_keys(shapes, data), keys);
+    // Keys are stored to compare with later runs: they must not change between builds.
+    // This one is 128-bit FNV-1a of `<http://example.com/a>`, ``, `<http://example.com/a>`,
+    // `<http://example.com/S>`, `<…shacl#ClassConstraintComponent>` and `<…shacl#Violation>`,
+    // each followed by the byte 0xff.
+    assert_eq!(
+        finding_keys("ex:S sh:targetNode ex:a ; sh:class ex:Car .", ""),
+        [0x07793a455b8420e67a437da11447b4a7]
+    );
+    let with_message = shapes.replace("sh:minCount 1", "sh:minCount 1 ; sh:message \"no q\"");
+    let changed = finding_keys(&with_message, data);
+    // The message changes the ex:q shape's IRI (its triples changed), so only its key moves.
+    assert_eq!(changed.iter().filter(|k| keys.contains(k)).count(), 2);
+    // A severity is part of the key.
+    let warning = shapes.replace(
+        "sh:maxInclusive 1",
+        "sh:maxInclusive 1 ; sh:severity sh:Warning",
+    );
+    assert_eq!(
+        finding_keys(&warning, data)
+            .iter()
+            .filter(|k| keys.contains(k))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn cells_group_results_by_rule_severity_and_component() {
+    let shapes = Shapes::compile(&graph(
+        "ex:S sh:targetClass ex:Car ;
+            sh:property [ sh:path ex:p ; sh:maxInclusive 1 ; sh:datatype xsd:integer ] ;
+            sh:property [ sh:path ex:q ; sh:minCount 1 ; sh:severity sh:Warning ] .",
+    ))
+    .unwrap();
+    let data = graph(
+        "ex:a a ex:Car ; ex:p 2, 3, 4, 5 . ex:b a ex:Car ; ex:p 9 ; ex:q 1 . ex:c a ex:Car ; ex:p \"x\" .",
+    );
+    let mut cells = crate::Cells::default();
+    Validator::new(&shapes, &data).report(&mut |r| cells.add(&r));
+    let s = cells.finish();
+    // ex:p over 1 (or not a number): a (4 values), b and c; not an integer: c; no ex:q: a, c.
+    assert_eq!((s.results, s.failing_focus_nodes), (9, 3));
+    let rows: Vec<(String, u64, usize, usize)> = s
+        .cells
+        .iter()
+        .map(|c| {
+            let component = c.component.to_string();
+            let local = component
+                .rsplit('#')
+                .next()
+                .unwrap()
+                .trim_end_matches('>')
+                .to_owned();
+            (local, c.results, c.focus_nodes, c.samples.len())
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("MaxInclusiveConstraintComponent".to_owned(), 6, 3, 3),
+            ("MinCountConstraintComponent".to_owned(), 2, 2, 2),
+            ("DatatypeConstraintComponent".to_owned(), 1, 1, 1),
+        ]
+    );
+    assert_eq!(
+        s.by_severity()
+            .iter()
+            .map(|(t, n)| (t.to_string(), *n))
+            .collect::<Vec<_>>(),
+        [
+            ("<http://www.w3.org/ns/shacl#Violation>".to_owned(), 7),
+            ("<http://www.w3.org/ns/shacl#Warning>".to_owned(), 2),
+        ]
+    );
+    // Samples are the first results found, with their finding keys.
+    assert!(
+        s.cells[0]
+            .samples
+            .iter()
+            .all(|x| x.key != 0 && x.node.is_none())
+    );
+}

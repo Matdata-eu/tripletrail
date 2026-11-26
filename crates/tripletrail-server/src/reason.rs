@@ -112,9 +112,11 @@ pub(crate) fn validate(
     let limit = number(params, "limit", 1_000_000)?.unwrap_or(RESULTS);
     let mut results = Vec::new();
     let mut total = 0usize;
+    let mut cells = tripletrail::shacl::Cells::default();
     let counts = engine
         .validate_counted(&target.shapes, data, true, &mut |r| {
             total += 1;
+            cells.add(&r);
             if results.len() < limit {
                 results.push(result_json(&r));
             }
@@ -147,6 +149,7 @@ pub(crate) fn validate(
             "results": results,
             "truncated": total > results.len(),
             "shapes": shapes,
+            "summary": summary_json(&cells.finish()),
             "coverage": {
                 "untargetedClasses": untargeted(&engine, target)?,
                 "emptyShapes": empty,
@@ -659,6 +662,29 @@ impl HttpError {
     }
 }
 
+/// A run's summary and cell index as JSON.
+fn summary_json(s: &tripletrail::shacl::Summary) -> Value {
+    json!({
+        "results": s.results,
+        "failingFocusNodes": s.failing_focus_nodes,
+        "bySeverity": s.by_severity().iter()
+            .map(|(severity, n)| json!({ "severity": term(severity), "results": n }))
+            .collect::<Vec<_>>(),
+        "cells": s.cells.iter().map(|c| json!({
+            "shapeIri": c.shape_iri.as_str(),
+            "severity": term(&c.severity),
+            "component": term(&c.component),
+            "results": c.results,
+            "failingFocusNodes": c.focus_nodes,
+            "samples": c.samples.iter().map(|s| json!({
+                "focusNode": term(&s.focus_node),
+                "value": s.value.as_ref().map(term),
+                "key": format!("{:032x}", s.key),
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
 /// A validation result as JSON, with its `sh:detail`s nested as `details`.
 fn result_json(r: &tripletrail::shacl::ValidationResult<'_>) -> Value {
     let mut v = json!({
@@ -666,6 +692,7 @@ fn result_json(r: &tripletrail::shacl::ValidationResult<'_>) -> Value {
         "resultPath": r.result_path.as_ref().map(|p| p.to_sparql()),
         "value": r.value.as_ref().map(term),
         "sourceShape": term(r.source_shape),
+        "shapeIri": r.source_shape_iri.as_str(),
         "sourceConstraintComponent": term(&r.source_constraint_component),
         "sourceConstraint": r.source_constraint.as_ref().map(term),
         "severity": term(r.severity),
@@ -673,6 +700,7 @@ fn result_json(r: &tripletrail::shacl::ValidationResult<'_>) -> Value {
             Term::Literal(l) => Value::String(l.value().to_owned()),
             other => Value::String(other.to_string()),
         }).collect::<Vec<_>>(),
+        "key": format!("{:032x}", r.key()),
     });
     if !r.details.is_empty() {
         v["details"] = Value::Array(r.details.iter().map(result_json).collect());
