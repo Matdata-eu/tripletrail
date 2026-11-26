@@ -789,3 +789,93 @@ fn query_memory_per_dataset_and_request() {
         "{limits}"
     );
 }
+
+/// Over its memory quota because of indexes queries built, a dataset drops them (#18) and
+/// takes the write; the next query that needs an index builds it again.
+#[test]
+fn indexes_are_dropped_to_bring_a_dataset_under_its_memory_quota() {
+    const TOKEN: &str = "admin-secret";
+    let engine = Engine::new().unwrap();
+    if !matches!(engine.store(), tripletrail::store::Dataset::TripleTrail(_)) {
+        return; // Memory is only measured for TripleTrail's own store.
+    }
+    let mut nt = String::new();
+    for i in 0..2000 {
+        nt.push_str(&format!(
+            "<http://example.com/s{i}> <http://www.w3.org/2000/01/rdf-schema#label> \"station number {i} of the network\" .\n"
+        ));
+    }
+    engine
+        .load(
+            tripletrail::oxigraph::io::RdfFormat::NTriples,
+            nt.as_bytes(),
+        )
+        .unwrap();
+    let dir = tripletrail_testdir::tempdir("quota-evict");
+    let limits = dir.join("limits.json");
+    std::fs::write(&limits, "{}").unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        [("kg".to_owned(), engine)],
+        Options {
+            threads: 2,
+            admin_token: Some(TOKEN.to_owned()),
+            limits: Some(limits.clone()),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let stats = || -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_str(
+            &ureq::get(&format!("{base}/$/stats/kg"))
+                .set("Authorization", &format!("Bearer {TOKEN}"))
+                .call()
+                .unwrap()
+                .into_string()
+                .unwrap(),
+        )
+        .unwrap();
+        v["datasets"]["/kg"].clone()
+    };
+    let search = || {
+        ureq::get(&format!("{base}/kg/query"))
+            .query(
+                "query",
+                "PREFIX tt: <http://w3id.org/tripletrail/fn#> SELECT (COUNT(*) AS ?n) { ?s tt:search (\"number\" ?score ?l 5000) }",
+            )
+            .set("Accept", "text/tab-separated-values")
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap()
+    };
+    let before = stats()["memoryBytes"].as_u64().unwrap();
+    assert!(search().contains("2000"));
+    let s = stats();
+    let text = s["memory"]["textIndex"].as_u64().unwrap();
+    assert!(text > 0, "{s}");
+    // A quota the data fits in, but not with its full-text index.
+    let quota = before + text / 2;
+    thread::sleep(Duration::from_millis(1100));
+    std::fs::write(
+        &limits,
+        format!(r#"{{"datasets": {{"kg": {{"maxMemory": {quota}}}}}}}"#),
+    )
+    .unwrap();
+    thread::sleep(Duration::from_millis(1100));
+    assert_eq!(stats()["limits"]["maxMemory"], quota);
+    let r = ureq::post(&format!("{base}/kg/update"))
+        .set("Content-Type", "application/sparql-update")
+        .send_string("INSERT DATA { <http://example.com/x> <http://example.com/p> 1 }");
+    assert!(r.is_ok(), "{r:?}");
+    let s = stats();
+    assert_eq!(s["quotaEvictions"], 1, "{s}");
+    assert_eq!(s["rejectedQuota"], 0, "{s}");
+    assert_eq!(s["memory"]["textIndex"], 0, "{s}");
+    assert!(s["memoryBytes"].as_u64().unwrap() < quota, "{s}");
+    // The index is built again when a search needs it.
+    assert!(search().contains("2000"));
+    assert!(stats()["memory"]["textIndex"].as_u64().unwrap() > 0);
+}

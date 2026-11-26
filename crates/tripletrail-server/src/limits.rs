@@ -412,7 +412,11 @@ fn written(value: &Value) -> Result<Written, String> {
             "timeout" => w.timeout = Some(seconds(key, v)?),
             "maxTimeout" => w.max_timeout = Some(seconds(key, v)?),
             "maxRows" => w.max_rows = Some(count(key, v)?),
-            "maxUpload" => w.max_upload = Some(count(key, v)?),
+            "maxUpload" => {
+                w.max_upload = Some(
+                    usize::try_from(bytes(key, v)?).map_err(|_| format!("{key} is too large"))?,
+                );
+            }
             "maxDisk" => w.max_disk = Some(bytes(key, v)?),
             "maxMemory" => w.max_memory = Some(bytes(key, v)?),
             "queryMemory" => w.query_memory = Some(bytes(key, v)?),
@@ -565,6 +569,9 @@ pub(crate) struct Gate {
     pub(crate) rejected: AtomicU64,
     /// Writes refused because the dataset was over its disk or memory quota.
     pub(crate) rejected_quota: AtomicU64,
+    /// Times the indexes queries built were dropped to bring the dataset under its memory
+    /// quota (#18).
+    pub(crate) evictions: AtomicU64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -862,19 +869,36 @@ pub(crate) fn check_quota_unless(
     if limits.max_disk.is_none() && limits.max_memory.is_none() {
         return Ok(());
     }
-    let usage = Usage::of(entry);
+    let mut usage = Usage::of(entry);
+    // Over the memory quota: first the indexes and caches queries built go (#18), largest
+    // first, to be built again when a query needs them. Only what is left counts.
+    if let (Some(used), Some(quota)) = (usage.memory, limits.max_memory)
+        && used >= quota
+    {
+        let target = usize::try_from(quota.saturating_sub(1)).unwrap_or(usize::MAX);
+        let dropped = entry.engine.evict_derived(target);
+        if !dropped.is_empty() {
+            entry.gate.evictions.fetch_add(1, Ordering::Relaxed);
+            usage.memory = Usage::memory(entry);
+            eprintln!(
+                "{}: over its memory quota ({used} of {quota} bytes): dropped {} ({} bytes left)",
+                entry.name,
+                dropped.join(", "),
+                usage.memory.unwrap_or(0)
+            );
+        }
+    }
     let over = |what: &str, used: Option<u64>, quota: Option<u64>| match (used, quota) {
         (Some(used), Some(quota)) if used >= quota && what == "disk" => Some(format!(
             "Dataset {} is over its disk quota ({used} of {quota} bytes): writes are \
              refused until data is removed or the quota is raised; reads still work",
             entry.name
         )),
-        // The indexes that queries build count too: a read can take a dataset over.
+        // What is left once the indexes are dropped: the data itself.
         (Some(used), Some(quota)) if used >= quota => Some(format!(
-            "Dataset {0} is over its memory quota ({used} of {quota} bytes, with the indexes \
-             queries built: see `memory` in /$/stats/{0}): writes are refused until data is \
-             removed, the quota is raised or the server restarts (which drops the indexes \
-             until a query needs them); reads still work",
+            "Dataset {0} is over its memory quota ({used} of {quota} bytes, its data alone: see \
+             `memory` in /$/stats/{0}): writes are refused until data is removed or the quota \
+             is raised; reads still work",
             entry.name
         )),
         _ => None,

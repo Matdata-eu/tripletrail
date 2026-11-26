@@ -4181,6 +4181,59 @@ impl Engine {
         })
     }
 
+    /// Drops the indexes and caches queries build from the data, largest first, until the
+    /// engine's memory (see [`Engine::memory_use`]) is at most `target` bytes or nothing is
+    /// left to drop (#18): the full-text index, the spatial index, the vector indexes, the
+    /// range indexes and the result cache, with their views for callers who see some graphs.
+    /// Each is built again by the next query that needs it. The data, its dictionary, the
+    /// parsed geometries and the routing networks (which keep a budget of their own) stay.
+    /// Returns the parts dropped, by their names in [`MemoryUse`]; none on Oxigraph's store.
+    pub fn evict_derived(&self, target: usize) -> Vec<&'static str> {
+        let Some(m) = self.memory_use() else {
+            return Vec::new();
+        };
+        let mut parts = [
+            ("textIndex", m.text_index),
+            ("spatialIndex", m.spatial_index),
+            ("vectorIndexes", m.vector_indexes),
+            ("rangeIndexes", m.range_indexes),
+            ("resultCache", m.result_cache),
+        ];
+        parts.sort_by_key(|(_, bytes)| std::cmp::Reverse(*bytes));
+        let mut total = m.total();
+        let mut dropped = Vec::new();
+        for (part, bytes) in parts {
+            if total <= target || bytes == 0 {
+                break;
+            }
+            match part {
+                "textIndex" => {
+                    *self.text.lock_unpoisoned() = None;
+                    self.text_views.lock_unpoisoned().clear();
+                }
+                "spatialIndex" => {
+                    // Not built again at once, even on a warm engine: the next spatial query
+                    // builds it.
+                    let mut index = self.spatial.index.lock_unpoisoned();
+                    self.spatial.generation.fetch_add(1, Ordering::SeqCst);
+                    *index = None;
+                    drop(index);
+                    self.spatial.views.lock_unpoisoned().clear();
+                }
+                "vectorIndexes" => {
+                    for (_, _, slot) in self.vectors.lock_unpoisoned().iter() {
+                        *slot.lock_unpoisoned() = None;
+                    }
+                }
+                "rangeIndexes" => self.spatial.ranges.clear(),
+                _ => self.results.clear(),
+            }
+            total -= bytes;
+            dropped.push(part);
+        }
+        dropped
+    }
+
     /// Bulk-loads RDF (e.g. N-Triples or Turtle). Takes a format, or an [`RdfParser`] to set
     /// options such as the graph to load into (see also [`Engine::load_into`]). The
     /// document's blank nodes are its own, as with Jena's loaders: `_:b1` in two loads is two
