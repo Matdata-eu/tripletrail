@@ -2743,7 +2743,7 @@ dataset answers 405.
 - `GET /{ds}/import`: `{"maxBytes", "kept"}`, the largest file it takes (`--max-body`, at most
   256 MiB) and how many files it keeps.
 - `POST /{ds}/import?name=NAME[&options=…][&namespace=IRI]`: the file as the body. `NAME`
-  (letters, digits, `.`, `-`, `_`) chooses the format as a file name does; `options` are
+  (ASCII letters, digits, `.`, `-`, `_`; other names are refused) chooses the format as a file name does; `options` are
   Facade-X options (`csv.headers=true` by default for `.csv` and `.tsv`); options that name
   another source (`location`, `from-archive`, `content`, `table`, `sql`...) are refused.
   Answers 201 with `id`, `name`, `bytes`, `options`, `location` (`upload:NAME`), `tree` (the

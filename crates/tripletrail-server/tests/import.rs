@@ -461,3 +461,61 @@ fn nested_json_and_xml_get_a_class_per_kind_of_record_and_links_between_them() {
     let (code, _) = post(&base, "/kg/import?name=a.csv&namespace=not%20an%20iri", CSV);
     assert_eq!(code, 400);
 }
+
+/// Ordinary text does not break the draft (review of #293): a character across a byte the
+/// draft looks at, a key that holds a newline and the end of a comment, a name that would
+/// leave the query's IRIs.
+#[test]
+fn accents_newlines_and_odd_names_do_not_break_the_draft() {
+    let base = start();
+    // "é" over bytes 9 and 10: no date-time, and no panic.
+    let (code, body) = post(
+        &base,
+        "/kg/import?name=names.csv",
+        "id,name\n1,123456789é123456789\n2,Liège-Guillemins\n".as_bytes(),
+    );
+    assert_eq!(code, 201, "{body}");
+    let upload: Value = serde_json::from_str(&body).unwrap();
+    let triples = lifted(
+        &base,
+        upload["id"].as_str().unwrap(),
+        upload["query"].as_str().unwrap(),
+        "urn:x:names",
+    );
+    assert!(
+        triples
+            .iter()
+            .any(|t| t.contains("\"123456789é123456789\"")),
+        "{triples:?}"
+    );
+
+    // A JSON file with a character across byte 200, where the OpenAPI check cuts.
+    let json = format!("{{\"a\":\"{}éééé\",\"openapi\":1}}", "x".repeat(193));
+    let (code, body) = post(&base, "/kg/import?name=wide.json", json.as_bytes());
+    assert_eq!(code, 201, "{body}");
+
+    // A key with a newline stays in its comment: the draft parses and lifts both records.
+    let json = br#"{"id":"r","it\n} } } # x":[{"id":1,"v":"a"},{"id":2,"v":"b"}]}"#;
+    let (code, body) = post(&base, "/kg/import?name=odd.json", json);
+    assert_eq!(code, 201, "{body}");
+    let upload: Value = serde_json::from_str(&body).unwrap();
+    let query = upload["query"].as_str().unwrap();
+    assert!(!query.contains("} } } # x\n"), "{query}");
+    let triples = lifted(&base, upload["id"].as_str().unwrap(), query, "urn:x:odd");
+    assert!(
+        triples.iter().any(|t| t.ends_with(" \"b\" .")),
+        "{triples:?}"
+    );
+
+    // Names that would leave the SERVICE IRI or its options are refused.
+    for name in [
+        "a%20b.csv",
+        "a>b.csv",
+        "a,b.csv",
+        "a=b.csv",
+        "Li%C3%A8ge.csv",
+    ] {
+        let (code, body) = post(&base, &format!("/kg/import?name={name}"), b"id\n1\n");
+        assert_eq!(code, 400, "{name}: {body}");
+    }
+}

@@ -173,6 +173,16 @@ pub(crate) fn route(
             let name = params
                 .get("name")
                 .ok_or_else(|| HttpError::bad_request("Give the file's name: name=FILE"))?;
+            // It goes into the drafted query's SERVICE IRI and its `location=`.
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+            {
+                return Err(HttpError::bad_request(
+                    "name: a file name of letters, digits, '.', '-' and '_'",
+                ));
+            }
             let bytes: Arc<[u8]> = crate::read_bytes(request, state.options.max_body)?.into();
             let options = match params.get("options") {
                 Some(o) => o.trim().trim_matches(',').to_owned(),
@@ -518,11 +528,16 @@ fn schema(bytes: &[u8]) -> Option<serde_json::Value> {
         return Some(serde_json::json!({ "kind": "json-schema", "location": v }));
     }
     let start = head.trim_start_matches('\u{feff}').trim_start();
+    // Its first 200 bytes, cut at a character's boundary.
+    let mut cut = start.len().min(200);
+    while !start.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let first = &start[..cut];
     if start.starts_with("openapi:")
         || start.starts_with("swagger:")
         || (start.starts_with('{')
-            && (start[..start.len().min(200)].contains("\"openapi\"")
-                || start[..start.len().min(200)].contains("\"swagger\"")))
+            && (first.contains("\"openapi\"") || first.contains("\"swagger\"")))
     {
         return Some(serde_json::json!({ "kind": "openapi", "location": null }));
     }

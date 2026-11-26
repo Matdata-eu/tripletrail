@@ -517,7 +517,9 @@ fn sniffed(texts: &[String]) -> Option<&'static str> {
             && digits(&s[5..7])
             && digits(&s[8..])
     };
-    let date_time = |s: &str| s.len() >= 19 && date(&s[..10]) && s.as_bytes()[10] == b'T';
+    // By bytes: a value with a character over byte 10 is no date-time, and no panic.
+    let date_time =
+        |s: &str| s.len() >= 19 && s.as_bytes()[10] == b'T' && s.get(..10).is_some_and(date);
     if all(&integer) {
         Some("integer")
     } else if all(&decimal) {
@@ -583,6 +585,13 @@ fn term(namespace: &str, name: &str) -> String {
     } else {
         format!("<{}>", local_iri(namespace, name))
     }
+}
+
+/// A name as the text of a `#` comment: on one line, so that what a file names stays a comment.
+fn comment(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 fn local_iri(namespace: &str, name: &str) -> String {
@@ -772,7 +781,7 @@ fn write_query(file: &str, service: &str, namespace: &str, kinds: &[Kind]) -> St
         let _ = writeln!(
             main,
             "      # {} ({})",
-            kind.name,
+            comment(&kind.name),
             match kind.how {
                 How::Element(_) => "elements",
                 How::Field { .. } => "objects under a key",
@@ -865,8 +874,9 @@ fn write_query(file: &str, service: &str, namespace: &str, kinds: &[Kind]) -> St
          PREFIX xsd: <{XSD}>\n\
          PREFIX prov: <http://www.w3.org/ns/prov#>\n\
          PREFIX src: <{namespace}>\n\n\
-         # {file} in its own vocabulary: a class per kind of record, a property per key.\n\
-         CONSTRUCT {{\n{template}}} WHERE {{\n  SERVICE <{service}> {{\n"
+         # {} in its own vocabulary: a class per kind of record, a property per key.\n\
+         CONSTRUCT {{\n{template}}} WHERE {{\n  SERVICE <{service}> {{\n",
+        comment(file)
     );
     if branches.is_empty() {
         q.push_str("    ?s ?p ?o FILTER(false)\n");
