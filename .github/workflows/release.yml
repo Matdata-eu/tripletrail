@@ -19,10 +19,10 @@ name: Release
 #
 # The same run builds the Python package (wheels for Linux, macOS and Windows, and the source)
 # and packs the JavaScript client. After the GitHub release, a tag publishes them to PyPI
-# (`tripletrail`) and npm (`@tripletrail/client`), each only while its repository variable is
-# `true`: PUBLISH_PYPI, PUBLISH_NPM. Both log in with trusted publishing (OIDC, no token);
-# npm takes the NPM_TOKEN secret instead while it is set, for the first upload, before the
-# package exists and can be given a trusted publisher. A pre-release (`v1.2.3-rc.1`) goes to
+# (`tripletrail`) and npm (`@matdata/tripletrail-client`), each only while its repository variable is
+# `true`: PUBLISH_PYPI, PUBLISH_NPM. Both log in with trusted publishing (OIDC, no token).
+# npm can only give an existing package a trusted publisher, so its first version is
+# published once by hand (CONTRIBUTING.md, "Releasing"). A pre-release (`v1.2.3-rc.1`) goes to
 # npm under the `next` tag, so `latest` stays on the last release. The Rust crates are not
 # published: they need the patched Oxigraph crates in vendor/, which crates.io cannot use.
 
@@ -260,7 +260,7 @@ jobs:
           name: python-sdist
           path: python/dist/*.tar.gz
 
-  # The JavaScript client as npm would publish it, kept as `tripletrail-client-<version>.tgz`.
+  # The JavaScript client as npm would publish it, kept as `matdata-tripletrail-client-<version>.tgz`.
   npm-pack:
     needs: check
     runs-on: ubuntu-latest
@@ -356,9 +356,9 @@ jobs:
         with:
           packages-dir: dist
 
-  # npm with trusted publishing (npm 11.5 or later, the package's publisher on npmjs.com names
-  # this repository, release.yml and the environment `npm`), or the NPM_TOKEN secret while it
-  # is set. --provenance links the package to this run.
+  # npm with trusted publishing (npm 11.5 or later; the package's publisher on npmjs.com names
+  # this repository, release.yml and the environment `npm`). The provenance statement links
+  # the package to this run.
   publish-npm:
     needs: [check, release, npm-pack]
     if: github.event_name == 'push' && vars.PUBLISH_NPM == 'true'
@@ -366,7 +366,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: npm
-      url: https://www.npmjs.com/package/@tripletrail/client
+      url: https://www.npmjs.com/package/@matdata/tripletrail-client
     permissions:
       id-token: write
     steps:
@@ -380,10 +380,7 @@ jobs:
       - name: Publish
         env:
           VERSION: ${{ needs.check.outputs.version }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm install -g npm@11
           case "$VERSION" in *-*) tag=next ;; *) tag=latest ;; esac
-          # Without a token, npm logs in with the workflow's OIDC identity.
-          if [ -z "$NODE_AUTH_TOKEN" ]; then unset NODE_AUTH_TOKEN; fi
-          npm publish ./tripletrail-client-*.tgz --access public --provenance --tag "$tag"
+          npm publish ./matdata-tripletrail-client-*.tgz --access public --provenance --tag "$tag"

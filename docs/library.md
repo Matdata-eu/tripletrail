@@ -89,8 +89,8 @@ Validation, rules and entailment from the library are in
 
 `clients/js` (#223) is a client for browsers and Node 18 and later, over `fetch`, with no
 dependencies and TypeScript types (`src/index.d.ts`). Releases publish it to npm as
-`@tripletrail/client` (`npm install @tripletrail/client`, then
-`import { TripleTrail } from "@tripletrail/client"`); from a checkout, import
+`@matdata/tripletrail-client` (`npm install @matdata/tripletrail-client`, then
+`import { TripleTrail } from "@matdata/tripletrail-client"`); from a checkout, import
 `clients/js/src/index.js` by its path. Its tests start a `tripletrail serve` and run
 against it (`cd clients/js && npm test`, with `TRIPLETRAIL_BIN` naming the binary when it is not
 `target/debug/tripletrail`). A page on another origin needs the server started with `--cors <origin>` (see [CORS](server.md)).

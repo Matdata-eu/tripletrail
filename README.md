@@ -40,7 +40,7 @@ docker run -p 7878:7878 -v tripletrail-data:/data tripletrail
 For Python, `pip install tripletrail` installs the `tripletrail` package from PyPI, with
 ready-made wheels for Linux, macOS and Windows (`pip install ./python` builds it from a checkout,
 with Rust); see [python/README.md](python/README.md). The JavaScript client is
-`npm install @tripletrail/client`.
+`npm install @matdata/tripletrail-client`.
 
 ## Quick start
 

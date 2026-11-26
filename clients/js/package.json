@@ -1,5 +1,5 @@
 {
-  "name": "@tripletrail/client",
+  "name": "@matdata/tripletrail-client",
   "version": "0.1.0",
   "description": "TripleTrail client for browsers and Node: SPARQL queries and updates, the Graph Store Protocol and the admin API",
   "license": "Apache-2.0",

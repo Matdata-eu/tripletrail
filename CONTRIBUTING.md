@@ -84,12 +84,13 @@ on the last release), and "Helm chart" with "publish" ticked publishes the chart
 
 The same run builds the Python wheels and source package and packs the JavaScript client.
 After the GitHub release, it publishes them to PyPI (`tripletrail`) and npm
-(`@tripletrail/client`, a pre-release under the `next` tag), each only while the repository
+(`@matdata/tripletrail-client`, a pre-release under the `next` tag), each only while the repository
 variable `PUBLISH_PYPI` or `PUBLISH_NPM` is `true`. Both use trusted publishing (no token):
 the publisher on pypi.org and npmjs.com names `Matdata-eu/tripletrail`, the workflow
-`release.yml` and the environment `pypi` or `npm`. While the npm package does not exist yet,
-the `NPM_TOKEN` secret (an npm granular token that may publish) makes the first upload; remove
-it once the trusted publisher is set. The Rust crates are not published to crates.io: they
+`release.yml` and the environment `pypi` or `npm`. PyPI takes a "pending" publisher before the
+project exists. npm does not, so the client's first version is published once by hand, by a
+member of the `matdata` npm organisation (`cd clients/js && cp ../../LICENSE ../../NOTICE . &&
+npm publish --access public`), and its trusted publisher is added after that. The Rust crates are not published to crates.io: they
 build on the patched Oxigraph crates in `vendor/`, which a published crate cannot use.
 
 ## Security issues
