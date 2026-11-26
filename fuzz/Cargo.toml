@@ -44,6 +44,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "store_states"
+path = "fuzz_targets/store_states.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "routing"
 path = "fuzz_targets/routing.rs"
 test = false
