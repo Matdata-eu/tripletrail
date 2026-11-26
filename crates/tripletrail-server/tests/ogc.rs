@@ -3320,3 +3320,65 @@ fn map_labels_follow_the_language_and_the_label_strip() {
         "{style}"
     );
 }
+
+/// Facets of the same `sh:order` (or none) in the order of their keys, whatever labels the
+/// blank nodes of their shapes get when the shapes are read (#257: the map listed RINF's
+/// facets in another order after each start).
+#[test]
+fn facets_of_blank_shapes_keep_their_order() {
+    let ttl = "@prefix ex: <http://example.com/> .\n\
+               @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+               ex:a a ex:Station ; ex:kind ex:Hub ; ex:tracks 6 ; ex:zone 1 ; geo:hasGeometry [ geo:asWKT \"POINT(4.3 50.8)\"^^geo:wktLiteral ] .\n";
+    let mut orders = Vec::new();
+    for round in 0..3 {
+        let dir = tripletrail_testdir::tempdir("ogc-facet-order");
+        let engine = Engine::new_tripletrail();
+        engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+        let server = Server::bind(
+            "127.0.0.1:0",
+            vec![("kg".to_owned(), engine)],
+            Options {
+                threads: 2,
+                admin_token: Some("t".to_owned()),
+                location: Some(dir.join("data")),
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        let base = format!("http://{}", server.address());
+        server.spawn();
+        // The property shapes written in another order each round.
+        let mut properties = [
+            "[ sh:path ex:zone ; tts:key \"zone\" ; tts:facet tts:Facet-Values ]",
+            "[ sh:path ex:kind ; tts:key \"kind\" ; tts:facet tts:Facet-Values ]",
+            "[ sh:path ex:tracks ; tts:key \"tracks\" ; tts:facet tts:Facet-Values ]",
+            "[ sh:path ex:kind ; tts:key \"first\" ; tts:facet tts:Facet-Values ; sh:order -1 ]",
+        ];
+        properties.rotate_left(round);
+        let shapes = format!(
+            "@prefix ex: <http://example.com/> .\n\
+             @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+             @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+             ex:StationShape a sh:NodeShape ; sh:targetClass ex:Station ; tts:key \"station\" ;\n\
+               tts:geometry [ sh:path ( geo:hasGeometry geo:asWKT ) ] ;\n\
+               sh:property {} .\n",
+            properties.join(" , ")
+        );
+        ureq::put(&format!("{base}/$/datasets/kg/shapes/files/Station.ttl"))
+            .set("Authorization", "Bearer t")
+            .send_string(&shapes)
+            .unwrap();
+        let (status, _, facets) = get(&format!("{base}/kg/tiles/facets/station"));
+        assert_eq!(status, 200, "{facets}");
+        let keys: Vec<String> = facets["facets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["key"].as_str().unwrap().to_owned())
+            .collect();
+        orders.push(keys);
+    }
+    assert_eq!(orders[0], ["first", "kind", "tracks", "zone"]);
+    assert!(orders.iter().all(|o| *o == orders[0]), "{orders:?}");
+}

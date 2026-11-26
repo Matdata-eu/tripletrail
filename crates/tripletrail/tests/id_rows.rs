@@ -2051,6 +2051,22 @@ fn alternative_paths_on_ids_are_the_evaluators() {
             true,
         ),
         ("SELECT * WHERE { ?s ex:a|(ex:b/ex:a) ?o }", false),
+        // Reversed as a whole (#257), alone and from the rows of a join, as RINF's
+        // `^(era:isPartOf|^era:hasPart)/…` from a few sections of line.
+        ("SELECT * WHERE { ?s ^(ex:a|^ex:b) ?o }", true),
+        ("SELECT * WHERE { ex:n21 ^(ex:a|ex:b) ?o }", true),
+        (
+            "SELECT * WHERE { ?s ex:c ?v . ?s ^(ex:a|^ex:b) ?o . ?o ex:name ?n }",
+            true,
+        ),
+        (
+            "SELECT * WHERE { VALUES ?s { ex:n3 ex:n10 ex:n21 ex:x } ?s ex:a|^ex:b|^ex:e ?o }",
+            true,
+        ),
+        (
+            "SELECT ?n (COUNT(DISTINCT ?s) AS ?c) WHERE { ?s ex:c ?v . ?s ^(ex:a|^ex:b)/ex:name ?n } GROUP BY ?n",
+            true,
+        ),
     ] {
         let run = |executor: &str| {
             rows(

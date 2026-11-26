@@ -103,10 +103,21 @@ pub(crate) fn optional_path(
 pub(crate) fn alternative_path(
     path: &PropertyPathExpression,
 ) -> Option<Vec<(&spargebra::term::NamedNode, bool)>> {
-    if !matches!(path, PropertyPathExpression::Alternative(..)) {
-        return None;
+    match path {
+        PropertyPathExpression::Alternative(..) => steps(path),
+        // `^(ex:a|^ex:b)`, as RINF's parts of a section of line (#257): `^ex:a|ex:b`.
+        PropertyPathExpression::Reverse(inner)
+            if matches!(&**inner, PropertyPathExpression::Alternative(..)) =>
+        {
+            Some(
+                steps(inner)?
+                    .into_iter()
+                    .map(|(p, reverse)| (p, !reverse))
+                    .collect(),
+            )
+        }
+        _ => None,
     }
-    steps(path)
 }
 
 /// Adds the predicates of an alternative of predicates and their inverses to `out`.
@@ -412,7 +423,9 @@ impl Eval<'_> {
                 path,
                 object,
             } => match (alternative_path(path), negated_path(path)) {
-                (Some(alternatives), _) => self.alternative(subject, &alternatives, object)?,
+                (Some(alternatives), _) => {
+                    self.alternative(subject, &alternatives, object, None)?
+                }
                 (_, Some((left_out, reverse))) => {
                     self.negated(subject, left_out, reverse, object, None)?
                 }
@@ -804,6 +817,7 @@ impl Eval<'_> {
         subject: &TermPattern,
         alternatives: &[(&spargebra::term::NamedNode, bool)],
         object: &TermPattern,
+        seed: Option<&Table>,
     ) -> Option<Table> {
         if [subject, object]
             .iter()
@@ -822,11 +836,15 @@ impl Eval<'_> {
             } else {
                 (subject, object)
             };
-            let t = self.bgp(&[spargebra::term::TriplePattern {
-                subject: s.clone(),
-                predicate: NamedNodePattern::NamedNode(predicate.clone()),
-                object: o.clone(),
-            }])?;
+            // With a seed, only the edges that meet its rows (a semi-join, as `right` does).
+            let t = self.bgp_from(
+                &[spargebra::term::TriplePattern {
+                    subject: s.clone(),
+                    predicate: NamedNodePattern::NamedNode(predicate.clone()),
+                    object: o.clone(),
+                }],
+                seed,
+            )?;
             // Each variable's range, in the order of the variables' names: the tables of a
             // predicate and of an inverse hold the ends in different columns.
             let mut names: Vec<(&Variable, usize)> =
@@ -1381,11 +1399,20 @@ impl Eval<'_> {
             } if let Some((left_out, reverse)) = negated_path(path) => {
                 self.negated(subject, left_out, reverse, object, Some(t))
             }
+            // An alternative of predicates and inverses: each one's edges that meet `t`'s
+            // rows (#257: the parts of 542 sections of line, not the 76,089 `hasPart` edges).
             GraphPattern::Path {
                 subject,
                 path,
                 object,
-            } if alternative_path(path).is_none() => {
+            } if let Some(alternatives) = alternative_path(path) => {
+                self.alternative(subject, &alternatives, object, Some(t))
+            }
+            GraphPattern::Path {
+                subject,
+                path,
+                object,
+            } => {
                 let r = self.path(subject, path, object, Some(t))?;
                 (r.ids.len() <= max_ids()).then_some(r)
             }

@@ -1361,11 +1361,42 @@ fn facet_counts(
         }
         None => count(&none, &drawn)?,
     };
-    let features = if all.sparql.is_empty() {
-        drawable
+    // The features the filters keep, by name when they are few (#257): the other facets count
+    // over them, rather than each testing the filters on every feature of the class again (a
+    // rolled-up filter walks a path for each section of line). None kept, they count nothing.
+    let kept: Option<Vec<String>> = if all.sparql.is_empty() {
+        None
     } else {
-        count(&all, &drawn)?
+        let rows = run(
+            entry,
+            &format!(
+                "SELECT DISTINCT ?f WHERE {{ ?f a <{class}> .{}{drawn} }} LIMIT {}",
+                all.sparql,
+                KEPT_NAMED + 1
+            ),
+            capped(timeout, all.computed),
+            view,
+        )?;
+        (rows.len() <= KEPT_NAMED)
+            .then(|| {
+                rows.iter()
+                    .map(|r| match r.first() {
+                        Some(Some(Term::NamedNode(n))) => Some(format!("<{}>", n.as_str())),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .flatten()
     };
+    let features = match &kept {
+        _ if all.sparql.is_empty() => drawable,
+        Some(kept) => kept.len() as u64,
+        None => count(&all, &drawn)?,
+    };
+    let kept_values = kept
+        .as_ref()
+        .filter(|k| !k.is_empty())
+        .map(|k| format!(" VALUES ?f {{ {} }}", k.join(" ")));
     let one = |facet: &Facet| -> Result<serde_json::Value, HttpError> {
         if facet.text {
             // Searched, not counted: its values are too many to list.
@@ -1405,7 +1436,39 @@ fn facet_counts(
             }
             result
         };
-        let facet_where = facet_last(facet, &other.sparql, &drawn);
+        // A facet the filters do not name counts over the kept features.
+        let over_kept = other.signature == all.signature && kept.is_some();
+        if over_kept
+            && kept_values.is_none()
+            && all.color_key.as_deref() != Some(facet.key.as_str())
+        {
+            let mut out = if facet.range {
+                json!({ "key": facet.key, "title": facet.title, "range": true,
+                        "min": null, "max": null, "count": 0 })
+            } else {
+                json!({ "key": facet.key, "title": facet.title, "values": [], "more": false })
+            };
+            if facet.range
+                && let Some(unit) = &facet.unit
+            {
+                out["unit"] = unit.clone().into();
+            }
+            if facet.range && !facet.classes.is_empty() {
+                out["classes"] = facet
+                    .classes
+                    .iter()
+                    .map(|(up_to, label)| json!({ "upTo": up_to, "label": label }))
+                    .collect();
+            }
+            if let Some(n) = facet.color_by {
+                out["colorBy"] = n.into();
+            }
+            return Ok(out);
+        }
+        let facet_where = match &kept_values {
+            Some(values) if over_kept => facet_last(facet, values, ""),
+            _ => facet_last(facet, &other.sparql, &drawn),
+        };
         if facet.range {
             // The span of the values, under the other facets' filters; numbers as numbers.
             let query = format!(
@@ -2075,6 +2138,10 @@ const PARALLEL: usize = 4;
 /// Most features without a geometry that the facet queries leave out by name rather than by
 /// testing every feature's geometry path.
 const UNDRAWN_NAMED: usize = 1000;
+
+/// Most features kept by a request's filters that its facet queries name, rather than test
+/// the filters again (#257).
+const KEPT_NAMED: usize = 5000;
 
 /// The layer tiles of `collections`, by collection id. Collections that read their geometry
 /// through the same path share one query (with `VALUES` over their classes), so the spatial

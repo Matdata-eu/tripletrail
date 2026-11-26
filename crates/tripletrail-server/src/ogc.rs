@@ -1354,7 +1354,24 @@ fn collections_of(shapes: &Graph) -> Result<Vec<Collection>, HttpError> {
             .objects_for_subject_predicate(node, &sh("property"))
             .filter_map(subject)
             .collect();
-        shapes_of.sort_by_key(|p| (order(*p), p.to_string()));
+        // Ties by the shape's name for itself: a blank node's label changes from one load of
+        // the shapes to the next, and with it the order of the facets the map lists (#257;
+        // RINF's rolled-up facets, made as blank nodes). Named shapes still come first.
+        let stable = |p: NamedOrBlankNodeRef<'_>| match p {
+            NamedOrBlankNodeRef::NamedNode(_) => p.to_string(),
+            NamedOrBlankNodeRef::BlankNode(_) => {
+                let path = match shapes.object_for_subject_predicate(p, &sh("path")) {
+                    Some(TermRef::NamedNode(n)) => n.as_str().to_owned(),
+                    _ => String::new(),
+                };
+                format!(
+                    "_:{}\u{0}{}\u{0}{path}\u{0}{p}",
+                    text(p, &tts("key")).unwrap_or_default(),
+                    text(p, &sh("name")).unwrap_or_default(),
+                )
+            }
+        };
+        shapes_of.sort_by_cached_key(|p| (order(*p), stable(*p)));
         let mut keys = std::collections::HashSet::new();
         let mut filters = Vec::new();
         let mut facets = Vec::new();
