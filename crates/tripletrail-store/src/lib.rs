@@ -3521,23 +3521,43 @@ impl Snapshot {
     }
 
     /// [`Snapshot::string_ranks`] if they are built and cover nearly all terms (as there),
-    /// without building them.
+    /// without building them, nor waiting while they are built.
     pub fn string_ranks_built(&self) -> Option<Arc<StringRanks>> {
-        let cached = self.inner.ranks.lock_unpoisoned();
+        let cached = match self.inner.ranks.try_lock() {
+            Ok(cached) => cached,
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
         let r = cached.as_ref()?;
         let covered = r.covered() as usize;
         (covered + covered / 8 >= self.inner.dict.read_unpoisoned().len()).then(|| Arc::clone(r))
     }
 
+    /// Builds [`Snapshot::string_ranks`] ahead of the first query that needs them (`serve`,
+    /// as a dataset opens) when the dictionary holds at most `max_terms` terms: they take 8
+    /// bytes a term. The number of terms they were built for, else `None`.
+    pub fn warm_string_ranks(&self, max_terms: usize) -> Option<usize> {
+        let terms = self.inner.dict.read_unpoisoned().len();
+        (terms <= max_terms).then(|| self.string_ranks().covered() as usize)
+    }
+
+    /// Whether [`Snapshot::string_ranks_in_background`] is building them now.
+    pub fn string_ranks_building(&self) -> bool {
+        self.inner
+            .ranks_building
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Builds [`Snapshot::string_ranks`] on a thread of its own, unless that is under way,
-    /// so that later queries find them built while this one does without (#10).
-    pub fn string_ranks_in_background(&self) {
+    /// so that later queries find them built while this one does without (#10). Whether this
+    /// started it.
+    pub fn string_ranks_in_background(&self) -> bool {
         if self
             .inner
             .ranks_building
             .swap(true, std::sync::atomic::Ordering::AcqRel)
         {
-            return;
+            return false;
         }
         let snapshot = self.clone();
         std::thread::spawn(move || {
@@ -3547,6 +3567,7 @@ impl Snapshot {
                 .ranks_building
                 .store(false, std::sync::atomic::Ordering::Release);
         });
+        true
     }
 
     /// [`Snapshot::string_ranks`], built again once more than `slack(covered)` terms have no

@@ -870,8 +870,9 @@ struct ServeArgs {
     /// updates and uploads answer 405.
     #[arg(long, env = "TRIPLETRAIL_READ_ONLY")]
     read_only: bool,
-    /// Do not make each dataset's map (its collections and unfiltered facet counts) in the
-    /// background once the datasets are open; the first map request makes it instead.
+    /// Do not make each dataset's string ranks (the order of its IRIs and strings) and map (its
+    /// collections and unfiltered facet counts) in the background once the datasets are open;
+    /// the first query or map request that needs them makes them instead.
     #[arg(long, env = "TRIPLETRAIL_NO_WARM_UP")]
     no_warm_up: bool,
     /// Serve a dataset directory (written by `tripletrail load`, tripletrail's Engine.save, or a
@@ -2553,6 +2554,9 @@ fn serve(args: ServeArgs) -> Result<()> {
                     let (handle, names) = (handle.clone(), names.clone());
                     std::thread::spawn(move || {
                         for name in &names {
+                            if let Some(done) = handle.warm_ranks(name) {
+                                eprintln!("{name}: {done}");
+                            }
                             match handle.warm_map(name) {
                                 Ok(done) => eprintln!("{name}: {done}"),
                                 Err(e) => eprintln!("{name}: the map was not made ahead: {e}"),
