@@ -542,8 +542,8 @@ window.TripleTrailAccess = (function () {
       fill(datalist, props.map((p) => el("option", { value: p.path }, `${short(p.path)} (${p.uses})`)));
       const kind = RULES().KINDS.find((k) => k.kind === state.kind);
       const conditionRow = (c, i) => el("div", { class: "access-row" },
-        el("input", { type: "text", list: "access-row-props", value: c.path.join(" / "), placeholder: "property IRI (a / b for a path)", "aria-label": `Condition ${i + 1}: property`,
-          onchange: (e) => { c.path = e.target.value.split("/").map((x) => x.trim()).filter(Boolean); drawBuilder(); } }),
+        el("input", { type: "text", list: "access-row-props", value: c.path.join(" / "), placeholder: "property IRI (a / b, with spaces, for a path)", "aria-label": `Condition ${i + 1}: property`,
+          onchange: (e) => { c.path = e.target.value.split(/\s+/).filter((x) => x && x !== "/"); drawBuilder(); } }),
         select(`Condition ${i + 1}: test`, c.op, RULES().OPS.map((o) => [o.op, o.label]), (v) => { c.op = v; drawBuilder(); }),
         RULES().OPS.find((o) => o.op === c.op).value ? (c.op === "in"
           ? el("textarea", { rows: 2, placeholder: "values, one a line", "aria-label": `Condition ${i + 1}: values`, onchange: (e) => { c.value = e.target.value; drawBuilder(); } }, c.value || "")
