@@ -69,6 +69,7 @@
 
 #[cfg(feature = "postgres")]
 mod database;
+pub mod db_schema;
 pub mod direct;
 mod explain;
 mod functions;
