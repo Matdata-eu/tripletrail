@@ -565,7 +565,18 @@
     return { control: { onAdd: () => wrap, onRemove: detach }, attach, click, busy: () => !!mode, useFeature, refresh };
   }
 
-  const api = { panel, geometry };
+  /** The number a generalised low-zoom tile gives a feature in place of its IRI (#261): the
+   *  low 40 bits of the IRI's 64-bit FNV-1a hash, as the server computes it. */
+  function featureNumber(iri) {
+    let hash = 0xcbf29ce484222325n;
+    for (const byte of new TextEncoder().encode(iri)) {
+      hash ^= BigInt(byte);
+      hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+    }
+    return Number(hash & 0xffffffffffn);
+  }
+
+  const api = { panel, geometry, featureNumber };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TripleTrailMapTools = api;
 })(typeof window !== "undefined" ? window : globalThis);
