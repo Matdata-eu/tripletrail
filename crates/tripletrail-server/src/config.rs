@@ -342,7 +342,14 @@ mod tests {
             .collect();
         assert_eq!(
             got,
-            ["tripletrail", "serve", "--dataset", "rail", "--map-view", "rail=7/50.8/4.4"]
+            [
+                "tripletrail",
+                "serve",
+                "--dataset",
+                "rail",
+                "--map-view",
+                "rail=7/50.8/4.4"
+            ]
         );
     }
 
