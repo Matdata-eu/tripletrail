@@ -717,7 +717,7 @@ impl Iterator for Construct {
 }
 
 /// At most how many rows `p` gives, counted for the patterns of triples whose rows make its
-/// rows (one by one, or under a `UNION`, `BIND` or `FILTER`) when the planner's estimate of
+/// rows (one by one, or under a `UNION`, `BIND` or `FILTER`, as the ids rewrite it) when the planner's estimate of
 /// them, times `width`, passes a quarter of [`ANSWER_CELLS`]; 0 for anything else, which
 /// the ids answer (#234).
 fn answer_rows(p: &GraphPattern, eval: &Eval, width: usize) -> u64 {
@@ -747,7 +747,18 @@ fn answer_rows(p: &GraphPattern, eval: &Eval, width: usize) -> u64 {
         GraphPattern::Union { left, right } => {
             answer_rows(left, eval, width).saturating_add(answer_rows(right, eval, width))
         }
-        GraphPattern::Extend { inner, .. } | GraphPattern::Filter { inner, .. } => {
+        GraphPattern::Extend { inner, .. } => answer_rows(inner, eval, width),
+        // The filter as the ids rewrite it: an equality of two variables joins fewer rows
+        // (`FILTER(?s = ?x)`), which are counted instead.
+        GraphPattern::Filter { expr, inner } => {
+            if let Some(p) = crate::idtree::pushed_filter(expr, inner) {
+                return answer_rows(&p, eval, width);
+            }
+            if let GraphPattern::Bgp { patterns } = &**inner
+                && let Some((_, _, patterns)) = crate::idtree::equal_vars(expr, patterns)
+            {
+                return answer_rows(&GraphPattern::Bgp { patterns }, eval, width);
+            }
             answer_rows(inner, eval, width)
         }
         _ => 0,

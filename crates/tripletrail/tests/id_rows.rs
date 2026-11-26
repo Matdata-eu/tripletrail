@@ -3605,22 +3605,33 @@ fn large_answers_under_union_bind_and_filter_stream_from_the_evaluator() {
     data.push_str("ex:t ex:small ex:d .\n");
     engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
     let prefix = "PREFIX ex: <http://example.org/>";
-    for (body, n) in [
-        ("{ ?s ex:in ?c . ?x ex:in ?c }", 1_600),
+    for (body, n, streams) in [
+        ("{ ?s ex:in ?c . ?x ex:in ?c }", 1_600, true),
         (
             "{ { ?s ex:in ?c . ?x ex:in ?c } UNION { ?s ex:small ?x } }",
             1_601,
+            true,
         ),
-        ("{ ?s ex:in ?c . ?x ex:in ?c BIND(1 AS ?k) }", 1_600),
-        ("{ ?s ex:in ?c . ?x ex:in ?c FILTER(?s != ex:s0) }", 1_560),
-        ("{ ?s ex:in ?c . ?x ex:small ?c BIND(1 AS ?k) }", 0),
-        ("{ ?s ex:small ?c . ?x ex:small ?c BIND(1 AS ?k) }", 1),
+        ("{ ?s ex:in ?c . ?x ex:in ?c BIND(1 AS ?k) }", 1_600, true),
+        (
+            "{ ?s ex:in ?c . ?x ex:in ?c FILTER(?s != ex:s0) }",
+            1_560,
+            true,
+        ),
+        // An equality of two variables: the ids join 40 rows, and answer.
+        ("{ ?s ex:in ?c . ?x ex:in ?c FILTER(?s = ?x) }", 40, false),
+        ("{ ?s ex:in ?c . ?x ex:small ?c BIND(1 AS ?k) }", 0, false),
+        (
+            "{ ?s ex:small ?c . ?x ex:small ?c BIND(1 AS ?k) }",
+            1,
+            false,
+        ),
     ] {
         let q = format!("#pragma tt.executor ids\n{prefix} SELECT ?s ?x {body}");
         let (plan, got) = tripletrail::with_answer_cells(2_000, || {
             (engine.explain(&q).unwrap(), rows(&engine, &q))
         });
-        let executor = if n > 1 { "spareval" } else { "ids" };
+        let executor = if streams { "spareval" } else { "ids" };
         assert!(
             plan.contains(&format!(r#""executor":"{executor}""#)),
             "{body}: {plan}"

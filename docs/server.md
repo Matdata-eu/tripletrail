@@ -232,8 +232,10 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   (100 million rows of a two-pattern join: 126 MB instead of 2.1 GB at the peak, three at
   once 132 MB instead of 5 GB; 98 million rows under a `UNION` 77 MB instead of 1.9 GB, under
   a `BIND` 96 MB instead of 1.8 GB, with the first byte after 14 to 44 ms instead of 0.5 to
-  0.9 s). A `FILTER` over such a join is also handed over, but the evaluator holds the
-  join's rows too (1.4 GB instead of 2.0 GB). An ordered answer, or one under other
+  0.9 s). A `FILTER` is counted as the ids would run it (`FILTER(?s = ?x)` joins fewer rows
+  and stays on ids); over a large join it is handed over too, which for a filter keeping a
+  few rows is also faster (0.85 s instead of 1.5 s for 1% of 100 million rows), but the
+  evaluator holds the join's rows as well (1.4 GB instead of 2.0 GB). An ordered answer, or one under other
   patterns (an `OPTIONAL`, a sub-select), is built first before it is handed over. A server
   with many concurrent exports sets `--query-memory`, which keeps such answers flat (at
   `64MB`). A parallel join on ids now stays within that budget: its parts take at most half,
