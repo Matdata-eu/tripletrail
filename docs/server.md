@@ -164,7 +164,8 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   0.14 s for 460,000 terms) and then makes its map in the background, one dataset
   after the other (#92): the map's collections (the profile of the data) and the unfiltered
   facet counts of each, kept in the caches that requests read, so the first visitor does not
-  wait for them. Each facet query gets the dataset's timeout, as a map request does, and a
+  wait for them. The unfiltered counts stay until the next write to the dataset, whatever the
+  result cache (`--result-cache-mb`) lets go meanwhile. Each facet query gets the dataset's timeout, as a map request does, and a
   dataset's warm-up at most five minutes in all: the collections left then are made by the
   first request that needs them. The log says `{ds}: map ready: N collections and their facets
   in S s`, or which collections ran out of time, with the facets that failed (a computed facet
