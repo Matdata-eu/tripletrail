@@ -426,20 +426,27 @@
       if (v === "") delete entry[k];
       else entry[k] = /^\d+(\.\d+)?$/.test(v) ? Number(v) : v;
     }
+    // The form stays still until it shows what was saved, so nothing typed meanwhile is lost.
+    const fields = [...e.target.elements];
+    for (const f of fields) f.disabled = true;
     try {
       await api("PUT", "/$/limits/" + encodeURIComponent(current.name), { body: JSON.stringify(entry), type: "application/json" });
-      toast("Limits of " + current.name + " saved", "ok");
       await loadDatasets().catch(() => {});
-      showLimits(current);
+      await showLimits(current);
+      toast("Limits of " + current.name + " saved", "ok");
     } catch (err) { fail(err); }
+    finally { for (const f of fields) f.disabled = false; }
   });
   $("#limits-clear").addEventListener("click", async () => {
     if (!current) return;
+    const fields = [...$("#limits-form").elements];
+    for (const f of fields) f.disabled = true;
     try {
       await api("DELETE", "/$/limits/" + encodeURIComponent(current.name));
+      await showLimits(current);
       toast(current.name + " takes the default limits", "ok");
-      showLimits(current);
     } catch (err) { fail(err); }
+    finally { for (const f of fields) f.disabled = false; }
   });
 
   async function backup(ds) {
