@@ -171,6 +171,26 @@
       <progress id="upload-progress" max="1" value="0" hidden></progress>
       <p class="small" id="upload-msg"></p>
     </div>
+    <div id="ds-limits" hidden>
+      <h3>Limits</h3>
+      <p class="muted small" id="limits-note"></p>
+      <form id="limits-form" class="limits-grid">
+        <label class="field">Concurrent requests <input name="maxConcurrent" inputmode="numeric"></label>
+        <label class="field">Queued requests <input name="maxQueued" inputmode="numeric"></label>
+        <label class="field">Queue wait (s) <input name="queueTimeout" inputmode="numeric"></label>
+        <label class="field">Timeout (s) <input name="timeout" inputmode="numeric"></label>
+        <label class="field">Longest timeout asked (s) <input name="maxTimeout" inputmode="numeric"></label>
+        <label class="field">Rows per answer <input name="maxRows" inputmode="numeric"></label>
+        <label class="field">Upload size (bytes) <input name="maxUpload" inputmode="numeric"></label>
+        <label class="field">Query memory <input name="queryMemory"></label>
+        <label class="field">Disk quota <input name="maxDisk"></label>
+        <label class="field">Memory quota <input name="maxMemory"></label>
+        <div class="row">
+          <button class="btn primary" id="limits-save" type="submit">Save limits</button>
+          <button class="btn" id="limits-clear" type="button">Use the defaults</button>
+        </div>
+      </form>
+    </div>
   </div>
 </dialog>
 
