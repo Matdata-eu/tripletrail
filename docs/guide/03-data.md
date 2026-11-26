@@ -76,8 +76,11 @@ and `POST` it, which adds it to what is there (`PUT` would replace):
 curl -s -X POST http://localhost:7878/rail/data -H 'Content-Type: text/turtle' --data-binary @more-stations.ttl
 ```
 
-The **Datasets** page of the web UI does the same with **Upload**. A file with a syntax error
-is refused as a whole, so nothing is half loaded.
+The **Datasets** page of the web UI does the same with **Add data** in a dataset's dialog: drop
+or choose files, and **Add** loads the RDF ones into the graph you give. Other files (CSV,
+JSON, XML, spreadsheets) open the **Import** page, which lifts them into RDF in their own
+vocabulary first (see [chapter 7](07-lifting.md#import-a-file-in-the-web-ui)). A file with a
+syntax error is refused as a whole, so nothing is half loaded.
 
 ## Named graphs
 

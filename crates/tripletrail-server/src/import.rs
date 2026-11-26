@@ -2,9 +2,13 @@
 //! written to disk, and read as Facade-X (`SERVICE <x-sparql-anything:location=upload:NAME>`)
 //! by the requests that name it. Writers only, as running a mapping writes the dataset.
 //!
-//! - `POST /{ds}/import?name=FILE[&options=…]` with the file as the body: keeps it for an hour
-//!   and answers `{id, name, bytes, options, location, tree, triples, truncated, query}`: the
-//!   first triples of its Facade-X graph and a CONSTRUCT that maps each key of its records.
+//! - `GET /{ds}/import`: `{maxBytes}`, the largest file it takes.
+//! - `POST /{ds}/import?name=FILE[&options=…][&namespace=IRI]` with the file as the body: keeps
+//!   it for an hour and answers `{id, name, bytes, options, location, tree, triples, truncated,
+//!   namespace, kinds, schema, query}`: the first triples of its Facade-X graph and a CONSTRUCT
+//!   that lifts it in its own vocabulary under `namespace` (#275, see `import_draft`).
+//! - `POST /{ds}/import/{id}/draft` with `{namespace, keys: {KIND: COLUMN or null}}`: the draft
+//!   again, `{namespace, kinds, query}`, with other IRIs or key columns.
 //! - `POST /{ds}/import/{id}/preview` with a CONSTRUCT as the body: its triples, as a query.
 //! - `POST /{ds}/import/{id}/run?graph=IRI` with a CONSTRUCT as the body: adds its triples to
 //!   the named graph, as `INSERT { GRAPH <graph> { … } } WHERE { … }`, and answers
@@ -31,12 +35,6 @@ const MAX_TOTAL: usize = 256 << 20;
 const TREE_TRIPLES: usize = 2000;
 /// Triples of those shown in the answer.
 const SHOWN: usize = 300;
-/// Keys a drafted query maps at most.
-const MAX_KEYS: usize = 60;
-
-const FX: &str = "http://sparql.xyz/facade-x/ns/";
-const XYZ: &str = "http://sparql.xyz/facade-x/data/";
-const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
 struct Upload {
     /// The dataset it was sent to (`Entry::id`).
@@ -119,11 +117,72 @@ pub(crate) fn route(
             .transpose()?,
     );
     match (method, rest) {
+        (Method::Get | Method::Head, []) => {
+            context.operation = Some(crate::Operation::Read);
+            let body = serde_json::json!({
+                "maxBytes": state.options.max_body.map_or(MAX_TOTAL, |m| m.min(MAX_TOTAL)),
+                "kept": MAX_UPLOADS,
+            });
+            Ok(Reply::bytes(
+                200,
+                "application/json",
+                body.to_string().into_bytes(),
+            ))
+        }
+        (Method::Post, [id, "draft"]) => {
+            context.operation = Some(crate::Operation::Read);
+            let upload = find(id, entry.id)?;
+            let body: serde_json::Value =
+                serde_json::from_str(&crate::read_body(request, state.options.max_body)?)
+                    .map_err(|e| HttpError::bad_request(format!("The body: {e}")))?;
+            let namespace = match body.get("namespace").and_then(|n| n.as_str()) {
+                Some(n) => checked_namespace(n)?,
+                None => crate::import_draft::default_namespace(&upload.name),
+            };
+            let mut keys = std::collections::HashMap::new();
+            if let Some(given) = body.get("keys").and_then(|k| k.as_object()) {
+                for (kind, column) in given {
+                    keys.insert(kind.clone(), column.as_str().map(str::to_owned));
+                }
+            }
+            let reading = engine
+                .with_upload(&upload.name, Arc::clone(&upload.bytes))
+                .map_err(|e| HttpError::bad_request(e.to_string()))?;
+            let (reading, _deadline) = crate::with_deadline(&reading, timeout);
+            let triples = tree(&reading, &upload)?;
+            let d = crate::import_draft::draft(
+                &upload.name,
+                &upload.service(),
+                &namespace,
+                &keys,
+                &triples,
+            );
+            let body = serde_json::json!({
+                "namespace": namespace,
+                "kinds": d.kinds.iter().map(crate::import_draft::KindInfo::json).collect::<Vec<_>>(),
+                "query": d.query,
+            });
+            Ok(Reply::bytes(
+                200,
+                "application/json",
+                body.to_string().into_bytes(),
+            ))
+        }
         (Method::Post, []) => {
             context.operation = Some(crate::Operation::Read);
             let name = params
                 .get("name")
                 .ok_or_else(|| HttpError::bad_request("Give the file's name: name=FILE"))?;
+            // It goes into the drafted query's SERVICE IRI and its `location=`.
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+            {
+                return Err(HttpError::bad_request(
+                    "name: a file name of letters, digits, '.', '-' and '_'",
+                ));
+            }
             let bytes: Arc<[u8]> = crate::read_bytes(request, state.options.max_body)?.into();
             let options = match params.get("options") {
                 Some(o) => o.trim().trim_matches(',').to_owned(),
@@ -163,6 +222,17 @@ pub(crate) fn route(
                 .map_err(|e| HttpError::bad_request(e.to_string()))?;
             let (reading, _deadline) = crate::with_deadline(&reading, timeout);
             let triples = tree(&reading, &upload)?;
+            let namespace = match params.get("namespace") {
+                Some(n) => checked_namespace(n)?,
+                None => crate::import_draft::default_namespace(&upload.name),
+            };
+            let d = crate::import_draft::draft(
+                &upload.name,
+                &upload.service(),
+                &namespace,
+                &std::collections::HashMap::new(),
+                &triples,
+            );
             let id = random_id()?;
             let body = serde_json::json!({
                 "id": id,
@@ -177,7 +247,10 @@ pub(crate) fn route(
                     .collect::<String>(),
                 "triples": triples.len().min(SHOWN),
                 "truncated": triples.len() > SHOWN,
-                "query": draft(&upload, &triples),
+                "namespace": namespace,
+                "kinds": d.kinds.iter().map(crate::import_draft::KindInfo::json).collect::<Vec<_>>(),
+                "schema": schema(&upload.bytes),
+                "query": d.query,
             });
             keep(id, upload);
             let mut reply = Reply::bytes(201, "application/json", body.to_string().into_bytes());
@@ -301,7 +374,7 @@ pub(crate) fn route(
             ))
         }
         (method, _) => Err(HttpError(
-            if matches!(method, Method::Get | Method::Head) {
+            if matches!(method, Method::Get | Method::Head) && !rest.is_empty() {
                 405
             } else {
                 404
@@ -413,109 +486,62 @@ fn tree(engine: &Engine, upload: &Upload) -> Result<Vec<(Term, Term, Term)>, Htt
     Ok(out)
 }
 
-/// A CONSTRUCT that maps every key of the upload's records: the nodes in the slots of one
-/// container that have the most keys (the rows of a table, the objects of a JSON array), or
-/// the root when none has keys. Records in the root's slots get IRIs from their position;
-/// others keep their nodes.
-fn draft(upload: &Upload, triples: &[(Term, Term, Term)]) -> String {
-    let is = |t: &Term, iri: &str| matches!(t, Term::NamedNode(n) if n.as_str() == iri);
-    let root = triples
-        .iter()
-        .find(|(_, p, o)| is(p, &format!("{RDF}type")) && is(o, &format!("{FX}Root")))
-        .map(|(s, _, _)| s.clone());
-    let keys_of = |node: &Term| -> Vec<String> {
-        triples
-            .iter()
-            .filter(|(s, _, _)| s == node)
-            .filter_map(|(_, p, _)| match p {
-                Term::NamedNode(n) if n.as_str().starts_with(XYZ) => Some(n.as_str().to_owned()),
-                _ => None,
-            })
-            .collect()
-    };
-    // Per container, its members that have keys.
-    let mut parents: Vec<(Term, Vec<Term>)> = Vec::new();
-    for (s, p, o) in triples {
-        let slot = matches!(p, Term::NamedNode(n) if n.as_str().strip_prefix(RDF).is_some_and(|r| r.starts_with('_')));
-        if slot && !keys_of(o).is_empty() {
-            match parents.iter_mut().find(|(parent, _)| parent == s) {
-                Some((_, members)) => members.push(o.clone()),
-                None => parents.push((s.clone(), vec![o.clone()])),
-            }
-        }
+/// The namespace the caller gives: an absolute IRI that a SPARQL `PREFIX` can hold.
+fn checked_namespace(n: &str) -> Result<String, HttpError> {
+    let n = n.trim();
+    tripletrail::oxigraph::model::NamedNode::new(n)
+        .map_err(|e| HttpError::bad_request(format!("namespace: {e}")))?;
+    if n.contains(['<', '>', '"', ' ', '{', '}', '|', '\\', '^', '`']) {
+        return Err(HttpError::bad_request("namespace: not an IRI"));
     }
-    let records = parents.into_iter().max_by_key(|(_, m)| m.len());
-    let (in_root, members) = match &records {
-        Some((parent, members)) => (Some(parent) == root.as_ref(), members.clone()),
-        None => (true, root.iter().cloned().collect()),
-    };
-    let mut keys: Vec<String> = Vec::new();
-    for m in &members {
-        for k in keys_of(m) {
-            if !keys.contains(&k) && keys.len() < MAX_KEYS {
-                keys.push(k);
-            }
-        }
+    // Names are appended to it: one that ends in neither `/` nor `#` gets a `/`.
+    let mut n = n.to_owned();
+    if !n.ends_with(['/', '#']) {
+        n.push('/');
     }
-    let mut names: Vec<String> = Vec::new();
-    for k in &keys {
-        let local = &k[XYZ.len()..];
-        let local = crate::ogc::percent_decode(local).unwrap_or_else(|| local.to_owned());
-        let mut name: String = local
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .collect();
-        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
-            name.insert(0, 'k');
-        }
-        // Kept apart from the query's own variables.
-        while names.contains(&name)
-            || ["item", "record", "root", "parent", "slot"].contains(&name.as_str())
+    Ok(n)
+}
+
+/// The schema the file names, if any, for the page to offer generating an ontology and shapes
+/// from it (#276): an XML Schema (`xsi:schemaLocation`, `xsi:noNamespaceSchemaLocation`), a
+/// JSON Schema (`"$schema"`), or the file is an OpenAPI document. Read from its first 64 KiB.
+fn schema(bytes: &[u8]) -> Option<serde_json::Value> {
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(64 << 10)]);
+    let quoted = |after: &str| -> Option<String> {
+        let rest = after.trim_start().strip_prefix(['=', ':'])?.trim_start();
+        let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        let rest = &rest[1..];
+        Some(rest[..rest.find(quote)?].trim().to_owned())
+    };
+    for key in ["noNamespaceSchemaLocation", "schemaLocation"] {
+        if let Some(at) = head.find(&format!(":{key}"))
+            && let Some(v) = quoted(&head[at + key.len() + 1..])
         {
-            name.push('_');
+            // schemaLocation is pairs of namespace and location: the location is the last.
+            let location = v.split_whitespace().last().unwrap_or_default().to_owned();
+            return Some(serde_json::json!({ "kind": "xsd", "location": location }));
         }
-        names.push(name);
     }
-    let mut q = String::from(
-        "PREFIX fx: <http://sparql.xyz/facade-x/ns/>\n\
-         PREFIX xyz: <http://sparql.xyz/facade-x/data/>\n\
-         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
-         PREFIX ex: <https://example.org/import/>\n\n",
-    );
-    let subject = if records.is_some() && in_root {
-        "?item"
-    } else {
-        "?record"
-    };
-    q.push_str("CONSTRUCT {\n");
-    let _ = write!(q, "  {subject} a ex:Record");
-    for n in &names {
-        let _ = write!(q, " ;\n    ex:{n} ?{n}");
+    if let Some(at) = head.find("\"$schema\"")
+        && let Some(v) = quoted(&head[at + 9..])
+    {
+        return Some(serde_json::json!({ "kind": "json-schema", "location": v }));
     }
-    q.push_str(" .\n} WHERE {\n");
-    let _ = writeln!(q, "  SERVICE <{}> {{", upload.service());
-    match (&records, in_root) {
-        (Some(_), true) => {
-            q.push_str("    ?root a fx:Root ; ?slot ?record .\n");
-            q.push_str("    FILTER(STRSTARTS(STR(?slot), STR(rdf:_)))\n");
-        }
-        (Some(_), false) => {
-            q.push_str("    ?parent ?slot ?record .\n");
-            q.push_str("    FILTER(STRSTARTS(STR(?slot), STR(rdf:_)))\n");
-        }
-        (None, _) => q.push_str("    ?record a fx:Root .\n"),
+    let start = head.trim_start_matches('\u{feff}').trim_start();
+    // Its first 200 bytes, cut at a character's boundary.
+    let mut cut = start.len().min(200);
+    while !start.is_char_boundary(cut) {
+        cut -= 1;
     }
-    for (k, n) in keys.iter().zip(&names) {
-        let _ = writeln!(q, "    OPTIONAL {{ ?record <{k}> ?{n} }}");
+    let first = &start[..cut];
+    if start.starts_with("openapi:")
+        || start.starts_with("swagger:")
+        || (start.starts_with('{')
+            && (first.contains("\"openapi\"") || first.contains("\"swagger\"")))
+    {
+        return Some(serde_json::json!({ "kind": "openapi", "location": null }));
     }
-    q.push_str("  }\n");
-    if subject == "?item" {
-        q.push_str(
-            "  BIND(IRI(CONCAT(STR(ex:), \"record/\", STRAFTER(STR(?slot), STR(rdf:_)))) AS ?item)\n",
-        );
-    }
-    q.push_str("}\n");
-    q
+    None
 }
 
 #[cfg(test)]
