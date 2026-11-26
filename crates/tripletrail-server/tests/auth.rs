@@ -3828,8 +3828,41 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
     );
     assert_eq!(now["rowRulesNow"].as_array().unwrap().len(), 1, "{now}");
     // A shape a rule uses cannot be removed; the rule first, then the shape.
-    let (code, _) = call("DELETE", "/shapes?id=http://example.org/OwnArea", None);
+    let (code, refused) = call("DELETE", "/shapes?id=http://example.org/OwnArea", None);
     assert_eq!(code, 422);
+    assert!(
+        refused
+            .to_string()
+            .contains("http://example.org/Contractors"),
+        "{refused}"
+    );
+    // The shapes calls never write or remove a policy.
+    let as_shape = json!({ "id": "http://example.org/Contractors",
+        "turtle": "<http://example.org/Contractors> a sh:NodeShape ; sh:targetClass <http://example.org/Project> ." });
+    let new_policy = json!({ "id": "http://example.org/Open",
+        "turtle": "<http://example.org/Open> a sg:Policy ; sg:agent sg:Anyone ; sg:readAllGraphs true ." });
+    let before = file();
+    for shape in [&as_shape, &new_policy] {
+        assert_eq!(
+            call("PUT", "/shapes", Some(shape.clone())).0,
+            400,
+            "{shape}"
+        );
+        assert_eq!(
+            call("POST", "/preview", Some(json!({ "shapes": [shape] }))).0,
+            422,
+            "{shape}"
+        );
+    }
+    assert_eq!(
+        call("DELETE", "/shapes?id=http://example.org/Contractors", None).0,
+        422
+    );
+    assert_eq!(
+        call("DELETE", "/shapes?id=http://example.org/Project", None).0,
+        422
+    );
+    assert_eq!(file(), before);
     let mut none = policy.clone();
     none["rowRules"] = json!([]);
     assert_eq!(call("PUT", "/policies", Some(none)).0, 200);

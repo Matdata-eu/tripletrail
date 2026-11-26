@@ -706,7 +706,10 @@ fn select_rows(
     let variables: Vec<_> = solutions.variables().to_vec();
     solutions
         .map(|row| {
-            let row = row.map_err(|e| HttpError(500, e.to_string()))?;
+            let row = row.map_err(|e| match e.to_string() {
+                m if m.contains("cancelled") => HttpError(503, crate::TIMED_OUT.to_owned()),
+                m => HttpError(500, m),
+            })?;
             Ok(variables
                 .iter()
                 .map(|v| {
@@ -762,6 +765,10 @@ fn shapes(
         .read_unpoisoned()
         .resolve(name)
         .ok_or_else(|| HttpError(404, format!("No dataset {name}")))?;
+    // Under the dataset's query timeout, as every query is: the class counts and examples
+    // scan the data.
+    let timeout = crate::limits::Limits::of(state, &entry.name).timeout(None);
+    let (engine, _deadline) = crate::with_deadline(&entry.engine, timeout);
     let (texts, _) = auth.policy_texts(name, "").map_err(|e| HttpError(409, e))?;
     let policies = crate::policy::read_texts(&texts).map_err(|e| HttpError(422, e))?;
     let mut shapes = Vec::new();
@@ -788,7 +795,7 @@ fn shapes(
     let mut out = json!({
         "dataset": name,
         "shapes": shapes,
-        "classes": classes(&entry.engine, None)?
+        "classes": classes(&engine, None)?
             .into_iter()
             .map(|(c, n)| json!({ "class": c, "instances": n }))
             .collect::<Vec<_>>(),
@@ -797,7 +804,7 @@ fn shapes(
         let class = tripletrail::oxigraph::model::NamedNode::new(class)
             .map_err(|e| HttpError::bad_request(format!("class is not an IRI: {e}")))?;
         let rows = select_rows(
-            &entry.engine,
+            &engine,
             &format!(
                 "SELECT ?p (COUNT(*) AS ?n) (SAMPLE(?o) AS ?example) (SAMPLE(?k) AS ?kind) WHERE {{ \
                  ?s a {class} ; ?p ?o \
@@ -840,6 +847,11 @@ fn preview(
         .read_unpoisoned()
         .resolve(name)
         .ok_or_else(|| HttpError(404, format!("No dataset {name}")))?;
+    // Under the dataset's query timeout, as every query is: the class counts and examples
+    // scan the data.
+    let timeout = crate::limits::Limits::of(state, &entry.name).timeout(None);
+    let (engine, _deadline) = crate::with_deadline(&entry.engine, timeout);
+    let until = timeout.map(|t| std::time::Instant::now() + t);
     let groups = match &body["groups"] {
         Value::Array(a) => Some(
             a.iter()
@@ -906,7 +918,7 @@ fn preview(
             return Ok(Default::default());
         }
         Ok(classes(
-            &entry.engine,
+            &engine,
             Some(tripletrail::QueryOptions {
                 readable: readable.clone(),
                 row_rules: rules.clone(),
@@ -916,7 +928,7 @@ fn preview(
         .into_iter()
         .collect())
     };
-    let all = classes(&entry.engine, None)?;
+    let all = classes(&engine, None)?;
     let visible_now = under(&now)?;
     let visible_after = under(&after)?;
     let mut rows = Vec::new();
@@ -930,7 +942,7 @@ fn preview(
         if i < EXAMPLE_CLASSES {
             let iri = tripletrail::oxigraph::model::NamedNode::new_unchecked(class.as_str());
             let sample = select_rows(
-                &entry.engine,
+                &engine,
                 &format!(
                     "SELECT DISTINCT ?s WHERE {{ ?s a {iri} FILTER(isIRI(?s)) }} LIMIT {SAMPLED}"
                 ),
@@ -942,9 +954,12 @@ fn preview(
                 let Ok(node) = tripletrail::oxigraph::model::NamedNode::new(s.as_str()) else {
                     continue;
                 };
+                if until.is_some_and(|u| std::time::Instant::now() >= u) {
+                    return Err(HttpError(503, crate::TIMED_OUT.to_owned()));
+                }
                 judged += 1;
                 let explained = match (&after, may_read) {
-                    (Some(rules), true) => entry.engine.explain_resource(rules, node.as_ref())?,
+                    (Some(rules), true) => engine.explain_resource(rules, node.as_ref())?,
                     _ => tripletrail::ResourceExplained::default(),
                 };
                 let seen = may_read && explained.hidden_by.is_empty();

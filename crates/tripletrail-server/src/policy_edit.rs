@@ -662,6 +662,23 @@ fn shape_block(
     })
 }
 
+/// Every triple of a policy file's text.
+fn file_triples(text: &str) -> Result<Vec<Triple>, String> {
+    RdfParser::from_format(RdfFormat::Turtle)
+        .for_slice(text.as_bytes())
+        .map(|t| t.map(Triple::from).map_err(|e| e.to_string()))
+        .collect()
+}
+
+/// Whether `triples` type `id` as an `sg:Policy`.
+fn is_policy(triples: &[Triple], id: &str) -> bool {
+    triples.iter().any(|t| {
+        matches!(&t.subject, NamedOrBlankNode::NamedNode(n) if n.as_str() == id)
+            && t.predicate.as_str() == format!("{RDF}type")
+            && matches!(&t.object, Term::NamedNode(n) if n.as_str() == format!("{SG}Policy"))
+    })
+}
+
 /// The statements whose subject is `id`.
 fn spans_about(text: &str, id: &str) -> Result<Vec<Span>, String> {
     let mut directives = String::new();
@@ -689,6 +706,10 @@ fn spans_about(text: &str, id: &str) -> Result<Vec<Span>, String> {
 /// file has no prefix for SHACL), so a page's Turtle never breaks the file around it.
 pub fn write_shape(text: &str, id: &str, turtle: &str) -> Result<String, String> {
     NamedNode::new(id).map_err(|e| format!("Shape id {id}: {e}"))?;
+    // A shape is never a policy: the shapes endpoint must not write or replace one.
+    if is_policy(&file_triples(text)?, id) {
+        return Err(format!("{id} is a policy, not a shape"));
+    }
     let mut text = text.to_owned();
     let mut prefixes = prefixes(&text);
     for (name, iri) in [("sh", SHACL), ("sg", SG)] {
@@ -704,6 +725,16 @@ pub fn write_shape(text: &str, id: &str, turtle: &str) -> Result<String, String>
     }
     let triples = triples(&directives(&text), turtle)
         .map_err(|e| format!("The shape's Turtle does not parse: {e}"))?;
+    if let Some(t) = triples.iter().find(|t| {
+        t.predicate.as_str().starts_with(SG)
+            || (t.predicate.as_str() == format!("{RDF}type")
+                && matches!(&t.object, Term::NamedNode(n) if n.as_str().starts_with(SG)))
+    }) {
+        return Err(format!(
+            "A shape may not use the sparql-guard vocabulary as a predicate or a type ({}): policies are written as policies",
+            t.predicate
+        ));
+    }
     let block = shape_block(id, &triples, &prefixes)?;
     let spans = spans_about(&text, id)?;
     Ok(if spans.is_empty() {
@@ -722,6 +753,33 @@ pub fn write_shape(text: &str, id: &str, turtle: &str) -> Result<String, String>
 
 /// `text` without the statements about the shape `id`.
 pub fn remove_shape(text: &str, id: &str) -> Result<String, String> {
+    let all = file_triples(text)?;
+    if is_policy(&all, id) {
+        return Err(format!("{id} is a policy, not a shape"));
+    }
+    let typed = |class: &str| {
+        all.iter().any(|t| {
+            matches!(&t.subject, NamedOrBlankNode::NamedNode(n) if n.as_str() == id)
+                && t.predicate.as_str() == format!("{RDF}type")
+                && matches!(&t.object, Term::NamedNode(n) if n.as_str() == class)
+        })
+    };
+    if !typed(&format!("{SHACL}NodeShape")) {
+        return Err(format!("No shape {id} in the file"));
+    }
+    if let Some(t) = all.iter().find(|t| {
+        matches!(&t.object, Term::NamedNode(n) if n.as_str() == id)
+            && t.predicate
+                .as_str()
+                .strip_prefix(SG)
+                .is_some_and(|l| ROW_KINDS.contains(&l))
+    }) {
+        return Err(format!(
+            "Shape {id} is used by the rule sg:{} of policy {}: remove the rule first",
+            t.predicate.as_str().strip_prefix(SG).unwrap_or_default(),
+            t.subject
+        ));
+    }
     let spans = spans_about(text, id)?;
     if spans.is_empty() {
         return Err(format!("No shape {id} in the file"));
@@ -995,8 +1053,60 @@ ex:OwnArea a sh:NodeShape ; sh:targetClass ex:Project ;
             )
             .is_err()
         );
+        // A shape a rule uses stays, with the policy named.
+        let used = remove_shape(&written, "http://example.org/OwnArea").unwrap_err();
+        assert!(
+            used.contains("http://example.org/Contractors") && used.contains("sg:visibleIf"),
+            "{used}"
+        );
+        let written = written.replace(" ;\n    sg:visibleIf ex:OwnArea", "");
+        assert!(!written.contains("sg:visibleIf"), "{written}");
         let removed = remove_shape(&written, "http://example.org/OwnArea").unwrap();
         assert!(!removed.contains("ex:OwnArea a"), "{removed}");
         assert!(remove_shape(&removed, "http://example.org/OwnArea").is_err());
+    }
+
+    #[test]
+    fn the_shapes_writer_never_writes_or_removes_a_policy() {
+        let policy = "http://example.org/Contractors";
+        // An id the file types as a policy.
+        let as_shape = write_shape(
+            ROWS,
+            policy,
+            "<http://example.org/Contractors> sh:targetClass <urn:c> .",
+        );
+        assert!(as_shape.unwrap_err().contains("is a policy"));
+        assert!(
+            remove_shape(ROWS, policy)
+                .unwrap_err()
+                .contains("is a policy")
+        );
+        // Turtle that makes a new policy, or gives a shape sg: terms.
+        for turtle in [
+            "<urn:new> a sg:Policy ; sg:agent sg:Anyone ; sg:readAllGraphs true .",
+            "<urn:new> a sh:NodeShape ; sg:readAllGraphs true .",
+            "<urn:new> a sh:NodeShape ; sh:property [ sg:agent sg:Anyone ] .",
+        ] {
+            let refused = write_shape(ROWS, "urn:new", turtle).unwrap_err();
+            assert!(
+                refused.contains("sparql-guard vocabulary"),
+                "{turtle}: {refused}"
+            );
+        }
+        // sg:requestingAgent as a value stays allowed.
+        assert!(
+            write_shape(
+                ROWS,
+                "urn:new",
+                "<urn:new> sh:property [ sh:path <urn:p> ; sh:hasValue sg:requestingAgent ] ."
+            )
+            .is_ok()
+        );
+        // Removing anything but a node shape of the file is refused.
+        assert!(
+            remove_shape(ROWS, "http://example.org/Project")
+                .unwrap_err()
+                .contains("No shape")
+        );
     }
 }

@@ -2038,8 +2038,10 @@ the API the access pages use:
   values are IRIs or literals. `PUT …/shapes` with `{"id", "turtle"}` writes a shape: the
   Turtle may use the file's prefixes and must describe only that shape and its blank nodes,
   and is written again from its triples (`sh:` and `sg:` prefixes are added when missing).
-  `DELETE …/shapes?id=IRI` removes one; a shape a rule still uses cannot be removed (422).
-  Changing a file that has row rules needs a licence that covers `row-policies`.
+  `DELETE …/shapes?id=IRI` removes one; a shape a rule still uses cannot be removed (422,
+  naming the policy). These calls write shapes only: an id the file types as `sg:Policy`, and
+  Turtle with a predicate or a type from the `sg:` vocabulary, are refused (422), as is
+  removing anything that is not a `sh:NodeShape` of the file. Changing a file that has row rules needs a licence that covers `row-policies`.
 - `POST /$/access/datasets/{name}/preview` (TripleTrail Enterprise) shows what a change would
   hide from a caller before it is saved. The body: `agent` and `groups` (as explain takes
   them), and the change, `shapes` (`[{"id", "turtle"}]`) and `policy` (as `PUT …/policies`
@@ -2049,6 +2051,9 @@ the API the access pages use:
   the first 20 classes it judges up to 100 instances one by one: `hidden` and `visible` give
   up to three examples each, and `sampledEditable` how many of the `sampled` the caller could
   change. The graphs the caller may read are those in force: the preview is about row rules.
+  The shapes listing and the preview run under the dataset's query timeout (`--timeout`, or
+  the dataset's limits); when it is up they answer 503 with "The operation took longer than
+  its timeout".
 - `POST /$/access/keys` with `{"agent": IRI, "label", "groups", "datasets", "expires"}` (all
   but `agent` optional, as in `auth.apiKeys`) creates an API key: a random `mg_…` key that the
   answer (201, `{"id", "key"}`) shows once. Only its SHA-256 hash goes into the configuration's
