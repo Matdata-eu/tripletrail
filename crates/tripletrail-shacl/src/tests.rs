@@ -571,3 +571,59 @@ fn details_are_bounded() {
     let max = crate::validate::MAX_DETAILS;
     assert!((max..max + 50).contains(&details), "{details}");
 }
+
+/// The IRIs of the compiled shapes, sorted.
+fn shape_iris(ttl: &str) -> Vec<String> {
+    let shapes = Shapes::compile(&graph(ttl)).unwrap();
+    let mut out: Vec<String> = (0..shapes.len())
+        .map(|i| {
+            shapes
+                .get(crate::ShapeId(i as u32))
+                .iri()
+                .as_str()
+                .to_owned()
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn blank_shapes_get_stable_iris() {
+    let ttl = "ex:S a sh:NodeShape ; sh:targetClass ex:Car ;
+        sh:property [ sh:path ex:p ; sh:minCount 1 ] ;
+        sh:property [ sh:path ex:q ; sh:or ( [ sh:datatype xsd:integer ] [ sh:in ( 1 2 ) ] ) ] .";
+    let iris = shape_iris(ttl);
+    // ex:S, its two property shapes and the two shapes of the sh:or list.
+    assert_eq!(iris.len(), 5);
+    assert!(iris.contains(&"http://example.com/S".to_owned()));
+    let named: Vec<&String> = iris
+        .iter()
+        .filter(|i| i.starts_with("http://example.com/S#"))
+        .collect();
+    assert_eq!(named.len(), 4, "{iris:?}");
+    assert!(
+        named
+            .iter()
+            .all(|i| i.len() == "http://example.com/S#".len() + 16)
+    );
+    // A new read (new blank node labels), with the triples and shapes in another order.
+    let reordered = "ex:S sh:property [ sh:or ( [ sh:datatype xsd:integer ] [ sh:in ( 1 2 ) ] ) ;
+            sh:path ex:q ] ;
+        sh:property [ sh:minCount 1 ; sh:path ex:p ] ; sh:targetClass ex:Car ; a sh:NodeShape .";
+    assert_eq!(shape_iris(reordered), iris);
+    // A changed property shape gets a new IRI; the other keeps its own.
+    let changed = ttl.replace("sh:minCount 1", "sh:minCount 2");
+    let after = shape_iris(&changed);
+    assert_eq!(after.iter().filter(|i| iris.contains(i)).count(), 4);
+    // An IRI with a `#` gets `-`; a blank shape no IRI refers to gets a URN.
+    let hashed = shape_iris(
+        "<http://example.com/shapes#S> sh:targetNode ex:a ; sh:property [ sh:path ex:p ; sh:minCount 1 ] .",
+    );
+    assert!(
+        hashed[1].starts_with("http://example.com/shapes#S-"),
+        "{hashed:?}"
+    );
+    let anonymous = shape_iris("[] sh:targetNode ex:a ; sh:class ex:Car .");
+    assert!(anonymous[0].starts_with("urn:x-tripletrail-shacl:shape:"));
+}

@@ -58,5 +58,8 @@ def test_shape_counts():
     # Each property shape fails on one car: ex:a is too fast, ex:b has no name.
     assert sorted((c["distinct_focus_nodes"], c["failing_focus_nodes"]) for c in props) == [(2, 1), (2, 1)]
     assert (counts["http://example.com/Car"]["distinct_focus_nodes"], counts["http://example.com/Car"]["failing_focus_nodes"]) == (2, 0)
+    # A shape with an IRI is its own; an inline property shape is named from its node shape.
+    assert counts["http://example.com/Car"]["shape_iri"] == "http://example.com/Car"
+    assert all(c["shape_iri"].startswith("http://example.com/Car#") for c in props)
     stats = [t for t in report.triples() if t.predicate.value == "http://w3id.org/tripletrail/shacl#shapeStatistics"]
     assert len(stats) == 4 and all(isinstance(t.object, ox.NamedNode) for t in stats)

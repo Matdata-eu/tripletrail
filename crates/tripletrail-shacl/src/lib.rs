@@ -85,6 +85,8 @@ pub mod vocab {
             NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#shapeStatistics");
         pub const SHAPE: NamedNodeRef<'static> =
             NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#shape");
+        pub const SHAPE_IRI: NamedNodeRef<'static> =
+            NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#shapeIri");
         pub const FOCUS_NODES: NamedNodeRef<'static> =
             NamedNodeRef::new_unchecked("http://w3id.org/tripletrail/shacl#focusNodes");
         pub const VALUE_NODES: NamedNodeRef<'static> =
