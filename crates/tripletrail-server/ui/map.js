@@ -182,8 +182,8 @@ window.TripleTrailMap = (function () {
       container: canvas,
       style,
       hash: true,
-      center: START ? START.center : [0, 20],
-      zoom: START ? START.zoom : 1,
+      center: startOf(name) ? startOf(name).center : [0, 20],
+      zoom: startOf(name) ? startOf(name).zoom : 1,
       transformRequest: (url) => (url.startsWith(location.origin) ? { url, headers: headers() } : { url }),
     });
     loaded = false;
@@ -867,12 +867,16 @@ window.TripleTrailMap = (function () {
     return "/$/ui/search/" + encodeURIComponent(ds) + "?m=" + encodeURIComponent(JSON.stringify({ class: c.class, where: [], show: [], area }));
   }
 
-  // The start view the server gives (--map-view ZOOM/LAT/LON), for data without a known extent
-  // or spread over half the world or more.
-  const START = (() => {
-    const [zoom, lat, lon] = (document.documentElement.dataset.mapView || "").split("/").map(Number);
-    return [zoom, lat, lon].every(Number.isFinite) ? { zoom, center: [lon, lat] } : null;
+  // The start view the server gives (--map-view [DATASET=]ZOOM/LAT/LON), for data without a
+  // known extent or spread over half the world or more: the dataset's own, else every one's.
+  const VIEWS = (() => {
+    try { return JSON.parse(document.documentElement.dataset.mapViews || "{}") || {}; } catch (e) { return {}; }
   })();
+  function startOf(ds) {
+    const view = (Object.prototype.hasOwnProperty.call(VIEWS, ds) && VIEWS[ds]) || document.documentElement.dataset.mapView || "";
+    const [zoom, lat, lon] = String(view).split("/").map(Number);
+    return [zoom, lat, lon].every(Number.isFinite) ? { zoom, center: [lon, lat] } : null;
+  }
 
   /** Fits the map to the collections' extents (from the OGC API), or keeps the start view. */
   async function fit(ds, animate) {
@@ -884,8 +888,9 @@ window.TripleTrailMap = (function () {
         if (!bbox || bbox.length < 4 || !bbox.every(Number.isFinite)) continue;
         b = b ? [Math.min(b[0], bbox[0]), Math.min(b[1], bbox[1]), Math.max(b[2], bbox[2]), Math.max(b[3], bbox[3])] : bbox.slice(0, 4);
       }
-      if (START && (!b || b[2] - b[0] >= 180 || b[3] - b[1] >= 90)) {
-        if (map && shown === ds) map.jumpTo(START);
+      const start = startOf(ds);
+      if (start && (!b || b[2] - b[0] >= 180 || b[3] - b[1] >= 90)) {
+        if (map && shown === ds) map.jumpTo(start);
         return;
       }
       if (b && map && shown === ds) map.fitBounds([[b[0], Math.max(b[1], -85)], [b[2], Math.min(b[3], 85)]], { padding: 40, maxZoom: 16, animate: !!animate });

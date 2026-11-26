@@ -303,6 +303,15 @@ pub(crate) fn warm(state: &State, entry: &Entry, within: Duration) -> Result<War
             Err(e) => out.failed.push(format!("{}: {}", c.id, e.1)),
         }
     }
+    // The search box's full-text index, built by the first search (7 s on RINF's eight
+    // countries): built here, so no reader waits for it.
+    let left = deadline.saturating_duration_since(std::time::Instant::now());
+    if !left.is_zero() {
+        let timeout = Some(limit.map_or(left, |t| t.min(left)));
+        if let Err(e) = search(entry, &collections, "a", timeout, &View::default()) {
+            out.failed.push(format!("search: {}", e.1));
+        }
+    }
     Ok(out)
 }
 

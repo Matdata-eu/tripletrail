@@ -234,6 +234,8 @@ pub struct Options {
     pub examples: examples::Examples,
     /// Write one JSON line per request to standard output.
     pub log_requests: bool,
+    /// `--hide-version`: the `Server` header says `TripleTrail`, without the version.
+    pub hide_version: bool,
     /// On SIGTERM or Ctrl-C, how long running requests may take before the server exits
     /// (see [`Server::run_until_signal`]).
     pub shutdown_grace: Duration,
@@ -380,6 +382,7 @@ impl Default for Options {
             branding: branding::Branding::default(),
             examples: examples::Examples::default(),
             log_requests: false,
+            hide_version: false,
             shutdown_grace: Duration::from_secs(30),
             base_iris: Vec::new(),
             see_other: false,
@@ -1603,7 +1606,14 @@ fn send_reply(
     }
     // Names the engine, where tiny_http would say "tiny-http (Rust)": MatGUI's Explain view
     // recognises TripleTrail by it, and asks /{ds}/explain for the plan.
-    headers.push(header("Server", SERVER));
+    headers.push(header(
+        "Server",
+        if state.options.hide_version {
+            "TripleTrail"
+        } else {
+            SERVER
+        },
+    ));
     let origin = if state.options.cors {
         Some("*")
     } else {
