@@ -1858,6 +1858,15 @@ fn charset(content_type: &str) -> Option<&str> {
     })
 }
 
+/// The first language of the request's `Accept-Language`, if it names one.
+pub(crate) fn first_language(request: &Request) -> Option<String> {
+    request_header(request, "Accept-Language").and_then(|v| {
+        v.split(',')
+            .map(|t| t.split(';').next().unwrap_or_default().trim().to_owned())
+            .find(|t| !t.is_empty() && t != "*")
+    })
+}
+
 pub(crate) fn request_header<'a>(request: &'a Request, name: &'static str) -> Option<&'a str> {
     request
         .headers()
@@ -2587,6 +2596,12 @@ fn route(
             let view = View::of(context);
             if service == "tiles" {
                 let base = format!("{}/{}/tiles", origin(state, request), segments[0]);
+                // The language of the map's labels (#260): `lang`, else the browser's first.
+                let lang = params
+                    .get("lang")
+                    .map(str::to_owned)
+                    .or_else(|| first_language(request))
+                    .unwrap_or_else(|| "en".to_owned());
                 return tiles::route(
                     state,
                     &entry,
@@ -2595,6 +2610,7 @@ fn route(
                     &base,
                     timeout,
                     &view,
+                    &lang,
                 );
             }
             // A browser (`text/html` before any JSON type in `Accept`) gets the HTML pages.

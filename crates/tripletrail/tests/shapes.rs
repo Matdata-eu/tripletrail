@@ -358,6 +358,27 @@ fn a_generated_set_as_files_loads_back_and_overlays() {
     assert!(object(&both, &signal, &format!("{TTS}color")).is_none());
     assert!(object(&both, &asset, &format!("{TTS}key")).is_some());
     assert!(shapes::check(&both).is_empty());
+    // A tts:labelStrip that is no regular expression is named (#260).
+    let strips = |pattern: &str| -> Vec<String> {
+        shapes::load(&[shapes::SetFile {
+            name: "strip.ttl".to_owned(),
+            text: format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+                 <urn:my:s> a sh:NodeShape ; sh:targetClass <{EX}Signal> ; tts:labelStrip {pattern:?} .\n"
+            ),
+        }])
+        .err()
+        .unwrap_or_default()
+    };
+    assert!(strips(shapes::VALIDITY).is_empty());
+    let errors = strips("(unclosed");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("tts:labelStrip is not a regular expression")),
+        "{errors:?}"
+    );
     // It keeps the generated shape's instance count.
     assert_eq!(
         object(&both, &signal, &format!("{TTS}instances")),

@@ -365,13 +365,7 @@ fn page(
     headers: Vec<(&'static str, String)>,
 ) -> Result<Reply, HttpError> {
     let shapes = (answer.shapes)()?;
-    let lang = request_header(request, "Accept-Language")
-        .and_then(|v| {
-            v.split(',')
-                .map(|t| t.split(';').next().unwrap_or_default().trim().to_owned())
-                .find(|t| !t.is_empty() && t != "*")
-        })
-        .unwrap_or_else(|| "en".to_owned());
+    let lang = crate::first_language(request).unwrap_or_else(|| "en".to_owned());
     let Some(view) = crate::describe_view::build(
         answer.engine,
         &shapes,

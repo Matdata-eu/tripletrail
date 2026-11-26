@@ -23,6 +23,11 @@ a geometry: here Station and Section.
   `tts:colorBy` (a number, lowest first) puts it at the top of that list.
 - **Click** a feature to open its describe page beside the map.
 - **Search** finds features by the words of their names.
+- **Labels** are in your browser's language when the data has one in it, else in English,
+  else without a language. A pack can take text out of every label the map shows with
+  `tts:labelStrip`, a regular expression: the RINF Atlas import below takes out RINF's
+  validity period, so "Brussel-West (from 2022-12-11 until 2078-12-31)" shows as
+  "Brussel-West".
 - **Views**, when the shapes name some, show one theme at a time: see
   [Name views of the map](#name-views-of-the-map).
 - **Layers**: the eye beside a layer shows or hides it (**Show all** and **Hide all** do every
@@ -1805,6 +1810,7 @@ left out: atlas:geometry on node shapes (1)
         sh:path ( geo:hasGeometry geo:asWKT )
     ] ;
     tts:key "operational-point" ;
+    tts:labelStrip "\\s*\\(from \\d{4}-\\d{2}-\\d{2} until \\d{4}-\\d{2}-\\d{2}\\)$" ;
     tts:minZoom 0 .
 ```
 
