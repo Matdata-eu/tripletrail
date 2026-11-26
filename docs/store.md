@@ -620,7 +620,9 @@ memory capped at 1.2 GB, 4 cores, two runs each, with the same answers:
 | both (now) | 71 to 78 s | 15 to 16 GB | 1.5 to 1.6M |
 
 Without readahead each page fault reads less, but there are about four times as many; only
-with the lookups side by side does that pay.
+with the lookups side by side does that pay. The passes that read those keys in order (the
+checkpoint at the end of the load, a rebuild of the dictionary's table) turn readahead back on
+for their length: without it the checkpoint of the load above took 15 to 23 s instead of 10.
 
 ### Streaming bulk load on all of RINF
 

@@ -1529,6 +1529,21 @@ fn write_checkpoint(
     previous: Option<(&Path, &[DictPiece])>,
     render_wkt: bool,
 ) -> io::Result<Vec<DictPiece>> {
+    // The keys, their index and geometries are read in order.
+    dict.reading_in_order(|| {
+        write_checkpoint_files(target, dict, quads, geometries, previous, render_wkt)
+    })
+}
+
+/// [`write_checkpoint`], once the dictionary reads ahead.
+fn write_checkpoint_files(
+    target: &Path,
+    dict: &Dictionary,
+    quads: &QuadIndex,
+    geometries: EncodeGeometry<'_>,
+    previous: Option<(&Path, &[DictPiece])>,
+    render_wkt: bool,
+) -> io::Result<Vec<DictPiece>> {
     fs::create_dir_all(target)?;
     // Segment files are linked only into a checkpoint of the store itself; a copy elsewhere
     // (`save_to`, a backup) shares no file with the store, so that damage to one does not
