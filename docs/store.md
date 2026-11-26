@@ -232,7 +232,10 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   predicates' pairs without duplicates, as the evaluator gives it; when every column's ids
   of two alternatives can't meet (an IRI and a literal object, say) no row is checked twice
   (#11; 133k orders, `?o ex:placedBy|ex:qty ?n` 175 → 85 ms, joined with a filter on another
-  property 115 → 70 ms).
+  property 115 → 70 ms). The same reversed as a whole, `^(ex:a|^ex:b)`, is `^ex:a|ex:b`.
+  Joined with other rows, such an alternative follows only the edges that meet them, not
+  every edge of its predicates (#257; RINF France and Belgium, the parts of 542 sections of
+  line out of 76,089 `era:hasPart` edges, a facet's count 24 → 4 ms).
   The parts of a join with a path are joined each through a variable it shares with those
   before it, where one does: triples that share no variable (`?f a ex:Section . ?t ex:speed
   ?v` beside `?t (ex:isPartOf|^ex:hasPart) ?f`) are taken as separate parts with the path

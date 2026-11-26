@@ -2014,7 +2014,8 @@ Server admins (`tripletrail:admin`) read and change who may do what under `/$/ac
 the API the access pages use:
 
 - `GET /$/access`: for each dataset, its policies (as JSON: `id`, `agents`, `groups`,
-  `readAllGraphs`, `writeAllGraphs`, `readGraphs`, `writeGraphs`), the files they come from,
+  `readAllGraphs`, `writeAllGraphs`, `readGraphs`, `writeGraphs`, and the row rules
+  `rowRules`, `[{"rule": "sg:visibleIf", "shape": IRI}]`, with `hideReferences`), the files they come from,
   whether it has policies of its own, whether they can be edited (Turtle files only) and whether
   it is closed (policies are on and none apply to it); the API keys (label, agent, groups,
   datasets, expiry, and the first 8 hex digits of the hash as an id, never the hash); the
@@ -2030,7 +2031,33 @@ the API the access pages use:
   (a label) stay. A dataset without policies of its own first gets `policies/{name}.ttl` next
   to the configuration file, starting as a copy of the default policies, and the configuration
   names it (the JSON file is written again, with its keys sorted). An edit that would not load
-  puts every file back and answers 422. The change applies at once.
+  puts every file back and answers 422. The change applies at once. A policy's `rowRules`
+  (TripleTrail Enterprise) are written as given; a body without the key keeps those the file
+  has, so an older client never drops them. A policy whose rule names a shape written in place
+  (a blank node) is left to its file (422).
+- Row rule shapes (enterprise#8, TripleTrail Enterprise): `GET /$/access/datasets/{name}/shapes`
+  lists the node shapes of the dataset's policy files, each as Turtle with the policies whose
+  rules use it (`usedBy`), and the classes of the data with their instances (at most 200); with
+  `?class=IRI` also that class's properties, most used first, with a sample value and whether
+  values are IRIs or literals. `PUT …/shapes` with `{"id", "turtle"}` writes a shape: the
+  Turtle may use the file's prefixes and must describe only that shape and its blank nodes,
+  and is written again from its triples (`sh:` and `sg:` prefixes are added when missing).
+  `DELETE …/shapes?id=IRI` removes one; a shape a rule still uses cannot be removed (422,
+  naming the policy). These calls write shapes only: an id the file types as `sg:Policy`, and
+  Turtle with a predicate or a type from the `sg:` vocabulary, are refused (422), as is
+  removing anything that is not a `sh:NodeShape` of the file. Changing a file that has row rules needs a licence that covers `row-policies`.
+- `POST /$/access/datasets/{name}/preview` (TripleTrail Enterprise) shows what a change would
+  hide from a caller before it is saved. The body: `agent` and `groups` (as explain takes
+  them), and the change, `shapes` (`[{"id", "turtle"}]`) and `policy` (as `PUT …/policies`
+  takes it), applied to a copy of the policy file in memory. The answer has the row rules
+  now (`rowRulesNow`) and after (`rowRulesAfter`), and for each class (at most 200) its
+  `instances` and how many the caller sees now and after (`visibleNow`, `visibleAfter`). For
+  the first 20 classes it judges up to 100 instances one by one: `hidden` and `visible` give
+  up to three examples each, and `sampledEditable` how many of the `sampled` the caller could
+  change. The graphs the caller may read are those in force: the preview is about row rules.
+  The shapes listing and the preview run under the dataset's query timeout (`--timeout`, or
+  the dataset's limits); when it is up they answer 503 with "The operation took longer than
+  its timeout".
 - `POST /$/access/keys` with `{"agent": IRI, "label", "groups", "datasets", "expires"}` (all
   but `agent` optional, as in `auth.apiKeys`) creates an API key: a random `mg_…` key that the
   answer (201, `{"id", "key"}`) shows once. Only its SHA-256 hash goes into the configuration's
@@ -2328,7 +2355,7 @@ version.
   - `timeout`: the timeout of a request that asks for none; `maxTimeout`: the most a request
     may ask for with `?timeout=` (the dataset's `timeout` when not set). Setting either
     replaces `--timeout` for the dataset.
-  - `maxRows` and `maxUpload`: as `--max-rows` and `--max-upload`, for this dataset.
+  - `maxRows` and `maxUpload`: as `--max-rows` and `--max-upload`, for this dataset; `maxUpload` also takes a size such as `"64MiB"`.
   - `queryMemory`: the memory one query of this dataset may hold in its joins, as a size such
     as `"256MiB"` (see **Query memory** above). A request's `query-memory=` may ask for less.
   - `maxDisk` and `maxMemory`: quotas, in bytes or as a size such as `"10GB"` or `"512MiB"`
@@ -2340,15 +2367,22 @@ version.
     counted). The sizes are estimates, and an index is counted once it is built: the first
     geometry a query reads also allocates a 6 MB table of parsed geometries.
 
-    A read can therefore take a dataset over its memory quota: the first `tt:search`,
-    spatial query or numeric range FILTER builds an index that stays, and from then on
-    writes get 507 although no writer added anything. Size `maxMemory` for the data plus
-    the indexes your queries use. On 470,000 triples with 150,000 geometries, labels and
-    numbers, the store took 57 MB and the full-text, spatial (with its parsed geometries)
-    and range indexes another 28, 31 and 19 MB: about twice the data with all three.
-    `memory` in `/$/stats/{name}` shows the parts. Writes come back once data is removed,
-    the quota is raised, or the server restarts (the indexes are then built again only
-    when a query needs them). While a dataset is at or over a quota, writes that may add data
+    A read can take a dataset over its memory quota: the first `tt:search`, spatial query
+    or numeric range FILTER builds an index that stays. The next write that finds the
+    dataset over its memory quota first drops the indexes and caches queries built
+    (#18), largest first, until it is under: the full-text, spatial, vector and range
+    indexes and the result cache, with their views for callers who see some graphs. The
+    next query that needs one builds it again, slower that once. The data, its
+    dictionary, the parsed geometries and the routing networks (which have a budget of
+    their own) stay. Each time, the log says what was dropped, and `quotaEvictions` in
+    `/$/stats/{name}` and `tripletrail_dataset_quota_evictions_total` in `/$/metrics`
+    count it. On 470,000 triples with 150,000 geometries, labels and numbers, the store
+    took 57 MB and the full-text, spatial (with its parsed geometries) and range indexes
+    another 28, 31 and 19 MB: about twice the data with all three, so size `maxMemory`
+    for the data plus the indexes your queries use, or they will be built again and again.
+    `memory` in `/$/stats/{name}` shows the parts. When the data alone is over the quota,
+    writes stay refused until data is removed or the quota is raised. While a dataset is at
+    or over a quota, writes that may add data
     (uploads, `PUT`, updates with `INSERT`, `LOAD` or `CREATE`, RDF4J `ADD` and commits)
     are answered with `507 Insufficient Storage`. Reads, Graph Store `DELETE`, and updates
     that only remove data (`DELETE DATA`, `DELETE WHERE`, `DELETE` without `INSERT`, `CLEAR`,
@@ -3316,7 +3350,17 @@ https://tripletrail.example.org/kg/tiles/all/{z}/{x}/{y}.mvt
 - Below zoom 8, a layer of more than 1,000 features in one tile is generalised, as RINF Atlas
   does (#92): a 512 extent (and an 8-unit buffer) instead of 4096, and one feature per
   position, the one drawn on top (the last by IRI). Lines and polygons smaller than a unit are
-  left out. A layer of fewer features keeps them all at every zoom.
+  left out. Such a layer's features carry their IRI in two attributes in place of `iri`: `ns`,
+  the IRI up to its last `/` or `#`, which the layer holds once for all the features that
+  share it, and `local`, the rest (#261); the IRI is `ns` followed by `local`. On RINF's eight
+  countries this halves nine z6 tiles of every class around Brussels (1,239 instead of 2,481 KB). A
+  layer of fewer features keeps them all at every zoom, with `iri`.
+- A client whose `Accept-Encoding` takes gzip gets tiles gzipped (level 3), as it does the
+  styles, facets, counts and searches under `/{ds}/tiles/` and every answer of the OGC API
+  (`/{ds}/ogc/`); answers under 1 KB and streamed ones go as they are, and these answers say
+  `Vary: Accept-Encoding`. On RINF's eight countries the nine tiles of every class around
+  Brussels come to 488 KB at z6, 113 KB at z9 and 34 KB at z12 (RINF Atlas, gzipped too: 431,
+  228 and 82 KB).
 - Collections that read their geometry through the same path are fetched with one query
   (the spatial index is asked once per tile), and those queries run on up to four threads.
 - Tiles are kept in memory, 256 MiB at most over all datasets (oldest out first; a layer tile
@@ -3442,7 +3486,10 @@ filter and data version: until the data or the shapes change, the same request a
 same error at once. Other failures (a memory limit) are tried again on the next request. Facets are counted
   in parallel, a query each; values tied at the 50th place come in the store's order. On RINF's DE+FR running
   tracks (234,811, 44 facets) this takes about 0.5 s unfiltered and 0.8 to 1.7 s under a
-  filter, and repeats come from the result cache in milliseconds.
+  filter, and repeats come from the result cache in milliseconds. A facet's own pattern
+  comes after the other facets' filters and the check that a feature is drawn, so that it
+  (a computed facet's above all) is evaluated only for the features they keep (#256; RINF FR+BE running tracks, 40,143, RINF Atlas's shapes, a country
+  and a minimum speed, first request: 1.0 to 1.1 s → 0.1 to 0.45 s).
 - `/{ds}/tiles/search?q=…` finds the map's features by name, with the
   [full-text index](full-text-search.md): those with a label holding every word of `q` (the
   last as a prefix, so it works while typing; case and Latin accents aside), labels with the

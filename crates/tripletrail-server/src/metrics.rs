@@ -670,6 +670,18 @@ pub(crate) fn render(state: &State) -> Reply {
         );
     }
     out.family(
+        "tripletrail_dataset_quota_evictions_total",
+        "counter",
+        "Times the indexes queries built were dropped to bring the dataset under its memory quota.",
+    );
+    for e in &entries {
+        out.sample(
+            "tripletrail_dataset_quota_evictions_total",
+            &[("dataset", &e.name)],
+            e.gate.evictions.load(Ordering::Relaxed),
+        );
+    }
+    out.family(
         "tripletrail_caller_requests_rejected_total",
         "counter",
         "Requests answered with 429 by the callers limits, by reason (rate or concurrency).",

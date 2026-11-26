@@ -67,3 +67,85 @@ def test_errors(folder, tmp_path_factory):
     with pytest.raises(OSError):
         e.run_mapping(RML, base_dir=str(folder), allowed=[str(elsewhere)])
     assert len(e) == 0
+
+
+R2RML = """@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.com/> .
+<#Station> rr:logicalTable [ rr:tableName "tt_py_station" ] ;
+  rr:subjectMap [ rr:template "http://example.com/station/{code}" ; rr:class ex:Station ] ;
+  rr:predicateObjectMap [ rr:predicate ex:tracks ; rr:objectMap [ rr:column "tracks" ] ] .
+"""
+
+
+@pytest.fixture
+def postgres():
+    """A table in the PostgreSQL database of TRIPLETRAIL_TEST_POSTGRES (skipped without it)."""
+    import os
+    import subprocess
+
+    url = os.environ.get("TRIPLETRAIL_TEST_POSTGRES")
+    if not url:
+        pytest.skip("set TRIPLETRAIL_TEST_POSTGRES to a PostgreSQL connection string")
+    sql = (
+        "DROP TABLE IF EXISTS tt_py_station; "
+        "CREATE TABLE tt_py_station (code text PRIMARY KEY, tracks integer); "
+        "INSERT INTO tt_py_station VALUES ('GNT', 12), ('BRG', 10);"
+    )
+    subprocess.run(["psql", url, "-q", "-c", sql], check=True)
+    yield url
+    subprocess.run(["psql", url, "-q", "-c", "DROP TABLE tt_py_station"], check=True)
+
+
+def test_database_sources(postgres, tmp_path):
+    e = Engine()
+    # R2RML reads the database given.
+    assert e.run_mapping(R2RML, base_dir=str(tmp_path), database=postgres) == 4
+    tracks = {str(s["s"].value): s["t"].value for s in e.query(
+        "SELECT ?s ?t WHERE { ?s <http://example.com/tracks> ?t }")}
+    assert tracks == {EX + "station/GNT": "12", EX + "station/BRG": "10"}
+    # YARRRML names its own database.
+    yarrrml = f"""prefixes:
+  ex: http://example.com/
+sources:
+  db:
+    access: {postgres}
+    type: postgresql
+    queryFormulation: sql2008
+    query: SELECT code FROM tt_py_station WHERE tracks > 10
+mappings:
+  big:
+    sources: db
+    s: ex:big/$(code)
+    po:
+      - [a, ex:BigStation]
+"""
+    assert e.run_mapping(yarrrml, yarrrml=True, base_dir=str(tmp_path)) == 1
+    # Without a database, an R2RML mapping has nothing to read.
+    with pytest.raises((ValueError, OSError)):
+        Engine().run_mapping(R2RML, base_dir=str(tmp_path))
+
+
+OWN_DATABASE = """@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix rml: <http://semweb.mmlab.be/ns/rml#> .
+@prefix d2rq: <http://www.wiwiss.fu-berlin.de/suhl/bizer/D2RQ/0.1#> .
+@prefix ex: <http://example.com/> .
+<#DB> a d2rq:Database ; d2rq:jdbcDSN "jdbc:postgresql://127.0.0.1:1/x" ;
+  d2rq:jdbcDriver "org.postgresql.Driver" .
+<#Station> rml:logicalSource [ rml:source <#DB> ; rml:query "SELECT * FROM station" ;
+    rr:sqlVersion rr:SQL2008 ] ;
+  rr:subjectMap [ rr:template "http://example.com/station/{code}" ] .
+"""
+
+
+def test_a_mapping_inside_allowed_names_no_database(tmp_path):
+    """With `allowed`, a database the mapping names itself is refused before connecting."""
+    e = Engine()
+    with pytest.raises(ValueError, match="names its own database"):
+        e.run_mapping(OWN_DATABASE, base_dir=str(tmp_path), allowed=[str(tmp_path)])
+    # Allowed by the caller, it connects (and here finds nothing listening).
+    with pytest.raises(OSError):
+        e.run_mapping(OWN_DATABASE, base_dir=str(tmp_path), allowed=[str(tmp_path)], databases=True)
+    # Without `allowed`, as `tripletrail lift`.
+    with pytest.raises(OSError):
+        e.run_mapping(OWN_DATABASE, base_dir=str(tmp_path))
+    assert len(e) == 0

@@ -366,6 +366,53 @@ The answer (a longer JSON object; these are parts of it) says that S01 is hidden
 to see, for each pattern of a query, how many matches there are and how many Bob sees.
 Admins, and callers whose policies have no row rules, see everything.
 
+### Try a rule before you save it
+
+Should Bob see only line 25? Before anything is saved, a server admin can ask what a changed
+policy would hide from him. The preview takes the policy as the Access page writes it, here
+with `ex:Line25` as its `sg:visibleIf` too, and applies it to a copy of the policy file in
+memory:
+
+<!-- test: enterprise run -->
+```sh
+curl -s -H 'Authorization: Bearer admin-secret-3' -H 'Content-Type: application/json' \
+  'http://localhost:7878/$/access/datasets/ds/preview' --data '{
+    "agent": "https://example.org/people/bob",
+    "policy": { "id": "https://example.org/policies/Contractor",
+      "agents": ["https://example.org/people/bob"], "writeAllGraphs": true,
+      "rowRules": [ { "rule": "sg:visibleIf", "shape": "https://example.org/rail#Line25" },
+                    { "rule": "sg:editableIf", "shape": "https://example.org/rail#Line25" } ] } }'
+```
+
+<!-- test: enterprise output contains -->
+```text
+"class":"https://example.org/rail#Section","hidden":["https://example.org/rail#S01","https://example.org/rail#S02","https://example.org/rail#S05"],"instances":12
+"visible":["https://example.org/rail#S03","https://example.org/rail#S04"],"visibleAfter":2,"visibleNow":3
+```
+
+For each class, the answer (parts of it are shown) counts the instances, how many Bob sees
+now (`visibleNow`) and how many he would see after (`visibleAfter`): two sections instead of
+three, S03 and S04 of line 25. The stations do not change. For the first classes it gives
+examples of what would be hidden and visible, and how many of the instances it judged he
+could change (`sampledEditable`). Nothing is written: the rules in force stay until the
+policy is saved. `shapes` in the body adds or
+replaces shapes the same way, as `[{"id", "turtle"}]`.
+
+On the **Access** page, the **Row rules** section of a dataset does the same without Turtle.
+It lists the rules of each policy with their shapes. **Add a row rule** builds a new one:
+
+1. Choose the policy and the kind of rule: *Show only when* (`sg:visibleIf`), *Edit only
+   when* (`sg:editableIf`) or *Hide these properties* (`sg:hideProperties`).
+2. Choose the class from the data, then add conditions on its properties: *is the requesting
+   user*, *is*, *is one of*, *has a value* or *has no value*. A path of several properties is
+   written with ` / ` between them.
+3. Check the shape's Turtle, which you may also edit, or pick a shape the policy file already
+   has.
+4. **Preview** for a caller, then **Save rule**: the shape and the rule go into the policy
+   file, as `PUT /$/access/datasets/{ds}/shapes` and `…/policies` write them.
+
+The builder writes only the SHACL that row rules accept, so a saved rule always loads.
+
 The files are reloaded when they change, without a restart. The **Access** page of the web UI
 (`/$/ui/access`) edits the same files: a matrix of graphs and groups, API keys created and
 revoked, **View as** someone else to check what they see, and a history of every change that

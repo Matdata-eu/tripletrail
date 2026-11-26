@@ -1361,11 +1361,42 @@ fn facet_counts(
         }
         None => count(&none, &drawn)?,
     };
-    let features = if all.sparql.is_empty() {
-        drawable
+    // The features the filters keep, by name when they are few (#257): the other facets count
+    // over them, rather than each testing the filters on every feature of the class again (a
+    // rolled-up filter walks a path for each section of line). None kept, they count nothing.
+    let kept: Option<Vec<String>> = if all.sparql.is_empty() {
+        None
     } else {
-        count(&all, &drawn)?
+        let rows = run(
+            entry,
+            &format!(
+                "SELECT DISTINCT ?f WHERE {{ ?f a <{class}> .{}{drawn} }} LIMIT {}",
+                all.sparql,
+                KEPT_NAMED + 1
+            ),
+            capped(timeout, all.computed),
+            view,
+        )?;
+        (rows.len() <= KEPT_NAMED)
+            .then(|| {
+                rows.iter()
+                    .map(|r| match r.first() {
+                        Some(Some(Term::NamedNode(n))) => Some(format!("<{}>", n.as_str())),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .flatten()
     };
+    let features = match &kept {
+        _ if all.sparql.is_empty() => drawable,
+        Some(kept) => kept.len() as u64,
+        None => count(&all, &drawn)?,
+    };
+    let kept_values = kept
+        .as_ref()
+        .filter(|k| !k.is_empty())
+        .map(|k| format!(" VALUES ?f {{ {} }}", k.join(" ")));
     let one = |facet: &Facet| -> Result<serde_json::Value, HttpError> {
         if facet.text {
             // Searched, not counted: its values are too many to list.
@@ -1405,13 +1436,44 @@ fn facet_counts(
             }
             result
         };
+        // A facet the filters do not name counts over the kept features.
+        let over_kept = other.signature == all.signature && kept.is_some();
+        if over_kept
+            && kept_values.is_none()
+            && all.color_key.as_deref() != Some(facet.key.as_str())
+        {
+            let mut out = if facet.range {
+                json!({ "key": facet.key, "title": facet.title, "range": true,
+                        "min": null, "max": null, "count": 0 })
+            } else {
+                json!({ "key": facet.key, "title": facet.title, "values": [], "more": false })
+            };
+            if facet.range
+                && let Some(unit) = &facet.unit
+            {
+                out["unit"] = unit.clone().into();
+            }
+            if facet.range && !facet.classes.is_empty() {
+                out["classes"] = facet
+                    .classes
+                    .iter()
+                    .map(|(up_to, label)| json!({ "upTo": up_to, "label": label }))
+                    .collect();
+            }
+            if let Some(n) = facet.color_by {
+                out["colorBy"] = n.into();
+            }
+            return Ok(out);
+        }
+        let facet_where = match &kept_values {
+            Some(values) if over_kept => facet_last(facet, values, ""),
+            _ => facet_last(facet, &other.sparql, &drawn),
+        };
         if facet.range {
             // The span of the values, under the other facets' filters; numbers as numbers.
             let query = format!(
                 "SELECT (MIN(?v) AS ?min) (MAX(?v) AS ?max) (COUNT(DISTINCT ?f) AS ?n) WHERE {{ \
-                   ?f a <{class}> .{}{}{drawn} FILTER(isLiteral(?v)) }}",
-                facet.bind("?f", "?v"),
-                other.sparql,
+                   ?f a <{class}> .{facet_where} FILTER(isLiteral(?v)) }}",
             );
             let rows = run(&query)?;
             let bound = |t: &Option<Term>| match t {
@@ -1443,10 +1505,9 @@ fn facet_counts(
                 // Each feature in the class of its highest number, as its tiles colour it.
                 let query = format!(
                     "SELECT {} WHERE {{ {{ SELECT ?f (MAX(?v) AS ?m) WHERE {{ \
-                       ?f a <{class}> .{}{}{drawn} FILTER(isNumeric(?v)) }} GROUP BY ?f }} }}",
+                       ?f a <{class}> .{} FILTER(isNumeric(?v)) }} GROUP BY ?f }} }}",
                     class_sums(&classes),
-                    facet.bind("?f", "?v"),
-                    all.sparql,
+                    facet_last(facet, &all.sparql, &drawn),
                 );
                 let rows = run(&query)?;
                 let counts: Vec<u64> = (0..classes.len())
@@ -1470,10 +1531,8 @@ fn facet_counts(
         // RINF's 130,000 track ids.
         let query = format!(
             "SELECT ?v ?n WHERE {{ \
-               {{ SELECT ?v (COUNT(DISTINCT ?f) AS ?n) WHERE {{ ?f a <{class}> .{}{}{drawn} }} \
+               {{ SELECT ?v (COUNT(DISTINCT ?f) AS ?n) WHERE {{ ?f a <{class}> .{facet_where} }} \
                  GROUP BY ?v ORDER BY DESC(?n) LIMIT {} }} }} ORDER BY DESC(?n) STR(?v)",
-            facet.bind("?f", "?v"),
-            other.sparql,
             FACET_VALUES + 1,
         );
         let rows = run(&query)?;
@@ -1572,6 +1631,16 @@ fn facet_counts(
         kept.insert(key, counts.clone());
     }
     Ok(counts)
+}
+
+/// A facet's pattern after the filters of the others and the check that a feature is drawn,
+/// in the order a facet query joins them, so that the facet's value (a computed facet's
+/// `BIND` above all) is read only for the features they keep, not for every feature of the
+/// class (#256: an ERTMS check over all 40,000 running tracks for the 1,258 of one country
+/// above a speed). A computed facet's variables are its own (renamed by `inline_select`), and
+/// `drawn` names only `?f`, so the order changes no answer.
+fn facet_last(facet: &Facet, filters: &str, drawn: &str) -> String {
+    format!("{filters}{drawn}{}", facet.bind("?f", "?v"))
 }
 
 /// Collections one request for facets takes at most.
@@ -2070,6 +2139,10 @@ const PARALLEL: usize = 4;
 /// testing every feature's geometry path.
 const UNDRAWN_NAMED: usize = 1000;
 
+/// Most features kept by a request's filters that its facet queries name, rather than test
+/// the filters again (#257).
+const KEPT_NAMED: usize = 5000;
+
 /// The layer tiles of `collections`, by collection id. Collections that read their geometry
 /// through the same path share one query (with `VALUES` over their classes), so the spatial
 /// index is asked once; those groups run on up to [`PARALLEL`] threads.
@@ -2289,10 +2362,24 @@ fn group_tiles(
             } else {
                 None
             };
-            let mut properties = vec![(
-                "iri".to_owned(),
-                Literal::new_simple_literal(f.as_str()).into(),
-            )];
+            let mut properties = if low {
+                // The IRI in two: its namespace, which the layer keeps once for all the
+                // features that share it, and the rest (#261). Most of a generalised tile's
+                // bytes were IRIs: RINF's z6 tiles were 2.5 times RINF Atlas's.
+                let (ns, local) = split_iri(f.as_str());
+                vec![
+                    ("ns".to_owned(), Literal::new_simple_literal(ns).into()),
+                    (
+                        "local".to_owned(),
+                        Literal::new_simple_literal(local).into(),
+                    ),
+                ]
+            } else {
+                vec![(
+                    "iri".to_owned(),
+                    Literal::new_simple_literal(f.as_str()).into(),
+                )]
+            };
             if let Some(value) = colored.get(f) {
                 properties.push((
                     "value".to_owned(),
@@ -2317,9 +2404,26 @@ fn group_tiles(
     Ok(out)
 }
 
+/// An IRI as its namespace (up to its last `/` or `#`) and the rest: `ns` and `local` of a
+/// generalised tile's features.
+fn split_iri(iri: &str) -> (&str, &str) {
+    let at = iri.rfind(['/', '#']).map_or(0, |i| i + 1);
+    iri.split_at(at)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_iri_splits_after_its_last_slash_or_hash() {
+        assert_eq!(
+            split_iri("http://data.europa.eu/949/tunnel/0fc55bc6a3"),
+            ("http://data.europa.eu/949/tunnel/", "0fc55bc6a3")
+        );
+        assert_eq!(split_iri("http://ex.org/a#b"), ("http://ex.org/a#", "b"));
+        assert_eq!(split_iri("urn:x:y"), ("", "urn:x:y"));
+    }
 
     #[test]
     fn the_cache_is_capped_in_bytes() {

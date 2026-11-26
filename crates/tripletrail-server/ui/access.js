@@ -306,12 +306,14 @@ window.TripleTrailAccess = (function () {
     if (!d) { fill(page(), el("p", { class: "error" }, `No dataset ${name}.`)); return; }
     // Working copies; saved policy by policy.
     const policies = d.policies.filter((p) => p.id).map((p) => JSON.parse(JSON.stringify(p)));
-    const saved = new Map(policies.map((p) => [p.id, JSON.stringify(p)]));
+    // Row rules are saved by their own section, which changes the working copies in place.
+    const key = (p) => JSON.stringify({ ...p, rowRules: undefined, hideReferences: undefined });
+    const saved = new Map(policies.map((p) => [p.id, key(p)]));
     const graphs = [{ graph: "*", label: "All graphs" }, { graph: DEFAULT_GRAPH, label: "Default graph" }, ...g.graphs];
     const status = el("p", { class: "muted small", role: "status" });
     const isEmpty = (p) => !p.readAllGraphs && !p.writeAllGraphs && !p.readGraphs.length && !p.writeGraphs.length;
     // A column never saved counts once it grants something; an empty one has nothing to save.
-    const unsaved = () => policies.filter((p) => (saved.has(p.id) ? saved.get(p.id) !== JSON.stringify(p) : !isEmpty(p)));
+    const unsaved = () => policies.filter((p) => (saved.has(p.id) ? saved.get(p.id) !== key(p) : !isEmpty(p)));
     const render = () => {
       const changed = unsaved();
       status.textContent = changed.length ? `${changed.length} unsaved change${changed.length > 1 ? "s" : ""}` : "Saved";
@@ -368,7 +370,7 @@ window.TripleTrailAccess = (function () {
           if (empty && saved.has(p.id)) r = await ui.api("DELETE", `/$/access/datasets/${encodeURIComponent(name)}/policies`, { params: { id: p.id } });
           else if (!empty) r = await ui.api("PUT", `/$/access/datasets/${encodeURIComponent(name)}/policies`, { body: JSON.stringify(p), type: "application/json" });
           if (proposed(r)) proposals++;
-          else if (empty) saved.delete(p.id); else saved.set(p.id, JSON.stringify(p));
+          else if (empty) saved.delete(p.id); else saved.set(p.id, key(p));
         }
         ui.toast(proposals ? `${proposals === 1 ? "The change is" : proposals + " changes are"} proposed: another admin approves ${proposals === 1 ? "it" : "them"} on the Access page.` : "Access saved.", "good");
       } catch (e) { ui.fail(e); }
@@ -387,9 +389,208 @@ window.TripleTrailAccess = (function () {
         el("div", { class: "access-row" }, el("label", {}, "Graphs starting with ", prefix), el("label", {}, " to ", column), el("label", {}, " as ", bulkLevel),
           el("button", { type: "button", class: "btn", onclick: bulk, onfocus: refreshColumns }, "Apply"))),
       el("div", { class: "access-row" }, el("button", { type: "button", class: "btn primary", onclick: save, disabled: !d.editable }, "Save"), status),
+      await rowRulesIfAny(name, d, policies),
       viewAsForm(name, policies));
     refreshColumns();
     render();
+  }
+
+  // ---------- row rules of one dataset (enterprise#8) ----------
+  /** The row rules section in the enterprise build (the licence answer says whether its
+   *  rules are enforced); nothing in the open build, which refuses them. */
+  async function rowRulesIfAny(name, d, policies) {
+    let licence = null;
+    try { licence = (await ui.api("GET", "/$/license")).rowPolicies; } catch { licence = null; }
+    if (!licence || !licence.enforced || !window.TripleTrailRowRules) return null;
+    return rowRules(name, d, policies, licence);
+  }
+  const RULES = () => window.TripleTrailRowRules;
+  const short = (iri) => String(iri || "").replace(/^<|>$/g, "").replace(/^.*[/#:]/, "") || iri;
+  const ruleLabel = (rule) => (RULES().KINDS.find((k) => "sg:" + k.kind === rule) || { label: rule }).label;
+
+  /**
+   * The row rules of a dataset's policies, and a builder for new ones: the class, the
+   * conditions, the shape's Turtle, a preview for a caller, then saved as a shape and a rule.
+   * `policies`: the page's working copies, with `rowRules` as the server gave them.
+   */
+  async function rowRules(name, d, policies, licence) {
+    const box = el("section", { class: "access-rows", "aria-labelledby": "access-rows-h" });
+    const ds = encodeURIComponent(name);
+    let offered;
+    try { offered = await ui.api("GET", `/$/access/datasets/${ds}/shapes`); } catch (e) {
+      return el("section", {}, el("h3", {}, "Row rules"), el("p", { class: "muted" }, "Row rules cannot be shown: " + e.message));
+    }
+    const editable = d.editable && licence.editable;
+    const shapeOf = (id) => offered.shapes.find((s) => s.id === id);
+    const saveRules = async (p, rules) => {
+      const body = { ...p, rowRules: rules };
+      const r = await ui.api("PUT", `/$/access/datasets/${ds}/policies`, { body: JSON.stringify(body), type: "application/json" });
+      if (proposed(r)) { ui.toast(PROPOSED); return false; }
+      p.rowRules = rules;
+      return true;
+    };
+    const list = () => {
+      const rows = [];
+      for (const p of policies.filter((p) => p.id)) {
+        for (const r of p.rowRules || []) {
+          const shape = shapeOf(r.shape);
+          rows.push(el("tr", {},
+            el("th", { scope: "row" }, who(p)),
+            el("td", {}, ruleLabel(r.rule)),
+            el("td", {}, shape ? el("details", {}, el("summary", { title: r.shape }, short(r.shape)), el("pre", { class: "access-turtle" }, shape.turtle)) : el("span", { title: r.shape }, short(r.shape))),
+            el("td", {}, editable ? el("button", { type: "button", class: "btn small", onclick: async () => {
+              try {
+                if (!(await saveRules(p, RULES().withoutRule(p.rowRules, r)))) return;
+                const used = policies.some((x) => (x.rowRules || []).some((y) => y.shape === r.shape));
+                if (!used && shape) await ui.api("DELETE", `/$/access/datasets/${ds}/shapes`, { params: { id: r.shape } });
+                ui.toast("Rule removed.", "good");
+                offered = await ui.api("GET", `/$/access/datasets/${ds}/shapes`);
+                draw();
+              } catch (e) { ui.fail(e); }
+            } }, "Remove") : null)));
+        }
+      }
+      return rows.length
+        ? table("Row rules in force", ["Policy", "Rule", "Shape", ""], rows)
+        : el("p", { class: "muted" }, "No policy of this dataset has row rules: whoever reads a graph sees all of it.");
+    };
+
+    // ---- the builder ----
+    const state = { policy: (policies.find((p) => p.id) || {}).id || "", kind: "visibleIf", target: "", conditions: [], properties: [], existing: "", turtle: "", edited: false };
+    let props = [];
+    const kindOf = (path) => (props.find((p) => p.path === path[path.length - 1]) || {}).kind;
+    const loadProps = async () => {
+      props = [];
+      if (!state.target) return;
+      try {
+        const r = await ui.api("GET", `/$/access/datasets/${ds}/shapes`, { params: { class: state.target } });
+        props = r.properties || [];
+      } catch { props = []; }
+    };
+    const regenerate = () => {
+      if (state.edited || state.existing) return;
+      try {
+        const taken = offered.shapes.map((s) => s.id);
+        state.id = state.id || RULES().shapeId(name, state.kind, state.target, taken);
+        state.turtle = RULES().turtle({ ...state }, kindOf);
+        state.error = "";
+      } catch (e) { state.turtle = ""; state.error = e.message; }
+    };
+    const builder = el("div", { class: "access-builder" });
+    const result = el("div", { class: "access-preview", "aria-live": "polite" });
+    const datalist = el("datalist", { id: "access-row-props" });
+    const policyOf = () => policies.find((p) => p.id === state.policy);
+    const agentInput = el("input", { type: "text", placeholder: "agent IRI, or anonymous", "aria-label": "Preview as agent" });
+    const groupsInput = el("input", { type: "text", placeholder: "groups, separated by commas", "aria-label": "Preview with groups" });
+    const callerFromPolicy = () => {
+      const p = policyOf();
+      if (!p) return;
+      const agent = p.agents.find((a) => a !== ANYONE && a !== SIGNED_IN);
+      agentInput.value = agent || (p.agents.includes(SIGNED_IN) ? "https://example.org/someone" : "");
+      groupsInput.value = p.groups.join(", ");
+    };
+    const change = () => {
+      const p = policyOf();
+      const id = state.existing || state.id;
+      return { shapes: state.existing ? [] : [{ id, turtle: state.turtle }], policy: p ? { ...p, rowRules: RULES().withRule(p.rowRules, { rule: "sg:" + state.kind, shape: id }) } : null };
+    };
+    const preview = async () => {
+      fill(result, el("p", { class: "muted" }, "Counting…"));
+      try {
+        const groups = groupsInput.value.split(",").map((g) => g.trim()).filter(Boolean);
+        const r = await ui.api("POST", `/$/access/datasets/${ds}/preview`, { body: JSON.stringify({ ...change(), agent: agentInput.value.trim() || "anonymous", groups }), type: "application/json" });
+        const changed = r.classes.filter((c) => c.visibleNow !== c.visibleAfter);
+        const example = (iris) => iris && iris.length ? iris.map((i) => el("a", { href: "/$/ui/describe?iri=" + encodeURIComponent(i) + "&dataset=" + ds, title: i, "data-route": true }, short(i))).flatMap((a, i) => (i ? [", ", a] : [a])) : "—";
+        fill(result,
+          el("p", {}, !r.read ? "This caller reads nothing of the dataset." : changed.length ? `${changed.length} class${changed.length > 1 ? "es" : ""} would change for this caller.` : "Nothing this caller sees would change."),
+          r.read ? table(`What ${r.agent || "an anonymous caller"} would see`, ["Class", "Instances", "Visible now", "Visible after", "Hidden after, for example", "Visible after, for example", "Editable of those judged"],
+            r.classes.map((c) => el("tr", { class: c.visibleNow !== c.visibleAfter ? "changed" : "" },
+              el("th", { scope: "row", title: c.class }, short(c.class)),
+              el("td", { class: "access-num" }, ui.fmtNum(c.instances)),
+              el("td", { class: "access-num" }, ui.fmtNum(c.visibleNow)),
+              el("td", { class: "access-num" }, ui.fmtNum(c.visibleAfter)),
+              el("td", {}, example(c.hidden)),
+              el("td", {}, example(c.visible)),
+              el("td", { class: "access-num" }, c.sampled != null ? `${c.sampledEditable} of ${c.sampled}` : "")))) : null);
+      } catch (e) { fill(result, el("p", { class: "error" }, e.message)); }
+    };
+    const save = async () => {
+      const p = policyOf();
+      if (!p) { ui.toast("Choose a policy first."); return; }
+      try {
+        const c = change();
+        for (const shape of c.shapes) {
+          const r = await ui.api("PUT", `/$/access/datasets/${ds}/shapes`, { body: JSON.stringify(shape), type: "application/json" });
+          if (proposed(r)) { ui.toast(PROPOSED + " Save the rule once the shape is approved."); return; }
+        }
+        if (await saveRules(p, c.policy.rowRules)) ui.toast("Row rule saved.", "good");
+        offered = await ui.api("GET", `/$/access/datasets/${ds}/shapes`);
+        Object.assign(state, { conditions: [], properties: [], existing: "", id: "", edited: false });
+        draw();
+      } catch (e) { ui.fail(e); }
+    };
+    const select = (label, value, options, onchange) => {
+      const s = el("select", { "aria-label": label, onchange: (e) => onchange(e.target.value) }, options.map(([v, text]) => {
+        const o = el("option", { value: v }, text);
+        o.selected = v === value;
+        return o;
+      }));
+      return s;
+    };
+    const drawBuilder = () => {
+      regenerate();
+      fill(datalist, props.map((p) => el("option", { value: p.path }, `${short(p.path)} (${p.uses})`)));
+      const kind = RULES().KINDS.find((k) => k.kind === state.kind);
+      const conditionRow = (c, i) => el("div", { class: "access-row" },
+        el("input", { type: "text", list: "access-row-props", value: c.path.join(" / "), placeholder: "property IRI (a / b, with spaces, for a path)", "aria-label": `Condition ${i + 1}: property`,
+          onchange: (e) => { c.path = e.target.value.split(/\s+/).filter((x) => x && x !== "/"); drawBuilder(); } }),
+        select(`Condition ${i + 1}: test`, c.op, RULES().OPS.map((o) => [o.op, o.label]), (v) => { c.op = v; drawBuilder(); }),
+        RULES().OPS.find((o) => o.op === c.op).value ? (c.op === "in"
+          ? el("textarea", { rows: 2, placeholder: "values, one a line", "aria-label": `Condition ${i + 1}: values`, onchange: (e) => { c.value = e.target.value; drawBuilder(); } }, c.value || "")
+          : el("input", { type: "text", value: c.value || "", placeholder: "value (an IRI or text)", "aria-label": `Condition ${i + 1}: value`, onchange: (e) => { c.value = e.target.value; drawBuilder(); } })) : null,
+        el("button", { type: "button", class: "btn small", onclick: () => { state.conditions.splice(i, 1); drawBuilder(); } }, "Remove"));
+      fill(builder,
+        el("div", { class: "access-row" },
+          el("label", {}, "Policy ", select("Policy", state.policy, policies.filter((p) => p.id).map((p) => [p.id, who(p)]), (v) => { state.policy = v; callerFromPolicy(); })),
+          el("label", {}, " Rule ", select("Rule", state.kind, RULES().KINDS.map((k) => [k.kind, k.label]), (v) => { state.kind = v; state.id = ""; drawBuilder(); }))),
+        el("p", { class: "muted small" }, kind.help),
+        offered.shapes.length ? el("div", { class: "access-row" }, el("label", {}, "Shape ", select("Shape", state.existing,
+          [["", "a new shape, built here"], ...offered.shapes.map((x) => [x.id, short(x.id)])], (v) => { state.existing = v; drawBuilder(); }))) : null,
+        state.existing ? el("pre", { class: "access-turtle" }, (shapeOf(state.existing) || {}).turtle || "") : [
+          el("div", { class: "access-row" }, el("label", {}, state.kind === "hideProperties" ? "On resources of " : "Resources of ",
+            select("Class", state.target, [["", state.kind === "hideProperties" ? "every class" : "choose a class"], ...offered.classes.map((c) => [c.class, `${short(c.class)} (${ui.fmtNum(c.instances)})`])],
+              async (v) => { state.target = v; state.id = ""; await loadProps(); drawBuilder(); }))),
+          state.kind === "hideProperties"
+            ? el("div", {}, el("p", { class: "muted small" }, "Properties to hide, one a line:"),
+              el("textarea", { rows: 3, "aria-label": "Properties to hide", placeholder: props.slice(0, 3).map((p) => p.path).join("\n") || "http://example.org/phone",
+                onchange: (e) => { state.properties = e.target.value.split("\n").map((x) => x.trim()).filter(Boolean); drawBuilder(); } }, state.properties.join("\n")))
+            : el("div", {}, el("p", { class: "muted small" }, state.kind === "visibleIf" ? "Shown when every condition holds:" : "Editable when every condition holds:"),
+              state.conditions.map(conditionRow),
+              el("button", { type: "button", class: "btn small", onclick: () => { state.conditions.push({ path: [], op: "agent", value: "" }); drawBuilder(); } }, "Add condition")),
+          el("details", { open: state.edited }, el("summary", {}, "Turtle"),
+            el("p", { class: "muted small" }, "The shape as it will be saved. Editing it here stops the builder from writing it."),
+            el("textarea", { class: "access-turtle", rows: 8, spellcheck: "false", "aria-label": "The shape's Turtle",
+              oninput: (e) => { state.turtle = e.target.value; state.edited = true; } }, state.turtle),
+            state.edited ? el("button", { type: "button", class: "btn small", onclick: () => { state.edited = false; drawBuilder(); } }, "Go back to the builder") : null),
+          state.error ? el("p", { class: "muted small", role: "status" }, state.error) : null,
+        ],
+        el("div", { class: "access-row" }, el("span", {}, "Preview as "), agentInput, groupsInput,
+          el("button", { type: "button", class: "btn", onclick: preview, disabled: !state.existing && !state.turtle }, "Preview")),
+        result,
+        el("div", { class: "access-row" }, el("button", { type: "button", class: "btn primary", onclick: save, disabled: !editable || (!state.existing && !state.turtle) || !state.policy }, "Save rule")));
+    };
+    const draw = () => {
+      fill(box,
+        el("h3", { id: "access-rows-h" }, "Row rules"),
+        el("p", { class: "muted" }, "Rules that hide resources or properties from the callers of a policy, or let them change only some resources. Each rule is a SHACL shape in the policy file, which the Shapes and describe pages read too."),
+        !licence.editable ? el("p", { class: "access-warning", role: "note" }, licence.reason || "Changing row rules needs a TripleTrail Enterprise licence that covers row-policies.") : null,
+        list(),
+        policies.some((p) => p.id) ? el("details", {}, el("summary", {}, "Add a row rule"), datalist, builder) : null);
+      drawBuilder();
+    };
+    callerFromPolicy();
+    draw();
+    return box;
   }
 
   async function render(shared, args) {

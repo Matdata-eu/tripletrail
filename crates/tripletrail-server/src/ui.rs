@@ -33,6 +33,7 @@ const IMPORT_JS: &str = include_str!("../ui/import.js");
 const RECORDS_JS: &str = include_str!("../ui/records.js");
 const RECORDS_EDIT_JS: &str = include_str!("../ui/records-edit.js");
 const FORMS_JS: &str = include_str!("../ui/forms.js");
+const ROW_RULES_JS: &str = include_str!("../ui/row-rules.js");
 /// Release notes for the What's new dialog, newest first.
 pub(crate) const WHATS_NEW: &str = include_str!("../ui/whats-new.json");
 const ICON: &str = include_str!("../ui/icon.svg");
@@ -377,6 +378,7 @@ pub(crate) fn serve(state: &State, request: &Request, path: &[&str]) -> Result<R
         ["records.js"] => Ok(page("text/javascript; charset=utf-8", RECORDS_JS)),
         ["records-edit.js"] => Ok(page("text/javascript; charset=utf-8", RECORDS_EDIT_JS)),
         ["forms.js"] => Ok(page("text/javascript; charset=utf-8", FORMS_JS)),
+        ["row-rules.js"] => Ok(page("text/javascript; charset=utf-8", ROW_RULES_JS)),
         ["describe-map.js"] => Ok(page("text/javascript; charset=utf-8", DESCRIBE_MAP_JS)),
         ["describe.js"] => Ok(page("text/javascript; charset=utf-8", DESCRIBE_JS)),
         ["whats-new.json"] => Ok(page("application/json", WHATS_NEW)),
@@ -459,6 +461,7 @@ mod tests {
             ("records.js", super::RECORDS_JS),
             ("records-edit.js", super::RECORDS_EDIT_JS),
             ("forms.js", super::FORMS_JS),
+            ("row-rules.js", super::ROW_RULES_JS),
             ("whats-new.json", super::WHATS_NEW),
         ] {
             for marker in ["<<<<<<< ", "=======\n", ">>>>>>> "] {

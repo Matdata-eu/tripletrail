@@ -446,6 +446,60 @@ impl Auth {
     /// the configuration, holding a copy of the file's default policies (so nothing changes
     /// for it until the edit), and the configuration names it. When the result does not load,
     /// every file is put back as it was.
+    /// The policy files of a dataset as [`Self::edit_policy`] would edit them for the policy
+    /// or shape `id`: the texts of its files (a dataset without its own gets one, the default
+    /// files together, as its first edit does), and which of them an edit changes. Nothing is
+    /// written (enterprise#8: the shapes and preview of the access pages).
+    pub(crate) fn policy_texts(
+        &self,
+        name: &str,
+        id: &str,
+    ) -> Result<(Vec<(tripletrail::oxigraph::io::RdfFormat, String)>, usize), String> {
+        use tripletrail::oxigraph::io::RdfFormat;
+        let config = self
+            .loaded
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .config
+            .clone();
+        let is_turtle = |f: &PathBuf| f.extension().and_then(|e| e.to_str()) == Some("ttl");
+        let read =
+            |f: &PathBuf| std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()));
+        match config.datasets.get(name).filter(|d| d.policies.is_some()) {
+            Some(d) => {
+                let holds = |f: &PathBuf| {
+                    policy::read(std::slice::from_ref(f))
+                        .is_ok_and(|ps| ps.iter().any(|p| p.id == format!("<{id}>")))
+                };
+                let chosen = d
+                    .files
+                    .iter()
+                    .position(|f| is_turtle(f) && holds(f))
+                    .or_else(|| d.files.iter().position(is_turtle))
+                    .ok_or_else(|| {
+                        format!("The policies of {name} are not in a Turtle (.ttl) file")
+                    })?;
+                let texts = d
+                    .files
+                    .iter()
+                    .map(|f| Ok((policy::format_of(f)?, read(f)?)))
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok((texts, chosen))
+            }
+            None => {
+                if !config.default_files.iter().all(is_turtle) {
+                    return Err("The default policies are not in Turtle (.ttl) files".to_owned());
+                }
+                let mut seed = String::new();
+                for f in &config.default_files {
+                    seed.push_str(&read(f)?);
+                    seed.push('\n');
+                }
+                Ok((vec![(RdfFormat::Turtle, seed)], 0))
+            }
+        }
+    }
+
     pub(crate) fn edit_policy(
         &self,
         name: &str,

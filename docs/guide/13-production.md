@@ -253,7 +253,10 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:7878/rail_v1/query \
 
 - `--limits limits.json` sets, per dataset, how many requests run at once, a queue, timeouts
   and disk and memory quotas, and per caller a request rate. See
-  [operations](../server.md#operations).
+  [operations](../server.md#operations). A write that finds a dataset over its memory
+  quota first drops the indexes its queries built (full-text, spatial, range), which the
+  next query that needs one builds again; only when the data alone is over the quota are
+  writes refused.
 - With a limits file, the **Limits** section of a dataset's dialog on the Datasets page of
   the web UI sets that dataset's limits: requests at once, the queue, timeouts, rows, upload
   size, query memory and the disk and memory quotas, with the dataset's memory and disk use
