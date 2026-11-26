@@ -168,6 +168,56 @@ impl NumericColumn {
         let end = self.values.partition_point(|v| *v <= widen(high, 1.0));
         start..end.max(start)
     }
+
+    /// The positions of the values that hold at least `triples` of the predicate's triples
+    /// (all of them when there are fewer), from the smallest value or from the largest
+    /// (`descending`), and every value equal to the last of them (bounds widened against
+    /// rounding): every triple whose value orders before or with theirs is among them (#297).
+    /// `None` when some of the predicate's objects are not numbers: those order apart.
+    pub(crate) fn first(&self, triples: u64, descending: bool) -> Option<std::ops::Range<usize>> {
+        let numeric = *self.before.last()?;
+        if numeric != self.total || self.values.is_empty() {
+            return None;
+        }
+        let n = self.values.len();
+        Some(if descending {
+            // The last position `i` with at least `triples` from it to the end.
+            let i = self
+                .before
+                .partition_point(|&b| b <= numeric.saturating_sub(triples))
+                .saturating_sub(1)
+                .min(n - 1);
+            let low = widen(self.values[i], -1.0);
+            self.values.partition_point(|v| *v < low)..n
+        } else {
+            // The first position `i` with at least `triples` up to it.
+            let i = self.before[1..]
+                .partition_point(|&b| b < triples)
+                .min(n - 1);
+            let high = widen(self.values[i], 1.0);
+            0..self.values.partition_point(|v| *v <= high)
+        })
+    }
+
+    /// The triples whose objects are the values at `range`.
+    pub(crate) fn triples(&self, range: &std::ops::Range<usize>) -> u64 {
+        self.before[range.end] - self.before[range.start]
+    }
+
+    /// The distinct numbers.
+    pub(crate) fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// The triples of the predicate.
+    pub(crate) fn total(&self) -> u64 {
+        self.total
+    }
+
+    /// The literal at `i`.
+    pub(crate) fn literal(&self, i: usize) -> &Literal {
+        &self.literals[i]
+    }
 }
 
 /// `bound` moved a little outwards: decimals and doubles of the same value can round to
@@ -188,7 +238,11 @@ pub(crate) struct RangeIndexes {
 }
 
 impl RangeIndexes {
-    fn column(&self, engine: &Engine, predicate: &NamedNode) -> Option<Arc<NumericColumn>> {
+    pub(crate) fn column(
+        &self,
+        engine: &Engine,
+        predicate: &NamedNode,
+    ) -> Option<Arc<NumericColumn>> {
         if let Some(c) = self.columns.lock_unpoisoned().get(predicate) {
             return Some(Arc::clone(c));
         }
@@ -645,6 +699,45 @@ mod tests {
         assert!(c.values.is_sorted_by(|a, b| a <= b));
         assert_eq!(c.before.len(), c.values.len() + 1);
         (v, c.total)
+    }
+
+    #[test]
+    fn the_first_values_hold_enough_triples_and_every_equal_value() {
+        let engine = Engine::new_tripletrail();
+        // Values 0..10, value i on i + 1 triples; 5 also written as 5.0.
+        let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
+        for i in 0..10 {
+            for j in 0..=i {
+                ttl += &format!("ex:s{i}_{j} ex:v {i} .\n");
+            }
+        }
+        ttl += "ex:x ex:v 5.0 .\n";
+        engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+        let v = NamedNode::new("http://example.org/v").unwrap();
+        let c = engine.spatial.ranges.column(&engine, &v).unwrap();
+        let values = |r: std::ops::Range<usize>| -> Vec<String> {
+            r.map(|i| c.literal(i).value().to_owned()).collect()
+        };
+        // The largest: 9 alone holds 10 triples, 9 and 8 hold 19.
+        assert_eq!(values(c.first(1, true).unwrap()), ["9"]);
+        assert_eq!(values(c.first(10, true).unwrap()), ["9"]);
+        assert_eq!(values(c.first(11, true).unwrap()), ["8", "9"]);
+        // The smallest: 0, 1 and 2 hold 6; 3 more need 3.
+        assert_eq!(values(c.first(6, false).unwrap()), ["0", "1", "2"]);
+        assert_eq!(values(c.first(7, false).unwrap()), ["0", "1", "2", "3"]);
+        // Down to 5: both of its spellings.
+        let r = c.first(10 + 9 + 8 + 7 + 1, true).unwrap();
+        assert_eq!(c.triples(&r), 10 + 9 + 8 + 7 + 6 + 1);
+        assert_eq!(values(r).len(), 6);
+        // More than there are: all.
+        assert_eq!(c.first(1000, false).unwrap(), 0..c.len());
+        assert_eq!(c.first(1000, true).unwrap(), 0..c.len());
+        // A string among the objects: they don't order as numbers alone.
+        engine
+            .update("PREFIX ex: <http://example.org/> INSERT DATA { ex:y ex:v \"text\" }")
+            .unwrap();
+        let c = engine.spatial.ranges.column(&engine, &v).unwrap();
+        assert!(c.first(1, true).is_none());
     }
 
     #[test]

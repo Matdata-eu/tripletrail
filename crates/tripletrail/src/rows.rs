@@ -51,6 +51,7 @@ pub(crate) fn rewrite(
             snapshot,
             cancelled,
             graph,
+            columns: None,
         },
         done: 0,
     };

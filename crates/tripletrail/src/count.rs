@@ -1092,6 +1092,7 @@ impl Pass<'_> {
                     snapshot: self.snapshot,
                     cancelled: self.cancelled,
                     graph: self.graph,
+                    columns: None,
                 }
                 .eval(p)?;
                 if let Some(v) = &tagged {
@@ -1627,6 +1628,7 @@ impl Pass<'_> {
                     snapshot: self.snapshot,
                     cancelled: self.cancelled,
                     graph: self.graph,
+                    columns: None,
                 }
                 .eval(inner)?;
                 let groups = crate::idtree::group_rows(&t, keys, MAX_GROUPS)?;
@@ -2104,6 +2106,7 @@ impl Pass<'_> {
             snapshot: self.snapshot,
             cancelled: self.cancelled,
             graph: self.graph,
+            columns: None,
         };
         // COUNT(*) without building the rows, where it can; COUNT(?v) too for a `?v` bound
         // in every row.

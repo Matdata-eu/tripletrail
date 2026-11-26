@@ -74,6 +74,13 @@ line references, "between km 100 and 100.2 on any line" takes 1.6 ms instead of 
 "km above 199.9" 0.6 ms instead of 86 ms; with a selective line constant the pattern keeps
 starting from the line (5 ms either way).
 
+The same index answers `ORDER BY ?v LIMIT k` when `?v` is the object of one triple pattern
+with a constant predicate whose objects are all numbers (`?t a ex:Track ; ex:speed ?v ;
+rdfs:label ?l`): the pattern is joined from the best values only, enough of them for a few
+times `k` triples, and from more when too few rows come out; past a share of the predicate's
+triples it is joined whole, as before. This is for the default graph and the ids executor; a
+predicate with more than about four million triples is left alone.
+
 ## Saving and opening datasets
 
 `engine.save(dir)` writes the data to a new dataset directory, and
