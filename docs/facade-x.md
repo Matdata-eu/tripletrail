@@ -440,6 +440,13 @@ hash of each line, kept in memory for the first 14.7 million distinct triples of
 (about 290 MB). Past that, the hashes go to sorted runs on disk, which are merged once the
 query is done. Bounded this way, one query's output can be larger than memory.
 
+The source itself is not bounded: each `SERVICE` call builds the file's Facade-X graph in
+memory before its pattern runs, about 1.8 KB a row for a CSV file of five columns. The
+[Facade-X benchmark](https://github.com/Matdata-eu/tripletrail-bench/tree/main/bench/facadex)
+runs the same CSV, JSON and XML queries with `lift` and with SPARQL Anything 1.3.0, and checks
+that both write the same triples; on a 4-core machine, a CSV file of 3 million rows (90 MB)
+lifts in 61 s with 5.3 GiB, against 97 s with 12.2 GiB.
+
 `-v name=value` (repeatable) fills template parameters of the SPARQL queries (not of RML mappings), as SPARQL Anything's `-v`:
 `?_name` becomes the string `"value"`, `?_name_iri` the IRI `<value>` and `?_name_number`
 the number as written; `?__name` is optional and stays a variable without a value.

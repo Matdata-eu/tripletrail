@@ -1,6 +1,7 @@
 //! The geometry of a node shape's instances as the readers read it (OGC API Features, the map's
-//! tiles, the REST API and search): the first `tts:geometry` way with an `sh:path`, then, for
-//! the instances with no value on it, the first way with `tts:lineBetween` (#148).
+//! tiles, the REST API and search): the `tts:geometry` ways with an `sh:path` in their order,
+//! each for the instances with no value on the ways before it (#259), then, for the instances
+//! with no value on any of them, the first way with `tts:lineBetween` (#148).
 //!
 //! `tts:lineBetween ( A B )` draws a straight line from the geometry at the end of path `A`
 //! to the one at the end of `B`, such as a section of line between its two operational
@@ -26,6 +27,8 @@ const TTS: &str = tripletrail::shapes::TTS;
 const SH: &str = "http://www.w3.org/ns/shacl#";
 const MAKE_LINE: &str = "http://w3id.org/tripletrail/st#ST_MakeLine";
 const WKT: &str = "http://www.opengis.net/ont/geosparql#wktLiteral";
+/// The most instances a later path way is narrowed to ([`Ways::narrowed`]).
+const MAX_LEFT: usize = 1000;
 /// The most instances a window keeps by their lines' boxes; past it the way is read whole.
 const MAX_NEAR: usize = 10_000;
 /// The longest the boxes of a way's lines may take to read.
@@ -36,6 +39,9 @@ const BOXES_TIMEOUT: Duration = Duration::from_secs(60);
 enum Way {
     /// A SPARQL property path to the geometry literal.
     Path(String),
+    /// A later path way for the few instances the ways before it leave without a geometry
+    /// (SPARQL terms), as [`Ways::narrowed`] found them.
+    Few(String, Vec<String>),
     /// The line between the geometries at the end of two property paths, for the instances
     /// `only` names (a `VALUES` clause) when a window narrowed it.
     Line(String, String, Option<String>),
@@ -60,7 +66,10 @@ impl Ways {
             .filter_map(subject)
             .collect();
         nodes.sort_by_key(|w| order(*w));
-        let path = nodes.iter().find_map(|w| {
+        // Every way with a path, in order: each for the instances without a value on the
+        // ways before it (#259, a feature whose geometry comes from linked ones, round after
+        // round).
+        let paths = nodes.iter().filter_map(|w| {
             let p = shapes.object_for_subject_predicate(*w, &iri(SH, "path"))?;
             sparql_path(shapes, p).map(Way::Path)
         });
@@ -75,7 +84,7 @@ impl Ways {
                 _ => None,
             }
         });
-        let ways: Vec<Way> = path.into_iter().chain(line).collect();
+        let ways: Vec<Way> = paths.chain(line).collect();
         (!ways.is_empty()).then_some(Ways(ways))
     }
 
@@ -85,6 +94,65 @@ impl Ways {
             Some(Way::Path(p)) => Some(p),
             _ => None,
         }
+    }
+
+    /// Whether a path way follows the first ([`Ways::narrowed`] has work).
+    pub(crate) fn has_later_paths(&self) -> bool {
+        self.0.iter().skip(1).any(|w| matches!(w, Way::Path(_)))
+    }
+
+    /// These ways with each path way after the first narrowed to the instances of `class`
+    /// that the ways before it leave without a geometry (#259), found once per collection
+    /// (the collections are made again after a write): a way none of them has a value on
+    /// goes, and one for at most [`MAX_LEFT`] of them reads those alone. Without that a tile
+    /// would look for every instance on every later way, to keep those with a geometry on an
+    /// earlier one out (RINF's running tracks, of which a handful take their geometry two links
+    /// away: 34 s for a tile of a filter on their speed). A later way of more instances, or one
+    /// whose instances could not be read in `timeout`, stays as it is.
+    pub(crate) fn narrowed(
+        &self,
+        entry: &Entry,
+        view: &View,
+        class: &str,
+        timeout: Option<Duration>,
+    ) -> Ways {
+        let mut ways: Vec<Way> = Vec::with_capacity(self.0.len());
+        for (i, way) in self.0.iter().enumerate() {
+            let Way::Path(p) = way else {
+                ways.push(way.clone());
+                continue;
+            };
+            if i == 0 {
+                ways.push(way.clone());
+                continue;
+            }
+            let mut query = format!("SELECT DISTINCT ?f WHERE {{ ?f a <{class}> . ?f {p} ?g .");
+            for (j, earlier) in ways.iter().enumerate() {
+                query.push_str(&format!(
+                    " FILTER NOT EXISTS {{ {} }}",
+                    earlier.bind("?f", &format!("?x{j}"), j)
+                ));
+            }
+            query.push_str(&format!(" }} LIMIT {}", MAX_LEFT + 1));
+            let Ok(rows) = crate::ogc::run(entry, &query, timeout, view) else {
+                ways.push(way.clone());
+                continue;
+            };
+            let left: Vec<String> = rows
+                .iter()
+                .filter_map(|r| match r.first() {
+                    Some(Some(Term::NamedNode(n))) => Some(n.to_string()),
+                    _ => None,
+                })
+                .collect();
+            if left.len() > MAX_LEFT || left.len() < rows.len() {
+                // Too many, or blank nodes a VALUES clause cannot name.
+                ways.push(way.clone());
+            } else if !left.is_empty() {
+                ways.push(Way::Few(p.clone(), left));
+            }
+        }
+        Ways(ways)
     }
 
     /// These ways for a read within `window` (WKT in CRS84) by `s`, a variable: the line way
@@ -279,6 +347,11 @@ impl Way {
     fn bind(&self, s: &str, o: &str, i: usize) -> String {
         match self {
             Way::Path(p) => format!("{s} {p} {o} ."),
+            Way::Few(p, only) if s.starts_with('?') => {
+                format!("VALUES {s} {{ {} }} {s} {p} {o} .", only.join(" "))
+            }
+            Way::Few(p, only) if only.iter().any(|t| t == s) => format!("{s} {p} {o} ."),
+            Way::Few(..) => "FILTER(false)".to_owned(),
             Way::Line(a, b, only) => {
                 let (from, to) = (format!("{o}_{i}a"), format!("{o}_{i}b"));
                 let only = only.as_deref().map(|v| format!("{v} ")).unwrap_or_default();
@@ -490,6 +563,57 @@ mod tests {
         assert!(some.pattern("?f", "?w").starts_with("{ ?f <p> ?w . }"));
         // No way left (a window no line meets): no row.
         assert_eq!(Ways(Vec::new()).pattern("?f", "?w"), "{ FILTER(false) }");
+    }
+
+    #[test]
+    fn later_path_ways_are_for_the_instances_without_a_geometry_before() {
+        let shapes: Graph = {
+            let ttl = "@prefix sh: <http://www.w3.org/ns/shacl#> . \
+                @prefix tts: <http://w3id.org/tripletrail/shapes#> . \
+                <s> tts:geometry [ sh:order 1 ; sh:path ( <q> <g> ) ] , [ sh:order 0 ; sh:path <g> ] , \
+                  [ sh:order 2 ; tts:lineBetween ( <a> <b> ) ] .";
+            let mut g = Graph::new();
+            for q in oxigraph::io::RdfParser::from_format(oxigraph::io::RdfFormat::Turtle)
+                .with_base_iri("http://x/")
+                .unwrap()
+                .for_slice(ttl.as_bytes())
+            {
+                g.insert(&oxigraph::model::Triple::from(q.unwrap()));
+            }
+            g
+        };
+        let s = NamedNode::new_unchecked("http://x/s");
+        let ways = Ways::of(&shapes, s.as_ref().into()).unwrap();
+        assert_eq!(
+            ways,
+            Ways(vec![
+                Way::Path("<http://x/g>".into()),
+                Way::Path("<http://x/q>/<http://x/g>".into()),
+                Way::Line("<http://x/a>".into(), "<http://x/b>".into(), None),
+            ])
+        );
+        assert!(ways.has_later_paths());
+        assert_eq!(ways.path(), Some("<http://x/g>"));
+        let text = ways.pattern("?f", "?w");
+        assert!(
+            text.contains("{ ?f <http://x/q>/<http://x/g> ?w . FILTER NOT EXISTS { ?f <http://x/g> ?w_1_0 . } }"),
+            "{text}"
+        );
+        // Narrowed to a few instances, by name; another instance gets nothing from it.
+        let few = Ways(vec![
+            Way::Path("<g>".into()),
+            Way::Few("<q>/<g>".into(), vec!["<x>".into()]),
+        ]);
+        assert!(
+            few.pattern("?f", "?w")
+                .contains("{ VALUES ?f { <x> } ?f <q>/<g> ?w . FILTER NOT EXISTS")
+        );
+        assert!(few.pattern("<x>", "?w").contains("{ <x> <q>/<g> ?w ."));
+        assert!(
+            few.pattern("<y>", "?w")
+                .contains("{ FILTER(false) FILTER NOT EXISTS")
+        );
+        assert!(!few.has_later_paths());
     }
 
     #[test]

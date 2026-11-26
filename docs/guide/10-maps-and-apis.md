@@ -89,7 +89,10 @@ it is ready. The counts of the panel without filters stay until the next write. 
 each dataset at most five minutes (and each query the dataset's
 timeout); what is left then waits for the first visitor. Before the map it sorts the
 dataset's IRIs and strings once, for queries with `MIN`, `MAX` or `ORDER BY` on them (the
-log line `ds: string ranks of N terms`). `--no-warm-up` leaves it all to the first visitor:
+log line `ds: string ranks of N terms`). A load, an update or new shapes make the counts
+out of date, so the server makes the map again once the dataset has kept still for half a
+minute after one, and logs `ds: after a change, map ready: …`; a load of many batches is
+made again once, after its last batch. `--no-warm-up` leaves it all to the first visitor:
 
 <!-- test: run -->
 ```sh
@@ -1809,6 +1812,35 @@ left out: atlas:geometry on node shapes (1)
     tts:key "operational-point" ;
     tts:labelStrip "\\s*\\(from \\d{4}-\\d{2}-\\d{2} until \\d{4}-\\d{2}-\\d{2}\\)$" ;
     tts:minZoom 0 .
+```
+
+A class whose features take their geometry from linked ones (`atlas:geometryFrom`) reads it
+as RINF Atlas derives it, round after round: a hot axle box detector takes its track's
+geometry, or, when the track has none, its track's section's. Each round is a geometry way of
+its own, for the features the ways before it gave none: behind the link, then behind one and
+two more links of the set:
+
+<!-- test: file atlas/hot-axle-box-detector.ttl -->
+```turtle
+PREFIX atlas: <https://rinf-atlas.matdata.eu/ns#>
+PREFIX sh: <http://www.w3.org/ns/shacl#>
+PREFIX era: <http://data.europa.eu/949/>
+
+<https://example.org/atlas/hot-axle-box-detector> a sh:NodeShape ;
+  atlas:key "hot-axle-box-detector" ;
+  sh:targetClass era:HABD ;
+  atlas:geometryFrom [ sh:inversePath era:tracksideHabd ] .
+```
+
+<!-- test: run -->
+```sh
+tripletrail shapes import-atlas atlas --out rail-era > /dev/null 2>&1
+grep -c 'sh:order' rail-era/hot-axle-box-detector.ttl
+```
+
+<!-- test: output -->
+```text
+3
 ```
 
 The class's place in RINF Atlas's list becomes its place in the map's legend (`sh:order`). What
