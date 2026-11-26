@@ -45,7 +45,7 @@ const FAKE: &str = r#"#!/bin/sh
 echo "$@" > "$FAKE_ARGS"
 case "$FAKE_MODE" in
   fail) echo "Error: the schema has no root element" >&2; exit 1 ;;
-  hang) sleep 30 ;;
+  hang) exec sleep 30 ;;
 esac
 file="$2"; out="$4"; ns="$6"
 base=$(basename "$file")
@@ -327,11 +327,8 @@ fn an_uploaded_schema_becomes_the_sources_schema_graphs() {
     let tool = bin.join("xsd2rdf");
     std::fs::write(&tool, FAKE).unwrap();
     std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let path = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    // The stand-in and the system's own programs only: not the real tools, where CI has them.
+    let path = format!("{}:/usr/bin:/bin", bin.display());
     let args_file = dir.join("args.txt");
     let serve = |extra: &[&str]| {
         let port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -361,7 +358,7 @@ fn an_uploaded_schema_becomes_the_sources_schema_graphs() {
             assert!(std::time::Instant::now() < deadline, "not ready");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        (child, base)
+        (Server(child), base)
     };
     let post = |url: &str, body: &str| match ureq::post(url).send_string(body) {
         Ok(r) => (r.status(), r.into_string().unwrap()),
@@ -371,7 +368,7 @@ fn an_uploaded_schema_becomes_the_sources_schema_graphs() {
     let xsd = "<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'/>";
 
     // Off by default.
-    let (mut child, base) = serve(&[]);
+    let (child, base) = serve(&[]);
     let (code, body) = post(&format!("{base}/ds/import?name=stations.xsd"), xsd);
     assert_eq!(code, 201, "{body}");
     let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
@@ -381,10 +378,9 @@ fn an_uploaded_schema_becomes_the_sources_schema_graphs() {
     let (code, body) = post(&format!("{base}/ds/import/{id}/schema"), "");
     assert_eq!(code, 403, "{body}");
     assert!(body.contains("--schema-tools"), "{body}");
-    child.kill().unwrap();
-    child.wait().unwrap();
+    drop(child);
 
-    let (mut child, base) = serve(&["--schema-tools"]);
+    let (child, base) = serve(&["--schema-tools"]);
     let limits: serde_json::Value = serde_json::from_str(
         &ureq::get(&format!("{base}/ds/import"))
             .call()
@@ -468,6 +464,15 @@ fn an_uploaded_schema_becomes_the_sources_schema_graphs() {
     );
     assert_eq!(code, 501, "{body}");
     assert!(body.contains("pip install asn2rdf"), "{body}");
-    child.kill().unwrap();
-    child.wait().unwrap();
+    drop(child);
+}
+
+/// A server stopped when dropped, also when an assertion fails.
+struct Server(std::process::Child);
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
