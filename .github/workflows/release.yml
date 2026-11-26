@@ -215,6 +215,10 @@ jobs:
           - { os: windows-latest, target: x64, manylinux: "" }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
+    env:
+      # RocksDB needs C++17 aligned allocation, which macOS has from 10.14 (maturin's default
+      # target is 10.12). Only read on macOS.
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
