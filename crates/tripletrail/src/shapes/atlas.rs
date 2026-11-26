@@ -5,7 +5,7 @@
 //! | RINF Atlas | TripleTrail |
 //! | --- | --- |
 //! | `atlas:key`, `atlas:color`, `atlas:minZoom`, `atlas:drawOrder`, `atlas:labelPath` | the `tts:` term of the same name |
-//! | `atlas:geometryPath`, `atlas:geometryFrom P` | one `tts:geometry`: its paths, and each geometry path of the set behind `P`, as the branches of an `sh:alternativePath` |
+//! | `atlas:geometryPath`, `atlas:geometryFrom P` | one `tts:geometry`: its paths, and each geometry path of the set behind `P`, as the branches of an `sh:alternativePath`; then, for the features without, a way per later round behind `P` and one more link of the set per round (up to three rounds, #259) |
 //! | `atlas:lineBetween ( A B )` | a second `tts:geometry` with `tts:lineBetween`: each end is every geometry path of the set behind `A` (or `B`), as an `sh:alternativePath` |
 //! | `atlas:enabled false` | `sh:deactivated true` |
 //! | facet `atlas:kind` `terms` or `boolean`, `range`, `text` | `tts:facet` `tts:Facet-Values`, `-Range`, `-Text` |
@@ -69,6 +69,8 @@ fn atlas(local: &str) -> NamedNode {
 /// count). Node shapes get `tts:hiddenFrom` each of `hidden_from`, and so do their property
 /// shapes, so that a subclass's shape for one of those readers does not inherit them either.
 pub fn from_atlas(shapes: &Graph, hidden_from: &[Reader]) -> (Graph, Vec<String>) {
+    let chained = with_chains(shapes);
+    let shapes = &chained;
     let mut out = Graph::new();
     let mut notes: BTreeMap<String, usize> = BTreeMap::new();
     let mut note = |text: String| *notes.entry(text).or_default() += 1;
@@ -152,6 +154,7 @@ pub fn from_atlas(shapes: &Graph, hidden_from: &[Reader]) -> (Graph, Vec<String>
                         }
                     }
                     "geometryPath" | "geometryFrom" | "lineBetween" => {}
+                    local if local.starts_with(CHAIN) => {}
                     // Where the map's legend lists the class.
                     "order" => {
                         let object = integer(copy_term(shapes, &mut out, t.object));
@@ -182,6 +185,21 @@ pub fn from_atlas(shapes: &Graph, hidden_from: &[Reader]) -> (Graph, Vec<String>
                 });
             }
         }
+        // The later rounds, each a way of its own for the features the rounds before gave
+        // none (#259): behind the link and one more link of the set per round.
+        let rounds: Vec<Vec<Way>> = (2..=ROUNDS)
+            .map(|round| {
+                shapes
+                    .objects_for_subject_predicate(node_ref, &chain(round))
+                    .flat_map(|before| {
+                        all_geometries.iter().map(move |g| Way {
+                            before: Some(before.into_owned()),
+                            path: g.clone(),
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
         // RINF Atlas rolls the facets of a section's tracks up to the section (its `ROLLUP`):
         // the tracks' link to their section, as `tts:rollsUpTo` (#248).
         let own_key = match shapes.object_for_subject_predicate(node_ref, &key) {
@@ -207,13 +225,17 @@ pub fn from_atlas(shapes: &Graph, hidden_from: &[Reader]) -> (Graph, Vec<String>
                 out.insert(TripleRef::new(&up, &sh("class"), class));
             }
         }
-        // One path way, as TripleTrail's readers read the first: a path per candidate, as the
-        // branches of an sh:alternativePath when there are several.
-        if let Some(path) = one_path(shapes, &mut out, geometries) {
-            let way = BlankNode::default();
-            out.insert(TripleRef::new(subject, &tts("geometry"), &way));
-            out.insert(TripleRef::new(&way, &sh("path"), &path));
-            out.insert(TripleRef::new(&way, &sh("order"), &Literal::from(0_i64)));
+        // One path way per round, which the readers take in order: a path per candidate, as
+        // the branches of an sh:alternativePath when there are several.
+        let mut order = 0_i64;
+        for ways in std::iter::once(geometries).chain(rounds) {
+            if let Some(path) = one_path(shapes, &mut out, ways) {
+                let way = BlankNode::default();
+                out.insert(TripleRef::new(subject, &tts("geometry"), &way));
+                out.insert(TripleRef::new(&way, &sh("path"), &path));
+                out.insert(TripleRef::new(&way, &sh("order"), &Literal::from(order)));
+                order += 1;
+            }
         }
         // A line between two linked features, for the instances without a geometry of
         // their own: each end is a geometry path of the set behind the link.
@@ -234,7 +256,7 @@ pub fn from_atlas(shapes: &Graph, hidden_from: &[Reader]) -> (Graph, Vec<String>
                     let list = write_list(&mut out, vec![a.clone(), b.clone()]);
                     out.insert(TripleRef::new(subject, &tts("geometry"), &way));
                     out.insert(TripleRef::new(&way, &tts("lineBetween"), &list));
-                    out.insert(TripleRef::new(&way, &sh("order"), &Literal::from(1_i64)));
+                    out.insert(TripleRef::new(&way, &sh("order"), &Literal::from(order)));
                 }
                 _ => note("atlas:lineBetween without two paths".into()),
             }
@@ -614,6 +636,71 @@ fn properties(shapes: &Graph, node: NamedOrBlankNodeRef<'_>) -> Vec<NamedOrBlank
     list.into_iter().map(|(_, _, p)| p).collect()
 }
 
+/// The rounds of links over which a feature reads the geometry of linked ones (#259): a
+/// detector takes its track's, or its track's section's when the track has none. RINF Atlas
+/// derives a geometry over up to six (`derive_geometry`); on RINF two suffice, and each round
+/// is a way of its own that every map tile reads.
+const ROUNDS: usize = 3;
+
+/// The local name of the scratch predicates [`with_chains`] links a node shape to its chains
+/// with, one per round; they never reach the shape set.
+const CHAIN: &str = "_geometryChain";
+
+fn chain(round: usize) -> NamedNode {
+    atlas(&format!("{CHAIN}{round}"))
+}
+
+/// `shapes` with, for each `atlas:geometryFrom P` of a node shape and each later round
+/// (2 to [`ROUNDS`]), the chain of links behind which that round reads the linked features'
+/// geometry: `P`, then one step on any link of the set (an `sh:alternativePath` of them) per
+/// round after the first. Linked to the node shape by [`chain`]`(round)`.
+fn with_chains(shapes: &Graph) -> Graph {
+    let mut out = shapes.clone();
+    let from = atlas("geometryFrom");
+    let alternative = sh("alternativePath");
+    // Every link of the set, an alternative path as its branches, each once.
+    let mut links: Vec<Term> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for t in shapes.triples_for_predicate(&from) {
+        let branches = match as_subject(t.object)
+            .and_then(|p| shapes.object_for_subject_predicate(p, &alternative))
+        {
+            Some(list) => list_items(shapes, list),
+            None => vec![t.object],
+        };
+        for b in branches {
+            let text = render(shapes, b);
+            if !seen.contains(&text) {
+                seen.push(text);
+                links.push(b.into_owned());
+            }
+        }
+    }
+    let any: Term = match links.len() {
+        0 => return out,
+        1 => links[0].clone(),
+        _ => {
+            let node = BlankNode::default();
+            let list = write_list(&mut out, links);
+            out.insert(TripleRef::new(&node, &alternative, &list));
+            node.into()
+        }
+    };
+    let pairs: Vec<(NamedOrBlankNode, Term)> = shapes
+        .triples_for_predicate(&from)
+        .map(|t| (t.subject.into_owned(), t.object.into_owned()))
+        .collect();
+    for (node, link) in pairs {
+        for round in 2..=ROUNDS {
+            let mut items = vec![link.clone()];
+            items.extend((1..round).map(|_| any.clone()));
+            let list = write_list(&mut out, items);
+            out.insert(TripleRef::new(&node, &chain(round), &list));
+        }
+    }
+    out
+}
+
 /// `ways` as one path, written into `out`: an `sh:alternativePath` of the distinct ones when
 /// there are several, `None` when there are none.
 fn one_path(shapes: &Graph, out: &mut Graph, ways: Vec<Way>) -> Option<Term> {
@@ -896,6 +983,66 @@ ex:op a sh:NodeShape ; atlas:key "op" ; sh:targetClass era:OperationalPoint ;
         ));
         // Only the classes RINF Atlas rolls up.
         assert!(!ask(&set, "ex:op tts:rollsUpTo ?u"));
+    }
+
+    #[test]
+    fn geometry_comes_from_features_linked_over_rounds() {
+        let shapes = r##"
+PREFIX atlas: <https://rinf-atlas.matdata.eu/ns#>
+PREFIX sh: <http://www.w3.org/ns/shacl#>
+PREFIX era: <http://data.europa.eu/949/>
+PREFIX gsp: <http://www.opengis.net/ont/geosparql#>
+PREFIX ex: <https://example.org/>
+ex:sol a sh:NodeShape ; atlas:key "section-of-line" ; sh:targetClass era:SectionOfLine ;
+  atlas:geometryPath ( gsp:hasGeometry gsp:asWKT ) .
+ex:rt a sh:NodeShape ; atlas:key "running-track" ; sh:targetClass era:RunningTrack ;
+  atlas:geometryPath ( gsp:hasGeometry gsp:asWKT ) ;
+  atlas:geometryFrom [ sh:alternativePath ( era:isPartOf [ sh:inversePath era:hasPart ] ) ] .
+ex:habd a sh:NodeShape ; atlas:key "habd" ; sh:targetClass era:HABD ;
+  atlas:geometryFrom [ sh:inversePath era:tracksideHabd ] .
+"##;
+        let (set, _) = from_atlas(&parse(shapes), &[]);
+        assert!(
+            super::super::check(&set).is_empty(),
+            "{:?}",
+            super::super::check(&set)
+        );
+        // The detector reads the geometry behind its track; then, for the detectors without,
+        // behind one more link of any kind (its track's section's), then two.
+        let round = |order: i64, steps: &str| {
+            format!(
+                "ex:habd tts:geometry [ sh:order {order} ; sh:path ?p ] . \
+                 ?p rdf:first/sh:inversePath era:tracksideHabd {steps}"
+            )
+        };
+        assert!(
+            ask(&set, &round(0, ". ?p rdf:rest/rdf:first gsp:hasGeometry")),
+            "{set}"
+        );
+        let any = "?any rdf:rest*/rdf:first era:isPartOf . \
+                   ?any rdf:rest*/rdf:first/sh:inversePath era:tracksideHabd";
+        assert!(ask(
+            &set,
+            &format!(
+                "{} ; rdf:rest/rdf:first/sh:alternativePath ?any ; \
+                 rdf:rest/rdf:rest/rdf:first gsp:hasGeometry . {any}",
+                round(1, "")
+            )
+        ));
+        assert!(ask(
+            &set,
+            &format!(
+                "{} ; rdf:rest/rdf:rest/rdf:first/sh:alternativePath ?any ; \
+                 rdf:rest/rdf:rest/rdf:rest/rdf:first gsp:hasGeometry . {any}",
+                round(2, "")
+            )
+        ));
+        assert!(!ask(&set, "ex:habd tts:geometry/sh:order 3"));
+        // No scratch terms in the set.
+        assert!(!ask(
+            &set,
+            "?s ?p ?o FILTER(CONTAINS(STR(?p), \"_geometryChain\"))"
+        ));
     }
 
     #[test]

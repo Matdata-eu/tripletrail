@@ -1273,7 +1273,15 @@ fn make_collections(
     view: &View,
 ) -> Result<Vec<Collection>, HttpError> {
     let shapes = crate::shapes::projected(state, entry, reader, view)?;
-    collections_of(&shapes)
+    let mut collections = collections_of(&shapes)?;
+    // The later geometry ways, for the instances the earlier ones leave without (#259).
+    let timeout = crate::limits::Limits::of(state, &entry.name).timeout(None);
+    for c in &mut collections {
+        if c.geometry.has_later_paths() {
+            c.geometry = c.geometry.narrowed(entry, view, c.class.as_str(), timeout);
+        }
+    }
+    Ok(collections)
 }
 
 /// The collections `reader` would show if `files` were the dataset's own shape set: a preview
