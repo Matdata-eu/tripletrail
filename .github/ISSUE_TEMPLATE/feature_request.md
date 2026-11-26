@@ -2,6 +2,7 @@
 name: Feature request
 about: Something TripleTrail should do that it doesn't yet
 labels: enhancement
+type: Feature
 ---
 
 **What you want to do**
