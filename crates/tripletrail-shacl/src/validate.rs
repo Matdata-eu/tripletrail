@@ -556,6 +556,7 @@ impl<'a> Validator<'a> {
                 let s = shapes.get(ShapeId(i as u32));
                 ShapeCount {
                     shape: s.node.clone(),
+                    iri: s.iri.clone(),
                     property: s.path.is_some(),
                     focus_nodes,
                     value_nodes,
@@ -631,6 +632,7 @@ impl<'a> Validator<'a> {
                 result_path: s.path.as_ref().map(Cow::Borrowed),
                 value,
                 source_shape: &s.node,
+                source_shape_iri: &s.iri,
                 source_constraint_component: component,
                 source_constraint: None,
                 severity: &s.severity,
@@ -723,6 +725,7 @@ impl<'a> Validator<'a> {
                                 result_path: Some(Cow::Owned(Path::Predicate(p))),
                                 value: Some(o),
                                 source_shape: &s.node,
+                                source_shape_iri: &s.iri,
                                 source_constraint_component: component.clone(),
                                 source_constraint: None,
                                 severity: &s.severity,

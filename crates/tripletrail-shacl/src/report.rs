@@ -17,6 +17,9 @@ pub struct ValidationResult<'a> {
     pub value: Option<Term>,
     /// `sh:sourceShape`: the shape the failing constraint belongs to.
     pub source_shape: &'a Term,
+    /// The source shape's IRI, the same in every run even for a blank node shape (see
+    /// [`crate::Shape::iri`]). Not part of the W3C report.
+    pub source_shape_iri: &'a NamedNode,
     /// `sh:sourceConstraintComponent`.
     pub source_constraint_component: Term,
     /// `sh:sourceConstraint`: the `sh:sparql` node of a SPARQL-based constraint.
@@ -82,6 +85,9 @@ impl ValidationResult<'_> {
 #[derive(Debug, Clone)]
 pub struct ShapeCount {
     pub shape: Term,
+    /// The shape's IRI, the same in every run even for a blank node shape (see
+    /// [`crate::Shape::iri`]).
+    pub iri: NamedNode,
     /// Whether it is a property shape (with `sh:path`).
     pub property: bool,
     /// Checks against a focus node: a node reached from two parents counts twice.
@@ -163,7 +169,7 @@ impl ReportWriter {
 
     /// Writes the counts of [`crate::Validator::shape_counts`] on the report:
     /// `ttsh:shapeStatistics` to one IRI node per shape (not a blank node, for pipelines that
-    /// skolemise), with `ttsh:shape`, `ttsh:focusNodes`, `ttsh:valueNodes`,
+    /// skolemise), with `ttsh:shape`, `ttsh:shapeIri`, `ttsh:focusNodes`, `ttsh:valueNodes`,
     /// `ttsh:distinctFocusNodes` and `ttsh:failingFocusNodes`.
     pub fn statistics(&mut self, counts: &[ShapeCount], sink: &mut dyn FnMut(Triple)) {
         use crate::vocab::ttsh;
@@ -179,6 +185,7 @@ impl ReportWriter {
                 node.clone(),
             ));
             sink(Triple::new(node.clone(), ttsh::SHAPE, c.shape.clone()));
+            sink(Triple::new(node.clone(), ttsh::SHAPE_IRI, c.iri.clone()));
             sink(Triple::new(
                 node.clone(),
                 ttsh::FOCUS_NODES,

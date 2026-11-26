@@ -223,6 +223,7 @@ class RemoteValidationReport:
         self.shape_counts = [
             {
                 "shape": _term(c["shape"]),
+                "shape_iri": c.get("shapeIri"),
                 "property": c.get("property"),
                 "focus_nodes": c.get("focusNodes"),
                 "value_nodes": c.get("valueNodes"),
