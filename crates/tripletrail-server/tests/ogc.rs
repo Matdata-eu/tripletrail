@@ -3286,6 +3286,23 @@ fn map_labels_follow_the_language_and_the_label_strip() {
             ("LUX", "Luxembourg")
         ])
     );
+    // The labels kept for the data version follow a write (and a language asked again).
+    assert_eq!(
+        countries("?lang=nl", None)[1],
+        ("DEU".to_owned(), "Germany".to_owned())
+    );
+    ureq::post(&format!("{base}/kg/update"))
+        .set("Authorization", "Bearer t")
+        .set("Content-Type", "application/sparql-update")
+        .send_string(
+            "INSERT DATA { <http://example.com/DEU> \
+             <http://www.w3.org/2004/02/skos/core#prefLabel> \"Duitsland\"@nl }",
+        )
+        .unwrap();
+    assert_eq!(
+        countries("?lang=nl", None)[1],
+        ("DEU".to_owned(), "Duitsland".to_owned())
+    );
     // The same labels when several collections are asked at once.
     let both = get(&format!("{base}/kg/tiles/facets?collection=station")).2;
     assert!(both.to_string().contains("\"Germany\""), "{both}");

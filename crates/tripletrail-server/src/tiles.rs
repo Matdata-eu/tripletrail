@@ -438,6 +438,7 @@ pub(crate) fn route(
             chosen.first().and_then(|c| c.label_strip.as_ref()),
             deadline.map(|d| d.saturating_duration_since(std::time::Instant::now())),
             view,
+            version,
         )?;
         let counts = combine_facets(each);
         let mut reply = Reply::bytes(200, "application/json", counts.to_string().into_bytes());
@@ -468,6 +469,7 @@ pub(crate) fn route(
             collection.label_strip.as_ref(),
             timeout,
             view,
+            version,
         )?;
         let mut reply = Reply::bytes(200, "application/json", counts.to_string().into_bytes());
         reply.headers.push(("Cache-Control", "no-cache".to_owned()));
@@ -575,6 +577,16 @@ const LABELS: &str =
     "<http://www.w3.org/2000/01/rdf-schema#label>|<http://www.w3.org/2004/02/skos/core#prefLabel>";
 /// IRIs one query for facet values' labels names at most.
 const LABEL_BATCH: usize = 500;
+/// Data versions, callers and languages whose facet value labels are kept, at most.
+const LABELLED_KEPT: usize = 256;
+/// Facet values whose labels are kept for one of them, at most.
+const LABELLED_IRIS: usize = 100_000;
+/// Dataset, grants' fingerprint, data version and language.
+type LabelledKey = (u64, Option<u64>, crate::ogc::DataVersion, String);
+/// The labels of facet values found for a data version and language (#260): `None` for a
+/// value without one.
+type Labelled = HashMap<LabelledKey, HashMap<String, Option<String>>>;
+static LABELLED: LazyLock<Mutex<Labelled>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// How well a label in `lang` suits a reader of `wanted` (lower is better, #260): the
 /// reader's language, then its primary language (`en` for `en-GB`, either way round), then
@@ -601,6 +613,7 @@ fn label_values(
     strip: Option<&regex::Regex>,
     timeout: Option<Duration>,
     view: &View,
+    version: Option<crate::ogc::DataVersion>,
 ) -> Result<(), HttpError> {
     let mut iris: Vec<String> = answers
         .iter()
@@ -614,6 +627,24 @@ fn label_values(
         .collect();
     iris.sort_unstable();
     iris.dedup();
+    // The labels found before for this data version (whose shapes give `strip`) and
+    // language: looking them up again took longer than the counts kept for it.
+    let key = version.map(|v| (entry.id, view.fingerprint(), v, lang.to_owned()));
+    let mut labels: HashMap<String, String> = HashMap::new();
+    if let Some(key) = &key {
+        let kept = LABELLED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(known) = kept.get(key) {
+            iris.retain(|i| match known.get(i) {
+                Some(label) => {
+                    if let Some(label) = label {
+                        labels.insert(i.clone(), label.clone());
+                    }
+                    false
+                }
+                None => true,
+            });
+        }
+    }
     let mut best: HashMap<String, (u8, String)> = HashMap::new();
     for batch in iris.chunks(LABEL_BATCH) {
         let values: Vec<String> = batch.iter().map(|i| format!("<{i}>")).collect();
@@ -641,6 +672,28 @@ fn label_values(
             }
         }
     }
+    for (iri, (_, label)) in best {
+        labels.insert(iri, crate::ogc::stripped(&label, strip));
+    }
+    if let Some(key) = key
+        && !iris.is_empty()
+    {
+        let mut kept = LABELLED.lock().unwrap_or_else(|e| e.into_inner());
+        // The dataset's older data versions are labelled no more.
+        kept.retain(|k, _| k.0 != key.0 || k.2 == key.2);
+        if kept.len() >= LABELLED_KEPT {
+            kept.clear();
+        }
+        let known = kept.entry(key).or_default();
+        if known.len() + iris.len() > LABELLED_IRIS {
+            known.clear();
+        }
+        // Those without a label too, so that they are not looked up again.
+        for iri in iris {
+            let label = labels.get(&iri).cloned();
+            known.insert(iri, label);
+        }
+    }
     for answer in answers {
         // `get_mut`, not indexing, which would add the keys an answer has not.
         let Some(facets) = answer.get_mut("facets").and_then(|f| f.as_array_mut()) else {
@@ -651,8 +704,8 @@ fn label_values(
             .filter_map(|f| f.get_mut("values").and_then(|v| v.as_array_mut()))
             .flatten()
         {
-            if let Some((_, label)) = value["value"].as_str().and_then(|v| best.get(v)) {
-                value["label"] = crate::ogc::stripped(label, strip).into();
+            if let Some(label) = value["value"].as_str().and_then(|v| labels.get(v)) {
+                value["label"] = label.clone().into();
             }
         }
     }

@@ -442,7 +442,9 @@ percent-encoded, so a customised set can override it by IRI) with:
   for APIs), `tts:labelPath`, `tts:labelStrip` (never generated: a regular expression, Rust
   `regex` syntax, whose matches the map takes out of every label it shows: facet values,
   search results and the features it lists; the patterns of all the sets apply, and the
-  style's `metadata` gives them to the Map page as `tripletrail:labelStrip`), `tts:searchable`, `tts:iriTemplate` (never generated: the IRI of a new
+  style's `metadata` gives them to the Map page as `tripletrail:labelStrip`; the page reads
+  them as a JavaScript `RegExp`, so keep to what both read the same, as inline flags such as
+  `(?i)` or `\z` are not: then the page strips nothing while the server does), `tts:searchable`, `tts:iriTemplate` (never generated: the IRI of a new
   record, see [writes](#rest-api-json-ld)), `tts:geometry` (each path to a geometry with
   its types), map `tts:color` and `tts:minZoom`, `tts:facet` (`tts:Facet-Values` for a code
   list, `tts:Facet-Range` for numbers and dates, `tts:Facet-Text` for other strings), `tts:time` (never generated: the OGC API's
