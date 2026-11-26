@@ -8,7 +8,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -82,8 +83,15 @@ async function ask(base, query) {
 const file = (name, text, mimeType = "text/plain") => ({ name, mimeType, buffer: Buffer.from(text) });
 
 test("files go from the drop to a named graph, and the lift into a workspace", async (t) => {
-  const { child, address: base } = await start([]);
-  t.after(() => child.kill());
+  // A folder of its own for the workspace, removed after: a killed server leaves its
+  // temporary one behind.
+  const workspaces = mkdtempSync(join(tmpdir(), "ui-add-data-"));
+  const { child, address: base } = await start(["--workspace-dir", workspaces]);
+  t.after(async () => {
+    child.kill();
+    await new Promise((r) => (child.exitCode === null ? child.on("exit", r) : r()));
+    rmSync(workspaces, { recursive: true, force: true });
+  });
   const page = await open(t, base);
   await page.goto(base + "/$/ui/datasets/ds");
   await page.locator("#ds-upload").waitFor();
