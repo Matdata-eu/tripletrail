@@ -54,6 +54,8 @@ const MAX_EAGER_GROUPS: usize = 1 << 18;
 /// From this many groups on, grouped results are read back from an id table (see
 /// `Pass::grouped_counts`); fewer go into a `VALUES`, cheaper for the evaluator.
 const READ_BACK_GROUPS: usize = 1024;
+/// Rows of one group past which its `SUM` or `AVG` is summed on several cores (#10).
+const SUM_PARALLEL: usize = 1 << 14;
 
 /// The value of one aggregate of one group.
 enum Value {
@@ -1707,21 +1709,41 @@ impl Pass<'_> {
                     (Agg::NotNumbers, Some(_)) => Value::Id(TermId(0)),
                     (Agg::Sum(_, distinct) | Agg::Avg(_, distinct), Some(t)) => {
                         let kernel = kernels[i].as_ref()?;
-                        let mut sum = crate::idvalue::Sum::default();
-                        // With DISTINCT, each value once, as the evaluator's terms: equal
-                        // numbers of two datatypes are two values.
-                        let mut seen = std::collections::HashSet::new();
-                        let mut added = 0;
-                        for &r in rows {
-                            // An error (unbound) makes the evaluator's sum an error: leave
-                            // it to the evaluator.
-                            let v = kernel(t.row(r as usize))?.ok()?;
-                            if *distinct && !seen.insert(crate::idvalue::distinct_key(v)?) {
-                                continue;
+                        // One group of many rows (an aggregate without `GROUP BY`) on several
+                        // cores (#10), each part summed alone, the parts added up.
+                        let one_group = order.len() == 1;
+                        let (sum, added) = if !*distinct && one_group && rows.len() >= SUM_PARALLEL
+                        {
+                            let parts = tripletrail_store::par::chunks(rows.len(), |range| {
+                                let mut sum = crate::idvalue::Sum::default();
+                                for &r in &rows[range] {
+                                    sum.add(kernel(t.row(r as usize))?.ok()?)?;
+                                }
+                                Some(sum)
+                            });
+                            let mut sum = crate::idvalue::Sum::default();
+                            for part in parts {
+                                sum.merge(&part?)?;
                             }
-                            sum.add(v)?;
-                            added += 1;
-                        }
+                            (sum, rows.len())
+                        } else {
+                            let mut sum = crate::idvalue::Sum::default();
+                            // With DISTINCT, each value once, as the evaluator's terms: equal
+                            // numbers of two datatypes are two values.
+                            let mut seen = std::collections::HashSet::new();
+                            let mut added = 0;
+                            for &r in rows {
+                                // An error (unbound) makes the evaluator's sum an error: leave
+                                // it to the evaluator.
+                                let v = kernel(t.row(r as usize))?.ok()?;
+                                if *distinct && !seen.insert(crate::idvalue::distinct_key(v)?) {
+                                    continue;
+                                }
+                                sum.add(v)?;
+                                added += 1;
+                            }
+                            (sum, added)
+                        };
                         let value = match a {
                             Agg::Avg(..) => sum.average(added)?,
                             _ => sum.literal()?,

@@ -75,6 +75,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Changed
 
+- The id executor sums `SUM` and `AVG` (without `DISTINCT`) of one group of more than 16,384 rows, such as an aggregate without `GROUP BY`, in parts on several cores (#10): Sparqloscope's `date-day` on bsbm-2785 (93,000 dates) 7.6 → 4.1 ms on 4 cores, same answers.
 - `serve` builds each dataset's string ranks (the order of its IRIs and strings) as it opens, before the map warm-up, for dictionaries of up to 16 million terms, and a query no longer waits for a build another query started (#10). After #237 the first string `MIN` or `MAX` paid for the build the query before it had skipped (Sparqloscope `group-by-implicit-string-min` 2 to 16 ms on bsbm, 21 to 82 ms on rinf-0076); now both are as before and `group-by-complex-aggregate` takes 9 instead of 60 ms on bsbm, 15 instead of 119 ms on rinf, on the first run. `--no-warm-up` leaves the ranks to the first query again.
 - The id executor answers `SUM` and `AVG` of a condition without the evaluator, and `MIN`
   and `MAX` of strings no longer wait for the dictionary's string ranks: they are built in
