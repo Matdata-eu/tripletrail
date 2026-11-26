@@ -161,6 +161,133 @@ pub fn add_quality(all: &Graph, uppers: &[&Graph]) -> Graph {
     out
 }
 
+/// `all` with the facets of parts rolled up to their parent (#248): a node shape with
+/// `tts:rollsUpTo [ sh:path P ; sh:class C ]` gives each node shape that targets `C` its
+/// facets (`tts:facet`, read through a path) that the parent lacks by key, read through the
+/// inverse of `P`, for the map only. A parent then matches a filter on such a facet when one
+/// of its parts matches, counts once per value of its parts, and is coloured by the highest of
+/// its parts' numbers, as RINF Atlas rolls a section of line up from its running tracks. A
+/// facet computed by `tts:select`, or hidden from the map, stays with the part.
+pub fn add_rollups(all: &Graph) -> Graph {
+    let rolls = tts("rollsUpTo");
+    let ups: Vec<(NamedOrBlankNode, NamedOrBlankNode)> = all
+        .triples_for_predicate(&rolls)
+        .filter_map(|t| Some((t.subject.into_owned(), subject_of(t.object)?.into_owned())))
+        .collect();
+    if ups.is_empty() {
+        return all.clone();
+    }
+    let (property, path, class, target, key) = (
+        sh("property"),
+        sh("path"),
+        sh("class"),
+        sh("targetClass"),
+        tts("key"),
+    );
+    let map = Reader::Map.iri();
+    let (hidden, only, facet, select) = (
+        tts("hiddenFrom"),
+        tts("onlyFor"),
+        tts("facet"),
+        tts("select"),
+    );
+    // A property shape's key, as the readers take it: `tts:key`, else its path's local name.
+    let key_of = |p: NamedOrBlankNodeRef<'_>| -> Option<String> {
+        match all.object_for_subject_predicate(p, &key) {
+            Some(TermRef::Literal(l)) => Some(l.value().to_owned()),
+            _ => match all.object_for_subject_predicate(p, &path)? {
+                TermRef::NamedNode(n) => Some(super::local_name(n.as_str()).to_owned()),
+                _ => None,
+            },
+        }
+    };
+    let for_map = |p: NamedOrBlankNodeRef<'_>| {
+        !all.objects_for_subject_predicate(p, &hidden)
+            .any(|r| r == map.as_ref().into())
+            && all
+                .objects_for_subject_predicate(p, &only)
+                .all(|r| r == map.as_ref().into())
+    };
+    let mut out = all.clone();
+    for (part, up) in ups {
+        let (Some(up_path), Some(TermRef::NamedNode(parent))) = (
+            all.object_for_subject_predicate(&up, &path),
+            all.object_for_subject_predicate(&up, &class),
+        ) else {
+            continue;
+        };
+        let parents: Vec<NamedOrBlankNode> = all
+            .subjects_for_predicate_object(&target, parent)
+            .map(NamedOrBlankNodeRef::into_owned)
+            .filter(|n| *n != part)
+            .collect();
+        let mut facets: Vec<(String, NamedOrBlankNodeRef<'_>)> = all
+            .objects_for_subject_predicate(&part, &property)
+            .filter_map(subject_of)
+            .filter(|p| {
+                all.object_for_subject_predicate(*p, &facet).is_some()
+                    && all.object_for_subject_predicate(*p, &select).is_none()
+                    && all.object_for_subject_predicate(*p, &path).is_some()
+                    && for_map(*p)
+            })
+            .filter_map(|p| Some((key_of(p)?, p)))
+            .collect();
+        facets.sort_by(|a, b| a.0.cmp(&b.0));
+        for node in parents {
+            let mut has: HashSet<String> = out
+                .objects_for_subject_predicate(&node, &property)
+                .filter_map(subject_of)
+                .filter_map(|p| match out.object_for_subject_predicate(p, &key) {
+                    Some(TermRef::Literal(l)) => Some(l.value().to_owned()),
+                    _ => match out.object_for_subject_predicate(p, &path)? {
+                        TermRef::NamedNode(n) => Some(super::local_name(n.as_str()).to_owned()),
+                        _ => None,
+                    },
+                })
+                .collect();
+            for (k, p) in &facets {
+                if !has.insert(k.clone()) {
+                    continue;
+                }
+                let Some(part_path) = all.object_for_subject_predicate(*p, &path) else {
+                    continue;
+                };
+                let rolled = oxigraph::model::BlankNode::default();
+                out.insert(TripleRef::new(&node, &property, &rolled));
+                // ( [ sh:inversePath P ] part_path ): from the parent to its parts' values.
+                let inverse = oxigraph::model::BlankNode::default();
+                out.insert(TripleRef::new(&inverse, &sh("inversePath"), up_path));
+                let (first, second) = (
+                    oxigraph::model::BlankNode::default(),
+                    oxigraph::model::BlankNode::default(),
+                );
+                out.insert(TripleRef::new(&first, rdf::FIRST, &inverse));
+                out.insert(TripleRef::new(&first, rdf::REST, &second));
+                out.insert(TripleRef::new(&second, rdf::FIRST, part_path));
+                out.insert(TripleRef::new(&second, rdf::REST, rdf::NIL));
+                out.insert(TripleRef::new(&rolled, &path, &first));
+                let text = oxigraph::model::Literal::new_simple_literal;
+                out.insert(TripleRef::new(&rolled, &key, &text(k.as_str())));
+                out.insert(TripleRef::new(&rolled, &tts("onlyFor"), &map));
+                out.insert(TripleRef::new(&rolled, &tts("rolledUpFrom"), &part));
+                for copied in [
+                    facet.clone(),
+                    sh("name"),
+                    sh("datatype"),
+                    sh("order"),
+                    tts("colorClasses"),
+                    NamedNode::new_unchecked("http://qudt.org/schema/qudt/hasUnit"),
+                ] {
+                    if let Some(v) = all.object_for_subject_predicate(*p, &copied) {
+                        out.insert(TripleRef::new(&rolled, &copied, v));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// How a node shape of a lower set is met by an upper set (see [`overlay`]).
 struct Meeting {
     /// The lower node shape.
@@ -597,6 +724,7 @@ pub fn check(graph: &Graph) -> Vec<String> {
     let readers: HashSet<String> = Reader::ALL.iter().map(|r| r.iri().into_string()).collect();
     let select = tts("select");
     let hides = tts("hidesGenerated");
+    let rolls = tts("rollsUpTo");
     let (hidden, only, colour, zoom, target, path) = (
         tts("hiddenFrom"),
         tts("onlyFor"),
@@ -678,6 +806,22 @@ pub fn check(graph: &Graph) -> Vec<String> {
                     Some(node) => format!("{}: the facet{key}'s tts:select {problem}", name(node)),
                     None => format!("{}: tts:select {problem}", name(t.subject)),
                 });
+            }
+        }
+        if t.predicate == rolls.as_ref() {
+            let ok = subject_of(t.object).is_some_and(|up| {
+                graph.objects_for_subject_predicate(up, &path).count() == 1
+                    && matches!(
+                        graph.object_for_subject_predicate(up, &sh("class")),
+                        Some(TermRef::NamedNode(_))
+                    )
+            });
+            if !ok {
+                errors.push(format!(
+                    "{}: tts:rollsUpTo {} is not a node with one sh:path and an sh:class IRI",
+                    name(t.subject),
+                    short(t.object)
+                ));
             }
         }
         if t.predicate == target.as_ref() && !matches!(t.object, TermRef::NamedNode(_)) {

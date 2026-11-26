@@ -72,6 +72,17 @@ tts:qualityReport a rdf:Property ;
     rdfs:comment "The named graph holding a stored SHACL validation report of the data: each node shape gets a data-quality facet (key \"quality\") on the map, the worst severity of the report's results about the feature."@en ;
     rdfs:domain tts:ShapeSet .
 
+tts:rollsUpTo a rdf:Property ;
+    rdfs:label "rolls up to"@en ;
+    rdfs:comment "On a node shape of parts (such as running tracks): a node with sh:path, the path from a part to its parent, and sh:class, the parent's class. The map gives each node shape of that class the parts' facets it lacks, read through the inverse of the path: a parent matches a filter on one when one of its parts does, counts once per value of its parts, and is coloured by the highest of its parts' numbers."@en ;
+    rdfs:domain sh:NodeShape .
+
+tts:rolledUpFrom a rdf:Property ;
+    rdfs:label "rolled up from"@en ;
+    rdfs:comment "On a facet the map added to a parent's node shape from tts:rollsUpTo: the node shape of the parts it was taken from."@en ;
+    rdfs:domain sh:PropertyShape ;
+    rdfs:range sh:NodeShape .
+
 tts:refines a rdf:Property ;
     rdfs:label "refines"@en ;
     rdfs:comment "true on a node shape of a higher layer: it changes the node shape of the same IRI below instead of replacing it. The settings it gives replace those below, its property shapes replace those below with the same path, and the rest of the shape below stays."@en ;

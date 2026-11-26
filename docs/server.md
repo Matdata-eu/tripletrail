@@ -467,7 +467,14 @@ worst `sh:resultSeverity` of the report's results whose `sh:focusNode` is the fe
 out when a pack or the dataset's own set names the reader with `tts:hidesGenerated` (on a
 `tts:ShapeSet` node of its own, such as `<urn:my:set> a tts:ShapeSet ; tts:hidesGenerated
 tts:Reader-Map`: the map shows only the set's classes; a generated shape the set overrides or
-refines stays) (#92), and, for all readers but
+refines stays) (#92), the facets of parts rolled up to their parent for the map (a node shape
+with `tts:rollsUpTo [ sh:path P ; sh:class C ]` gives each node shape that targets `C` its
+facets that the parent has no facet of that key for, read through `( [ sh:inversePath P ]
+path )`, `tts:onlyFor tts:Reader-Map`, with `tts:rolledUpFrom` naming the part's shape: a
+parent matches a filter when one of its parts does, counts once per value of its parts, and is
+coloured by its parts' highest number; `tts:select` facets and those hidden from the map stay
+with the part; `import-atlas` writes it for RINF Atlas's running tracks and tracks to the
+section of line) (#248), and, for all readers but
 validation, the property shapes of the superclasses' node shapes added to each node shape that
 has none for that path (or key). A superclass's node shape hidden from the reader still lends its
 property shapes: an abstract `ex:AssetShape` `tts:hiddenFrom tts:Reader-Map` gives no asset
