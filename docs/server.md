@@ -141,7 +141,8 @@ are ignored.
 
 With one dataset, the paths work without `/{ds}` too. Under `/{ds}` there are also
 [OGC API Features](#ogc-api--features) (`/{ds}/ogc`), [vector tiles](#vector-tiles), a [REST API](#rest-api-json-ld) (`/{ds}/api`), [GraphQL](#graphql) (`/{ds}/graphql`),
-[describe pages](#describe-pages) (`/{ds}/describe`) and the [RDF4J REST API](#rdf4j-rest-api).
+[describe pages](#describe-pages) (`/{ds}/describe`), the [RDF4J REST API](#rdf4j-rest-api), and
+with `--mcp` an [MCP endpoint](#mcp) for AI agents (`/{ds}/mcp`).
 
 ### Main options
 
@@ -3586,6 +3587,40 @@ generated shapes unless the dataset has its own). It only reads: write with the 
   `playground`.
 - Queries run under the caller's access like SPARQL queries, with the dataset's query timeout
   (`timeout=` too). The schema is kept until the data, the shapes or the caller's view change.
+
+## MCP
+
+`tripletrail serve --mcp` (`TRIPLETRAIL_MCP`) serves each dataset to AI agents and assistants
+over the [Model Context Protocol](https://modelcontextprotocol.io) at `/{ds}/mcp` (and `/mcp`
+with one dataset). It is off by default: without `--mcp` the path is a 404.
+
+- **Transport.** Streamable HTTP without streams: each JSON-RPC 2.0 message is a `POST`
+  answered with one `application/json` answer; a notification gets 202 and no body. `GET` is a
+  405. Protocol versions `2025-06-18`, `2025-03-26` and `2024-11-05`; the server answers the
+  client's version when it knows it, else the newest. Methods: `initialize`, `ping`,
+  `tools/list`, `tools/call`. No sessions, resources or prompts.
+- **Tools**, all read-only:
+  - `sparql_query` (`query`, `max_rows`): a SELECT, ASK, CONSTRUCT or DESCRIBE query; SPARQL
+    JSON results, or Turtle for CONSTRUCT and DESCRIBE. An update is refused.
+  - `describe` (`iri`): the triples about one resource, as Turtle.
+  - `search` (`text`, `limit`, 20 by default): [full-text search](full-text-search.md) (`tt:search`) as SPARQL
+    JSON results, with `resource`, the matched `literal` and its `score`.
+  - `list_shapes`: the dataset's node shapes as JSON (`iri`, `label`, `targetClass`, `paths`),
+    as the `describe` reader reads them: its own shapes and packs, or the generated ones.
+  - `shape` (`iri`): one node shape with its property shapes, as Turtle.
+  - `list_datasets`: the datasets the caller may read, with their MCP and SPARQL endpoints.
+- **Access.** A request needs what a query of the dataset needs (an API key, a token, a
+  session; 401 or 403 otherwise), and the tools read only the caller's graphs and rows. Each
+  call has the dataset's query timeout. An answer holds at most 1,000 rows (and `--max-rows`
+  when lower), and ends with a note when there were more. A tool's failure (a syntax error, a
+  timeout) is a result with `isError`, which the agent sees; a wrong method or tool is a
+  JSON-RPC error.
+- **Records.** The query a tool runs (the query of `sparql_query`, and the `DESCRIBE` or
+  `tt:search` query that `describe` and `search` make) is recorded as a query to
+  `/{ds}/sparql` is: operation `query`, with its text in the slow-query log
+  (`--slow-query-ms`) and its hash in the request log, audit records and traces.
+- **Browsers.** A request with an `Origin` header (a web page) is refused with 403 unless
+  `--cors` allows that origin, against DNS rebinding. MCP clients send none.
 
 ## RDF4J REST API
 

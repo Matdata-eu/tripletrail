@@ -1110,6 +1110,11 @@ struct ServeArgs {
     /// Do not serve the web UI at /$/ui/.
     #[arg(long, env = "TRIPLETRAIL_NO_UI")]
     no_ui: bool,
+    /// Serve a Model Context Protocol endpoint at /{dataset}/mcp, for AI agents: read-only
+    /// tools (SPARQL, describe, search, shapes) under the same access rules and limits as
+    /// queries.
+    #[arg(long, env = "TRIPLETRAIL_MCP")]
+    mcp: bool,
     /// Load MatGUI from this URL (a directory holding yasgui.min.js and yasgui.min.css, e.g.
     /// https://cdn.jsdelivr.net/npm/@matdata/yasgui@6.15.0/build/) instead of the copy built
     /// into the binary.
@@ -2141,6 +2146,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         follow_wait,
         functions,
         no_ui,
+        mcp,
         matgui_url,
         map_tiles,
         map_attribution,
@@ -2458,6 +2464,7 @@ fn serve(args: ServeArgs) -> Result<()> {
             indexed: indexed.clone(),
             text_properties: text_by_dataset.clone(),
             ui: !no_ui,
+            mcp,
             matgui_url,
             map_attribution: map_attribution
                 .or_else(|| (map_tiles == OSM_TILES).then(|| OSM_ATTRIBUTION.to_owned())),

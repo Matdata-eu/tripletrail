@@ -48,6 +48,7 @@ pub mod lift;
 mod lift_out;
 mod limits;
 mod linked_data;
+mod mcp;
 mod metrics;
 mod ogc;
 #[cfg(feature = "otel")]
@@ -209,6 +210,8 @@ pub struct Options {
     pub text_properties: Vec<(String, tripletrail::oxigraph::model::NamedNode)>,
     /// Serve the web UI at `/$/ui/` (and redirect `/` to it).
     pub ui: bool,
+    /// Serve a Model Context Protocol endpoint at `/{ds}/mcp` (#153), for AI agents.
+    pub mcp: bool,
     /// Load MatGUI from this URL prefix (e.g. a CDN) instead of the copy built into the
     /// binary; the prefix must hold `yasgui.min.js` and `yasgui.min.css`.
     pub matgui_url: Option<String>,
@@ -351,6 +354,7 @@ impl Default for Options {
             indexed: IndexedPredicates::default(),
             text_properties: Vec::new(),
             ui: true,
+            mcp: false,
             matgui_url: None,
             map_tiles: None,
             map_attribution: None,
@@ -2011,9 +2015,9 @@ fn route(
             return rdf4j::route(state, request, rest, &mut params, context);
         }
     }
-    const SERVICES: [&str; 11] = [
+    const SERVICES: [&str; 12] = [
         "sparql", "query", "update", "data", "get", "explain", "void", "describe", "graphql",
-        "shacl", "patch",
+        "shacl", "patch", "mcp",
     ];
     let (entry, service) = {
         let registry = state.registry.read_unpoisoned();
@@ -2120,7 +2124,7 @@ fn route(
     // A caller that may read only some graphs gets the services that keep to them.
     let partial_ok = matches!(
         service,
-        "query" | "sparql" | "update" | "patch" | "data" | "explain" | "graphql"
+        "query" | "sparql" | "update" | "patch" | "data" | "explain" | "graphql" | "mcp"
     )
         || (service == "void" && matches!(method, Method::Get | Method::Head))
         || (matches!(
@@ -2133,7 +2137,7 @@ fn route(
     // (#202).
     let rows_ok = matches!(
         service,
-        "query" | "sparql" | "explain" | "update" | "patch" | "graphql"
+        "query" | "sparql" | "explain" | "update" | "patch" | "graphql" | "mcp"
     ) || service == "data"
         || (matches!(
             service,
@@ -2297,6 +2301,59 @@ fn route(
                 &view,
                 &accept,
             );
+        }
+        "mcp" => {
+            if !state.options.mcp {
+                return Err(HttpError(
+                    404,
+                    "No MCP endpoint: start the server with --mcp".to_owned(),
+                ));
+            }
+            // Streamable HTTP without a stream: nothing to GET.
+            if method != Method::Post {
+                let mut reply = Reply::bytes(
+                    405,
+                    "text/plain; charset=utf-8",
+                    b"POST JSON-RPC messages here".to_vec(),
+                );
+                reply.headers.push(("Allow", "POST".to_owned()));
+                return Ok(reply);
+            }
+            // A browser page reaches the endpoint only from an origin --cors allows: MCP asks
+            // servers to check Origin, against DNS rebinding. Agents send none.
+            if let Some(o) = request_header(request, "Origin")
+                && !state.options.cors
+                && !state
+                    .options
+                    .cors_origins
+                    .iter()
+                    .any(|allowed| allowed == o)
+            {
+                return Err(HttpError(
+                    403,
+                    format!("Origin {o} may not use the MCP endpoint: see --cors"),
+                ));
+            }
+            context.operation = Some(Operation::Read);
+            let body = read_bytes(request, state.options.max_body)?;
+            let entry = context.dataset.clone().expect("set above");
+            let call = mcp::Call {
+                state,
+                context,
+                entry: &entry,
+                engine,
+                origin: origin(state, request),
+                ran: std::cell::RefCell::new(None),
+            };
+            let reply = mcp::answer(&call, &body);
+            if let Some(text) = call.ran.into_inner() {
+                context.operation = Some(Operation::Query);
+                context.text_hash = Some(text_hash(&text));
+                if state.options.slow_query.is_some() || context.keep_text {
+                    context.text = Some(text);
+                }
+            }
+            return reply;
         }
         "graphql" => {
             // Queries only, so a POST reads as a GET does.
