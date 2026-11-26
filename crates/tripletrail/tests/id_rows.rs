@@ -3560,3 +3560,35 @@ fn evaluated_expressions_of_optional_values_on_ids_are_the_evaluators() {
         }
     }
 }
+
+/// `SUM` and `AVG` of a condition (`SUM(?o > 0)`, Sparqloscope's `numeric-greater`) are
+/// answered on ids (#10): a condition gives a boolean or an error, never a number, so the
+/// aggregate is the evaluator's error (unbound) over any row and 0 over none.
+#[test]
+fn sums_of_conditions_on_ids_are_the_evaluators() {
+    let engine = Engine::new_tripletrail();
+    engine
+        .load(
+            RdfFormat::Turtle,
+            "@prefix ex: <http://example.org/> .\n\
+             ex:a ex:g ex:x ; ex:v 3 . ex:b ex:g ex:x ; ex:v -1 . ex:c ex:g ex:y ; ex:v \"z\" .\n"
+                .as_bytes(),
+        )
+        .unwrap();
+    let prefix = "PREFIX ex: <http://example.org/>";
+    for q in [
+        "SELECT (SUM(?v > 0) AS ?s) WHERE { ?o ex:v ?v }",
+        "SELECT (AVG(?v > 0 && ?v < 5) AS ?a) (COUNT(*) AS ?n) WHERE { ?o ex:v ?v }",
+        "SELECT (SUM(?v > 0) AS ?s) WHERE { ?o ex:none ?v }",
+        "SELECT ?g (SUM(BOUND(?v)) AS ?s) (COUNT(*) AS ?n) WHERE { ?o ex:g ?g ; ex:v ?v } GROUP BY ?g",
+    ] {
+        let ids = format!("#pragma tt.executor ids\n{prefix} {q}");
+        let plan = engine.explain(&ids).unwrap();
+        assert!(plan.contains(r#""executor":"ids""#), "{q}: {plan}");
+        let expected = rows(
+            &engine,
+            &format!("#pragma tt.executor spareval\n#pragma tt.id-rewrites off\n{prefix} {q}"),
+        );
+        assert_eq!(rows(&engine, &ids), expected, "{q}");
+    }
+}
