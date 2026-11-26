@@ -2714,6 +2714,13 @@ impl Spill {
         w.into_inner().map_err(io::IntoInnerError::into_error)?;
         let mapped = Mapped::open(path.clone()).map_err(io::Error::other)?;
         let _ = fs::remove_file(&path);
+        // A load looks its keys up in no order, so the kernel's readahead of about 100 KB a
+        // page fault mostly reads keys nothing asks for, and pushes the ones it needs out of
+        // a small page cache (#232: 7.8 TB read for 932 GB of N-Triples at 5B triples). Only
+        // the page asked for is read; with the lookups on many threads (`Store::find_keys`),
+        // those reads wait side by side.
+        #[cfg(unix)]
+        let _ = mapped.map.advise(memmap2::Advice::Random);
         let bad = || io::Error::other("dictionary keys written short");
         Ok((
             Buf::mapped(&mapped.map, 0, bytes.len()).ok_or_else(bad)?,

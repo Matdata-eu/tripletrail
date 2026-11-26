@@ -606,10 +606,21 @@ seen before is read back from those files at random. The thread that adds the te
 reads one at a time, each one waiting for the disk alone, so a load of 5B triples on a network
 volume ran 39 hours at about 560 reads a second with a third of a core busy (#232). Now the
 terms of each block are first looked up on the lookup threads (`TRIPLETRAIL_LOOKUP_THREADS`),
-as the quad loads already did, and the adding thread only adds the new ones. On 48.9M synthetic
-triples (6.7 GB of N-Triples) with `--memory-limit 256M` and the process's memory capped at
-1.2 GB, 4 cores, the load takes 75 instead of 97 s and reads 15 instead of 38 GB from disk, with
-the same answers.
+as the quad loads already did, and the adding thread only adds the new ones. Those mapped files
+are also read without readahead (`MADV_RANDOM`): each page fault read about 100 KB around the
+key, mostly keys nothing asked for, and pushed the ones it needed out of a small page cache.
+On 48.9M synthetic triples (6.7 GB of N-Triples) with `--memory-limit 256M` and the process's
+memory capped at 1.2 GB, 4 cores, two runs each, with the same answers:
+
+| | load | read from disk | major page faults |
+|---|---:|---:|---:|
+| before | 91 to 92 s | 38 GB | 0.35M |
+| no readahead only | 98 to 109 s | 15 GB | 1.3 to 1.4M |
+| lookups on the lookup threads only | 79 to 85 s | 49 to 51 GB | 0.46 to 0.49M |
+| both (now) | 71 to 78 s | 15 to 16 GB | 1.5 to 1.6M |
+
+Without readahead each page fault reads less, but there are about four times as many; only
+with the lookups side by side does that pay.
 
 ### Streaming bulk load on all of RINF
 
