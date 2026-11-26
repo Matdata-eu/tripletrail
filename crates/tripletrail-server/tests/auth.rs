@@ -3660,7 +3660,7 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
                 customer: "Example Rail AS".into(),
                 issued: Date::today().plus_days(-10),
                 expires: Date::today().plus_days(300),
-                features: vec!["row-policies".to_owned()],
+                features: ["row-policies".to_owned()].into(),
                 max_nodes: None,
                 max_cores: None,
                 note: None,
