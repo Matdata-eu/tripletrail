@@ -1518,14 +1518,20 @@ impl Store {
         let (produced, ids) = std::thread::scope(|scope| {
             let worker = scope.spawn(move || {
                 for batch in rx.into_iter().flatten() {
+                    let found = self.find_keys(&batch);
                     let mut dict = self.inner.dict_write();
-                    let mut start = 0;
+                    let (mut start, mut k) = (0, 0);
                     let mut id = |t: &BatchTerm| match *t {
                         BatchTerm::Id(id) => id,
                         BatchTerm::Key(kind, end) => {
                             let key = &batch.bytes[start..end as usize];
                             start = end as usize;
-                            TermId::new(kind, u64::from(dict.get_or_insert(key).0)).0
+                            let ordinal = match found.get(k) {
+                                Some(&Some(o)) => o,
+                                _ => dict.get_or_insert(key).0,
+                            };
+                            k += 1;
+                            TermId::new(kind, u64::from(ordinal)).0
                         }
                     };
                     for q in batch.terms.chunks_exact(4) {
@@ -1544,6 +1550,33 @@ impl Store {
         });
         produced?;
         Ok(ids)
+    }
+
+    /// The ordinals of the keys of `batch` already in the dictionary, in order (`None` for a
+    /// new key), looked up on [`lookup_pool`]; empty while the dictionary is all on the heap.
+    /// Once a load's keys are in mapped files, a key seen before is read back from its file,
+    /// at random: one at a time, on the thread that adds the keys, each read waited alone, and
+    /// on a network volume that thread did about 560 reads a second (#232: a load of 5B
+    /// triples read 7.8 TB in 39 hours with a third of a core busy). Here they wait side by
+    /// side, and the adding thread then finds them without reading again.
+    fn find_keys(&self, batch: &KeyBatch) -> Vec<Option<u32>> {
+        let dict = self.inner.dict.read_unpoisoned();
+        if dict.mapped_size() == 0 {
+            return Vec::new();
+        }
+        let mut keys = Vec::with_capacity(batch.terms.len());
+        let mut start = 0;
+        for t in &batch.terms {
+            if let BatchTerm::Key(_, end) = *t {
+                keys.push(&batch.bytes[start..end as usize]);
+                start = end as usize;
+            }
+        }
+        lookup_pool().install(|| {
+            keys.par_chunks(LOOKUP_CHUNK)
+                .flat_map_iter(|chunk| chunk.iter().map(|key| dict.get(key)))
+                .collect()
+        })
     }
 
     /// The ids of the quads of `batches`, adding their new terms to the dictionary: the terms

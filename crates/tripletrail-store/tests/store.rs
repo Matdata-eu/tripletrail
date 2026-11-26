@@ -1998,11 +1998,13 @@ fn bulk_loads_larger_than_the_memory_limit_sort_on_disk() {
     };
     let first: Vec<Quad> = (0..30_000u64).map(|i| quad(i * 7)).collect();
     let second: Vec<Quad> = (0..20_000u64).map(|i| quad(i * 11 + 3)).collect();
-    // A new term in every quad, so the dictionary grows past the limit too.
+    // A new term in every other quad, so the dictionary grows past the limit too. Read as
+    // N-Quads text, the known terms are found in the mapped keys first (#232), and each new
+    // term comes twice in its batch: not found, then added once.
     let third: Vec<Quad> = (0..20_000u64)
         .map(|i| {
             let mut q = quad(i * 13);
-            q.object = Literal::new_simple_literal(format!("new value {i}")).into();
+            q.object = Literal::new_simple_literal(format!("new value {}", i / 2)).into();
             q
         })
         .collect();

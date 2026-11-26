@@ -153,6 +153,22 @@ impl<T: Pod> Buf<T> {
     }
 
     /// Bytes of the file this array is mapped from (0 when owned).
+    /// For mapped values, read ahead in order (`in_order`), or only the page asked for
+    /// (see `Spill::map_keys`).
+    pub(crate) fn advise_in_order(&self, in_order: bool) {
+        #[cfg(unix)]
+        if let Self::Mapped { map, offset, len } = self {
+            let advice = if in_order {
+                memmap2::Advice::Sequential
+            } else {
+                memmap2::Advice::Random
+            };
+            let _ = map.advise_range(advice, *offset, len * std::mem::size_of::<T>());
+        }
+        #[cfg(not(unix))]
+        let _ = in_order;
+    }
+
     pub(crate) fn mapped_size(&self) -> usize {
         match self {
             Self::Owned(_) | Self::Shared(_) => 0,
