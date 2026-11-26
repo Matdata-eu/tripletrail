@@ -207,7 +207,12 @@ three of them from cardinality estimates instead:
   a write it knows of touches it (all of them on `load` and `invalidate`).
 - **A join of patterns**: connected operands (through variables or blank nodes) are estimated
   by the smallest one, as joins through features and geometries are mostly one to one;
-  unconnected groups multiply, a UNION adds up.
+  unconnected groups multiply, a UNION adds up. For the rows binding a constant test's
+  variable, triples alone are estimated by the TripleTrail store as its join planner does
+  (#209): from the triple with the fewest matches, times the matches per value of each next
+  triple, read from the per-predicate fanouts kept with the quad indexes. So
+  `?v ex:country ?c . ?o ex:vendor ?v . ?o geo:hasGeometry/geo:asWKT ?w` counts a row per
+  offer, not one per vendor, and a window over the offers is injected.
 - **Index candidates of an envelope**: each R-tree has a 64 x 64 grid histogram of its entries'
   bounding-box centres, with the mean bounding-box size; the estimate sums the cells the
   envelope (grown by the mean half size) overlaps, by the share it overlaps. Below 4096 the

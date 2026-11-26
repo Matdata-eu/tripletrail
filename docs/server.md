@@ -165,7 +165,8 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   0.14 s for 460,000 terms) and then makes its map in the background, one dataset
   after the other (#92): the map's collections (the profile of the data) and the unfiltered
   facet counts of each, kept in the caches that requests read, so the first visitor does not
-  wait for them. Each facet query gets the dataset's timeout, as a map request does, and a
+  wait for them. The unfiltered counts stay until the next write to the dataset, whatever the
+  result cache (`--result-cache-mb`) lets go meanwhile. Each facet query gets the dataset's timeout, as a map request does, and a
   dataset's warm-up at most five minutes in all: the collections left then are made by the
   first request that needs them. The log says `{ds}: map ready: N collections and their facets
   in S s`, or which collections ran out of time, with the facets that failed (a computed facet
@@ -3109,7 +3110,9 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   (#259). When the collections are made (again after each write), each later way is narrowed
   to the instances the ways before it leave without a geometry, when there are at most 1,000
   (and dropped when none of them has a value on it), so that a tile does not look for every
-  instance on it.
+  instance on it. The narrowing is decided on the whole dataset: a caller who may read only
+  some graphs gets a later way's geometry for those instances alone, even where an earlier
+  way's geometry is in a graph it cannot read.
 - **A line between two features.** A geometry way with `tts:lineBetween ( A B )` in place of
   `sh:path` (two SHACL paths, each to a geometry literal) gives the straight line from the
   geometry at the end of `A` to the one at the end of `B` (`st:ST_MakeLine`), such as a

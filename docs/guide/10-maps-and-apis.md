@@ -80,7 +80,8 @@ curl -s http://localhost:7878/ds/tiles/style.json | grep -o '"maxzoom":1[0-9],"t
 On a large dataset the map's first request waits for TripleTrail to read the data's classes
 and count every layer's facets: on all of RINF's countries, close to a minute. So once the
 datasets are open, the server makes each one's map in the background, and its log says when
-it is ready. It gives each dataset at most five minutes (and each query the dataset's
+it is ready. The counts of the panel without filters stay until the next write. It gives
+each dataset at most five minutes (and each query the dataset's
 timeout); what is left then waits for the first visitor. Before the map it sorts the
 dataset's IRIs and strings once, for queries with `MIN`, `MAX` or `ORDER BY` on them (the
 log line `ds: string ranks of N terms`). A load, an update or new shapes make the counts
