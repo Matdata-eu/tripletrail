@@ -1133,6 +1133,61 @@ fn a_graph_write_grant_writes_only_its_graphs() {
         204
     );
 
+    // Graph management (enterprise #9): the editor clears, drops and fills only the writable
+    // graph. An operation that writes or empties any other graph is refused whole.
+    for refused in [
+        "CLEAR GRAPH <urn:release>",
+        "DROP GRAPH <urn:release>",
+        "DROP SILENT GRAPH <urn:release>",
+        "CLEAR DEFAULT",
+        "DROP NAMED",
+        "CLEAR ALL",
+        "CREATE GRAPH <urn:other>",
+        "MOVE GRAPH <urn:release> TO GRAPH <urn:wip>",
+        "MOVE GRAPH <urn:wip> TO GRAPH <urn:release>",
+        "COPY GRAPH <urn:wip> TO DEFAULT",
+        "COPY GRAPH <urn:wip> TO GRAPH <urn:other>",
+        "ADD GRAPH <urn:wip> TO GRAPH <urn:release>",
+        "LOAD <http://127.0.0.1:9/data.ttl> INTO GRAPH <urn:release>",
+        "CLEAR GRAPH <urn:wip> ; DROP GRAPH <urn:release>",
+    ] {
+        assert_eq!(update("editor", refused), 403, "{refused}");
+    }
+    let delete =
+        |key: &str, target: &str| match ureq::delete(&format!("{base}/assets/data{target}"))
+            .set("X-API-Key", key)
+            .call()
+        {
+            Ok(r) => r.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("{e}"),
+        };
+    assert_eq!(delete("editor", "?graph=urn:release"), 403);
+    assert_eq!(delete("editor", "?default"), 403);
+    assert!(ask(
+        "ASK { GRAPH <urn:release> { <urn:a> <urn:in> \"release\" } }"
+    ));
+    assert!(ask("ASK { <urn:a> <urn:in> \"default\" }"));
+    assert!(ask("ASK { GRAPH <urn:wip> { <urn:b> <urn:in> \"put\" } }"));
+    assert!(!ask("ASK { GRAPH <urn:other> { ?s ?p ?o } }"));
+    // Copying a readable graph into the writable one replaces what it held.
+    assert_eq!(
+        update("editor", "COPY GRAPH <urn:release> TO GRAPH <urn:wip>"),
+        200
+    );
+    assert!(ask(
+        "ASK { GRAPH <urn:wip> { <urn:a> <urn:in> \"release\" } }"
+    ));
+    assert!(!ask("ASK { GRAPH <urn:wip> { <urn:b> <urn:in> \"put\" } }"));
+    assert_eq!(update("editor", "CLEAR GRAPH <urn:wip>"), 200);
+    assert!(!ask("ASK { GRAPH <urn:wip> { ?s ?p ?o } }"));
+    assert_eq!(update("editor", "DROP SILENT GRAPH <urn:wip>"), 200);
+    assert_eq!(put("editor", "?graph=urn:wip"), 201);
+    assert_eq!(delete("editor", "?graph=urn:wip"), 204);
+    assert!(ask(
+        "ASK { GRAPH <urn:release> { <urn:a> <urn:in> \"release\" } }"
+    ));
+
     // The team reads every graph, and writes only the release graph.
     assert_eq!(
         update(
@@ -2703,6 +2758,26 @@ fn oidc_tokens_sign_callers_in() {
         let sig = pair.sign(&rng, signed.as_bytes()).unwrap();
         format!("{signed}.{}", base64url_encode(sig.as_ref()))
     };
+    let other = {
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+        EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng).unwrap()
+    };
+    let signed_by = |key: &EcdsaKeyPair, kid: &str, claims: serde_json::Value| {
+        let signed = format!(
+            "{}.{}",
+            base64url_encode(format!(r#"{{"alg":"ES256","typ":"JWT","kid":"{kid}"}}"#).as_bytes()),
+            base64url_encode(claims.to_string().as_bytes())
+        );
+        let sig = key.sign(&rng, signed.as_bytes()).unwrap();
+        format!("{signed}.{}", base64url_encode(sig.as_ref()))
+    };
+    let unsigned = |alg: &str, claims: serde_json::Value, sig: &str| {
+        format!(
+            "{}.{}.{sig}",
+            base64url_encode(format!(r#"{{"alg":"{alg}","typ":"JWT","kid":"k1"}}"#).as_bytes()),
+            base64url_encode(claims.to_string().as_bytes())
+        )
+    };
     let claims = |iss: &str, aud: &str, exp: u64| {
         serde_json::json!({
             "iss": iss, "aud": aud, "exp": exp, "sub": "s-1",
@@ -2765,6 +2840,37 @@ fn oidc_tokens_sign_callers_in() {
         assert_eq!(code, 401, "{bad}");
         assert!(challenge.unwrap().starts_with("Bearer"));
     }
+    // Enterprise #9: unsigned, signed with another algorithm, by another key or with a key
+    // the issuer does not list, not valid yet, or without an expiry. On a second server, as
+    // ten failed sign-ins from one address are answered 429 for a while.
+    let second = serve(true);
+    for bad in [
+        unsigned("none", claims(&issuer, "tripletrail", now + 600), ""),
+        unsigned("none", claims(&issuer, "tripletrail", now + 600), "e30"),
+        unsigned(
+            "HS256",
+            claims(&issuer, "tripletrail", now + 600),
+            "c2lnbmF0dXJl",
+        ),
+        signed_by(&other, "k1", claims(&issuer, "tripletrail", now + 600)),
+        signed_by(&pair, "k2", claims(&issuer, "tripletrail", now + 600)),
+        token({
+            let mut c = claims(&issuer, "tripletrail", now + 600);
+            c["nbf"] = (now + 3600).into();
+            c
+        }),
+        token({
+            let mut c = claims(&issuer, "tripletrail", now + 600);
+            c.as_object_mut().unwrap().remove("exp");
+            c
+        }),
+    ] {
+        let (code, challenge) = status(bearer(query(&second, "kg"), &bad), None);
+        assert_eq!(code, 401, "{bad}");
+        assert!(challenge.unwrap().starts_with("Bearer"));
+    }
+    // ... while a good token still signs in there.
+    assert_eq!(status(bearer(query(&second, "kg"), &good), None).0, 200);
     // The access explain page says whom a token signs in, and which claim gave each group.
     let explain = |t: &str| {
         ureq::get(&format!("{base}/$/access/datasets/kg/explain"))
