@@ -192,7 +192,7 @@ fn ucschar(c: char) -> bool {
 }
 
 /// A SQL identifier, double-quoted.
-fn quote(name: &str) -> String {
+pub(crate) fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 

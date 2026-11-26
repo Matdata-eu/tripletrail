@@ -251,6 +251,225 @@ impl<L> DatabaseLoader<L> {
         Ok(tables)
     }
 
+    /// The tables and views of `schema` (or only those named) with what the catalogue says
+    /// of them, for their ontology and shapes ([`crate::db_schema`], #278): comments, column
+    /// types, `NOT NULL`, enum types, domains and their checks, unique keys and `CHECK`s.
+    pub fn schema_tables(
+        &self,
+        schema: &str,
+        only: &[String],
+    ) -> Result<Vec<crate::db_schema::SchemaTable>, RmlError> {
+        use crate::db_schema::{Check, SchemaColumn, SchemaTable};
+        let direct = self.direct_tables(schema, only)?;
+        let client = self.client(None)?;
+        let mut client = client.lock().expect("not poisoned");
+        let error = |e: postgres::Error| RmlError::Source {
+            location: format!("schema {schema}"),
+            message: error_message(&e),
+        };
+        let mut out = Vec::with_capacity(direct.len());
+        for table in direct {
+            let row = client
+                .query_one(
+                    "SELECT c.oid, c.relkind IN ('v', 'm'), obj_description(c.oid, 'pg_class') \
+                     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+                     WHERE n.nspname = $1 AND c.relname = $2",
+                    &[&schema, &table.name],
+                )
+                .map_err(error)?;
+            let oid: u32 = row.get(0);
+            let view: bool = row.get(1);
+            let comment: Option<String> = row.get(2);
+            let mut columns = Vec::new();
+            for r in client
+                .query(
+                    "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), \
+                     a.attnotnull OR t.typnotnull, col_description(a.attrelid, a.attnum), \
+                     t.typtype::text, t.typname::text, t.oid, \
+                     b.typtype::text, b.typname::text, b.oid, \
+                     CASE WHEN t.typtype = 'd' THEN t.typtypmod ELSE a.atttypmod END \
+                     FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid \
+                     LEFT JOIN pg_type b ON b.oid = t.typbasetype AND t.typtype = 'd' \
+                     WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped \
+                     ORDER BY a.attnum",
+                    &[&oid],
+                )
+                .map_err(error)?
+            {
+                let kind: String = r.get(4);
+                let base_kind: Option<String> = r.get(7);
+                let (base, base_oid, enum_oid) = if kind == "d" {
+                    let b: Option<String> = r.get(8);
+                    let b_oid: Option<u32> = r.get(9);
+                    let enum_oid = (base_kind.as_deref() == Some("e"))
+                        .then_some(b_oid)
+                        .flatten();
+                    (b.unwrap_or_default(), b_oid, enum_oid)
+                } else {
+                    let t_oid: u32 = r.get(6);
+                    (r.get(5), Some(t_oid), (kind == "e").then_some(t_oid))
+                };
+                let _ = base_oid;
+                let typmod: i32 = r.get(10);
+                let max_length = (matches!(base.as_str(), "varchar" | "bpchar") && typmod > 4)
+                    .then(|| u32::try_from(typmod - 4).ok())
+                    .flatten();
+                let enum_values = match enum_oid {
+                    Some(e) => Some(
+                        client
+                            .query(
+                                "SELECT enumlabel::text FROM pg_enum WHERE enumtypid = $1 \
+                                 ORDER BY enumsortorder",
+                                &[&e],
+                            )
+                            .map_err(error)?
+                            .iter()
+                            .map(|r| r.get(0))
+                            .collect(),
+                    ),
+                    None => None,
+                };
+                let domain_checks = if kind == "d" {
+                    let domain: u32 = r.get(6);
+                    client
+                        .query(
+                            "SELECT pg_get_constraintdef(oid) FROM pg_constraint \
+                             WHERE contypid = $1 AND contype = 'c' ORDER BY conname",
+                            &[&domain],
+                        )
+                        .map_err(error)?
+                        .iter()
+                        .map(|r| r.get(0))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                columns.push(SchemaColumn {
+                    name: r.get(0),
+                    sql_type: r.get(1),
+                    base,
+                    max_length,
+                    not_null: r.get(2),
+                    comment: r.get(3),
+                    enum_values,
+                    domain_checks,
+                });
+            }
+            let checks = client
+                .query(
+                    "SELECT con.conname::text, pg_get_constraintdef(con.oid), \
+                     ARRAY(SELECT a.attname::text FROM unnest(con.conkey) AS k(n) \
+                       JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.n \
+                       ORDER BY a.attnum) \
+                     FROM pg_constraint con WHERE con.conrelid = $1 AND con.contype = 'c' \
+                     ORDER BY con.conname",
+                    &[&oid],
+                )
+                .map_err(error)?
+                .iter()
+                .map(|r| Check {
+                    name: r.get(0),
+                    definition: r.get(1),
+                    columns: r.get(2),
+                })
+                .collect();
+            let uniques = client
+                .query(
+                    "SELECT ARRAY(SELECT a.attname::text FROM unnest(con.conkey) \
+                       WITH ORDINALITY AS k(n, o) \
+                       JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.n \
+                       ORDER BY k.o) \
+                     FROM pg_constraint con WHERE con.conrelid = $1 AND con.contype = 'u' \
+                     ORDER BY con.conname",
+                    &[&oid],
+                )
+                .map_err(error)?
+                .iter()
+                .map(|r| r.get(0))
+                .collect();
+            out.push(SchemaTable {
+                table,
+                view,
+                comment,
+                columns,
+                uniques,
+                checks,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The rows of the code table `table` of `schema`: each row's primary key values and its
+    /// label, from `label` or else its first text column outside the key. Rows without a label
+    /// are left out.
+    pub fn code_list(
+        &self,
+        schema: &str,
+        table: &crate::db_schema::SchemaTable,
+        label: Option<&str>,
+    ) -> Result<crate::db_schema::CodeList, RmlError> {
+        let name = &table.table.name;
+        let key = &table.table.primary_key;
+        if key.is_empty() {
+            return Err(RmlError::Mapping(format!(
+                "code table {name} has no primary key to name its concepts"
+            )));
+        }
+        let label = match label {
+            Some(l) => {
+                if !table.columns.iter().any(|c| c.name == l) {
+                    return Err(RmlError::Mapping(format!("{name} has no column {l}")));
+                }
+                l.to_owned()
+            }
+            None => table
+                .columns
+                .iter()
+                .find(|c| {
+                    !key.contains(&c.name) && matches!(c.base.as_str(), "text" | "varchar" | "bpchar")
+                })
+                .map(|c| c.name.clone())
+                .ok_or_else(|| {
+                    RmlError::Mapping(format!(
+                        "code table {name} has no text column for labels: name one with {name}=COLUMN"
+                    ))
+                })?,
+        };
+        let q = crate::direct::quote;
+        let sql = format!(
+            "SELECT {}, {}::text FROM {}.{} WHERE {} IS NOT NULL ORDER BY {}",
+            key.iter()
+                .map(|k| format!("{}::text", q(k)))
+                .collect::<Vec<_>>()
+                .join(", "),
+            q(&label),
+            q(schema),
+            q(name),
+            q(&label),
+            key.iter().map(|k| q(k)).collect::<Vec<_>>().join(", ")
+        );
+        let client = self.client(None)?;
+        let mut client = client.lock().expect("not poisoned");
+        let rows = client
+            .query(sql.as_str(), &[])
+            .map_err(|e| RmlError::Source {
+                location: format!("{schema}.{name}"),
+                message: error_message(&e),
+            })?;
+        let rows = rows
+            .iter()
+            .map(|r| {
+                let values: Vec<String> = (0..key.len()).map(|i| r.get(i)).collect();
+                (values, r.get(key.len()))
+            })
+            .collect();
+        Ok(crate::db_schema::CodeList {
+            table: name.clone(),
+            label,
+            rows,
+        })
+    }
+
     fn connect(&self, config: Target, key: String) -> Result<Arc<Mutex<Client>>, RmlError> {
         let mut clients = self.clients.lock().expect("not poisoned");
         // A connection the database closed (a restart, an idle timeout) is opened again; one

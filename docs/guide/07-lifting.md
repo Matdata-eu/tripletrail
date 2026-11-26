@@ -381,6 +381,43 @@ name: `upload:stations.csv` is the same file, and any other location is refused.
 /rail/import/$id` forgets the file before the hour is up. See
 [the import API](../server.md#importing-files).
 
+## A database's own semantics
+
+A PostgreSQL database already says a lot about its data: comments on tables and columns,
+keys, `NOT NULL`, `varchar(80)`, enum types and `CHECK` constraints. `tripletrail schema
+database` turns that into an OWL ontology, SHACL shapes and, for code tables, SKOS concept
+schemes, named as `direct-mapping` names the data, so the direct-mapped data has the
+ontology's classes and is checked by the shapes:
+
+```sh
+tripletrail schema database --database postgresql://reader@db/rail --schema rail \
+    --namespace https://data.example.org/db/ --code-table country=name --out schema/
+tripletrail direct-mapping --database postgresql://reader@db/rail --schema rail \
+    --base-iri https://data.example.org/db/ --output rail.nt
+tripletrail validate --data rail.nt --shapes schema/shapes.ttl
+```
+
+For a column `max_speed speed` of table `line`, with the domain `speed` checked as
+`VALUE > 0 AND VALUE <= 350` and a comment, `schema/shapes.ttl` holds:
+
+```turtle
+<https://data.example.org/db/schema/shapes/line#max_speed> a sh:PropertyShape ;
+  sh:path <https://data.example.org/db/line#max_speed> ;
+  sh:name "max_speed" ;
+  sh:datatype xsd:integer ;
+  sh:maxCount 1 ;
+  dct:source "rail.line.max_speed" ;
+  sh:description "Highest speed allowed, in km/h" ;
+  sh:minExclusive 0 ;
+  sh:maxInclusive 350 .
+```
+
+What it can't translate, such as a `CHECK (km_to > km_from)` over two columns, it says on
+standard error and in a comment on the shape. Run it again after the database changes and it
+says, for each file, how many triples were added and removed. These examples need a database,
+so the guide's tests don't run them; `tests/db_schema.rs` does. See
+[database schema](../rml.md#database-schema).
+
 ## Useful options
 
 - `--output-dir out/` writes one file per query or mapping instead of one file.

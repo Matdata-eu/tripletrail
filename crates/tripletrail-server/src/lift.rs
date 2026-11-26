@@ -111,6 +111,42 @@ pub fn direct_mapping(
     Ok(tripletrail_rml::direct::r2rml(&found, base_iri))
 }
 
+/// The ontology, SHACL shapes and SKOS concept schemes of a PostgreSQL schema's tables (#278),
+/// named as [`direct_mapping`] with `namespace` as its base IRI names the data. `codes` are
+/// the code tables made into concept schemes, each with its label column if given.
+#[cfg(feature = "postgres")]
+pub fn database_schema(
+    database: &str,
+    namespace: &str,
+    schema: &str,
+    tables: &[String],
+    codes: &[(String, Option<String>)],
+) -> Result<tripletrail_rml::db_schema::Artefacts> {
+    tripletrail::oxigraph::model::NamedNode::new(namespace)
+        .map_err(|e| format!("--namespace {namespace}: {e}"))?;
+    let loader = tripletrail_rml::DatabaseLoader::new(
+        FsLoader {
+            config: FxConfig::default(),
+        },
+        Some(database.to_owned()),
+    );
+    let found = loader.schema_tables(schema, tables)?;
+    if found.is_empty() {
+        return Err(format!("schema {schema} has no tables").into());
+    }
+    let mut lists = Vec::new();
+    for (name, label) in codes {
+        let table = found
+            .iter()
+            .find(|t| &t.table.name == name)
+            .ok_or_else(|| format!("--code-table {name}: there is no such table"))?;
+        lists.push(loader.code_list(schema, table, label.as_deref())?);
+    }
+    Ok(tripletrail_rml::db_schema::artefacts(
+        schema, &found, &lists, namespace,
+    ))
+}
+
 /// Runs the query and mapping files of `args` and writes their triples. A file that fails is
 /// reported in the [`LiftReport`] (the others still run); only setting up fails as a whole.
 pub fn lift(engine: &Engine, args: LiftArgs) -> Result<LiftReport> {
