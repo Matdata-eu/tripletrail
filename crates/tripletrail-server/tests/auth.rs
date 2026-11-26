@@ -3845,7 +3845,7 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
     for shape in [&as_shape, &new_policy] {
         assert_eq!(
             call("PUT", "/shapes", Some(shape.clone())).0,
-            400,
+            422,
             "{shape}"
         );
         assert_eq!(
