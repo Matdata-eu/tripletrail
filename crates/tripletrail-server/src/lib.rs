@@ -478,6 +478,17 @@ impl State {
     }
 }
 
+/// How often `serve` checks whether a dataset's map should be made again after a write
+/// ([`Handle::rewarm_map`]).
+pub const MAP_WATCH: Duration = Duration::from_secs(30);
+
+/// What [`Handle::rewarm_map`] remembers of a dataset between calls.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MapWatch {
+    made: Option<ogc::DataVersion>,
+    seen: Option<ogc::DataVersion>,
+}
+
 /// Adds datasets to a running server and reports its start-up, for a server that opens its
 /// datasets after it starts listening (so health checks answer meanwhile).
 #[derive(Clone)]
@@ -568,6 +579,48 @@ impl Handle {
             ));
         }
         Ok(done)
+    }
+
+    /// Makes the map of the dataset `name` again ([`Handle::warm_map`]) once a write or a
+    /// change of its shapes has left the made one out of date and the dataset has kept still
+    /// since the call before (#258): a load of many batches is warmed once, after its last
+    /// batch. `serve` calls it every [`MAP_WATCH`] for each dataset, unless `--no-warm-up`,
+    /// so that the first visitor after a load does not wait for the facet counts. `warmed`
+    /// holds what the last warm-up saw: the data version it was made for and the version seen
+    /// at the call before, which this updates. Answers `None` when there was nothing to do.
+    pub fn rewarm_map(&self, name: &str, warmed: &mut MapWatch) -> Option<Result<String, String>> {
+        let entry = self
+            .state
+            .registry
+            .read_unpoisoned()
+            .datasets
+            .get(name)
+            .cloned()?;
+        let now = ogc::data_version(&self.state, &entry)?;
+        let seen = warmed.seen.replace(now);
+        if warmed.made == Some(now) || seen != Some(now) {
+            return None;
+        }
+        // The version is read before the warm-up: a write during it is warmed at a later call.
+        warmed.made = Some(now);
+        self.warm_ranks(name);
+        Some(self.warm_map(name))
+    }
+
+    /// The data version of the dataset `name` now, which [`Handle::rewarm_map`] compares.
+    pub fn map_watch(&self, name: &str) -> MapWatch {
+        let version = self
+            .state
+            .registry
+            .read_unpoisoned()
+            .datasets
+            .get(name)
+            .cloned()
+            .and_then(|e| ogc::data_version(&self.state, &e));
+        MapWatch {
+            made: version,
+            seen: version,
+        }
     }
 
     /// Warnings about the names from before the rename to TripleTrail that the dataset `name`
