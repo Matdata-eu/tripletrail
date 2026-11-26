@@ -168,8 +168,9 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   dictionaries of up to 16 million terms; logged as `{ds}: string ranks of N terms in S s`,
   0.14 s for 460,000 terms) and then makes its map in the background, one dataset
   after the other (#92): the map's collections (the profile of the data) and the unfiltered
-  facet counts of each, kept in the caches that requests read, so the first visitor does not
-  wait for them. The unfiltered counts stay until the next write to the dataset, whatever the
+  facet counts of each, then the map search's full-text index (7 s on RINF's eight
+  countries), kept in the caches that requests read, so the first visitor does not wait for
+  them. The unfiltered counts stay until the next write to the dataset, whatever the
   result cache (`--result-cache-mb`) lets go meanwhile. Each facet query gets the dataset's timeout, as a map request does, and a
   dataset's warm-up at most five minutes in all: the collections left then are made by the
   first request that needs them. The log says `{ds}: map ready: N collections and their facets
@@ -3538,8 +3539,8 @@ same error at once. Other failures (a memory limit) are tried again on the next 
   last as a prefix, so it works while typing; case and Latin accents aside), labels with the
   fewest other words first, then by score, at most 5 of a class and 20 in all. Each result has
   `iri`, `label` (the label that matched, without what `tts:labelStrip` matches), `collection`
-  and `bbox` (CRS84, around its geometries). The first search
-  builds the index (about 4 s on RINF DE+FR); a search then takes milliseconds. As
+  and `bbox` (CRS84, around its geometries). The map's warm-up builds the index (or else
+  the first search: about 7 s on RINF's eight countries); a search then takes milliseconds. As
   `tt:search`, a caller limited to some graphs or rows searches only what it can read.
 - `color.{collection}={key}` on the `all` tiles (`color={key}` on a collection's own) gives
   each feature of the collection the value of that values facet as the property `value` (the
