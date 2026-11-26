@@ -936,6 +936,16 @@ struct ServeArgs {
         value_name = "NAME=IRI"
     )]
     text_properties: Vec<String>,
+    /// The offset the temporal functions (`tt:period` and the rest) read a date or date-time
+    /// without a timezone at, in place of UTC: `Z` or `±hh:mm`, as `+01:00`. `NAME=OFFSET`
+    /// for one dataset; a bare offset is every dataset's. Repeatable; a comma separates entries.
+    #[arg(
+        long = "time-offset",
+        env = "TRIPLETRAIL_TIME_OFFSET",
+        value_delimiter = ',',
+        value_name = "[NAME=]OFFSET"
+    )]
+    time_offset: Vec<String>,
     /// Storage: the tripletrail store (the default) or Oxigraph's store (RocksDB on disk,
     /// needs the rocksdb feature).
     #[arg(long, env = "TRIPLETRAIL_STORE", value_enum, default_value_t = StoreKind::TripleTrail)]
@@ -2173,6 +2183,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         rdfs,
         owl_rl,
         text_properties,
+        time_offset,
         store,
         timeout,
         threads,
@@ -2445,6 +2456,13 @@ fn serve(args: ServeArgs) -> Result<()> {
         let p = NamedNode::new(p).map_err(|e| format!("--text-properties {t:?}: {e}"))?;
         text_by_dataset.push((name.to_owned(), p));
     }
+    let mut offsets: Vec<(String, i64)> = Vec::new();
+    for t in &time_offset {
+        let (name, offset) = t.split_once('=').unwrap_or(("*", t));
+        let minutes = tripletrail::temporal::parse_offset(offset)
+            .map_err(|e| format!("--time-offset {t:?}: {e}"))?;
+        offsets.push((name.trim().to_owned(), minutes));
+    }
     let entail = move |name: &str, engine: &Engine| -> Result<()> {
         let Some((_, graph, regime)) = entailed
             .iter()
@@ -2541,6 +2559,7 @@ fn serve(args: ServeArgs) -> Result<()> {
             location: location.clone(),
             indexed: indexed.clone(),
             text_properties: text_by_dataset.clone(),
+            time_offsets: offsets,
             ui: !no_ui,
             mcp,
             matgui_url,

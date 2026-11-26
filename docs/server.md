@@ -283,6 +283,12 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   vectors of one length `tt:nearest` compares one by one, exactly. Past it, it builds a graph
   of them (HNSW) in the background, on half the cores, and searches that: fast, but
   approximate. `0` keeps every search exact. See [vector search](vector-search.md#exact-then-approximate).
+- `--time-offset [NAME=]OFFSET` (`TRIPLETRAIL_TIME_OFFSET`, comma-separated; repeatable) is
+  the offset, `Z` or `±hh:mm` up to 14:00, at which the temporal functions (`tt:period` and the
+  rest, see [D.4](function-matrix.md#d4-temporal-300)) read a date or date-time without a
+  timezone, in place of UTC: `--time-offset rinf=+01:00` reads RINF's local days as Brussels
+  winter days. A bare offset is every dataset's; a dataset's own wins. A value with its own
+  timezone, and a call that gives one (`tt:period(?d, "+02:00")`), keep theirs.
 - The spatial index is built in the background at start, and again after a write that drops
   it, rather than on the first spatial query. `/$/ready` answers 200 once every dataset is open
   and its index built (503 before), and `/$/status` gives the state per dataset.
@@ -4038,6 +4044,7 @@ option given several times, `true` for a flag. `datasets` lists the datasets, ea
 | `rdfs`, `owl-rl` | `true`, or the IRI of the graph to keep the entailment in (`--rdfs`, `--owl-rl`) |
 | `aliases` | a name or a list of names that answer for the dataset (`--alias`) |
 | `text-properties` | an IRI or a list of IRIs whose literals full-text search indexes too (`--text-properties name=IRI`, see [full-text search](full-text-search.md#what-is-indexed)) |
+| `time-offset` | the offset, in quotes (`"+01:00"`), at which the temporal functions read dates without a timezone (`--time-offset name=OFFSET`) |
 
 ```yaml
 bind: 0.0.0.0:3030

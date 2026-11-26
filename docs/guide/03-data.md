@@ -405,6 +405,66 @@ your browser by your own AI service: see [Find similar](10-maps-and-apis.md#find
 
 See [vector search](../vector-search.md) for the details.
 
+## Valid on a day
+
+Data that changes over time says from when to when a resource holds, and says it in many ways:
+a date here, a date-time with a timezone there, a year, or no end at all. RINF, for one, gives
+each section of line a validity with a beginning and an end, each an `xsd:date` or an
+`xsd:dateTimeStamp`:
+
+<!-- test: update rail -->
+```sparql
+PREFIX ex: <https://example.org/rail#>
+PREFIX time: <http://www.w3.org/2006/time#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+INSERT DATA {
+  ex:SOL1 ex:validity [
+    time:hasBeginning [ time:inXSDDate "2022-12-11"^^xsd:date ] ;
+    time:hasEnd [ time:inXSDDate "2026-12-12"^^xsd:date ] ] .
+  ex:SOL2 ex:validity [
+    time:hasBeginning [ time:inXSDDateTimeStamp "2026-12-13T00:00:00Z"^^xsd:dateTimeStamp ] ] .
+  ex:SOL3 ex:validity [
+    time:hasBeginning [ time:inXSDDate "2019-01-01"^^xsd:date ] ;
+    time:hasEnd [ time:inXSDDate "2021-12-31"^^xsd:date ] ] .
+}
+```
+
+SPARQL does not compare a date with a date-time, so asking which sections hold on a day takes
+casts and `COALESCE` by hand. `tt:period` turns any of them into one value, a period from a
+start to an end, and `tt:periodContains` tells whether a day (or an instant, or another
+period) lies in it. A side left unbound is open, and a date as the end includes that day:
+
+<!-- test: query rail -->
+```sparql
+PREFIX ex: <https://example.org/rail#>
+PREFIX time: <http://www.w3.org/2006/time#>
+PREFIX tt: <http://w3id.org/tripletrail/fn#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?section ?period WHERE {
+  ?section ex:validity ?v .
+  OPTIONAL { ?v time:hasBeginning/(time:inXSDDate|time:inXSDDateTimeStamp) ?from }
+  OPTIONAL { ?v time:hasEnd/(time:inXSDDate|time:inXSDDateTimeStamp) ?until }
+  BIND(tt:period(?from, ?until) AS ?p)
+  FILTER(tt:periodContains(?p, "2026-12-12"^^xsd:date) || tt:periodContains(?p, "2027-01-01"^^xsd:date))
+  BIND(STR(?p) AS ?period)
+} ORDER BY ?section
+```
+
+<!-- test: output -->
+```text
+section,period
+https://example.org/rail#SOL1,2022-12-11T00:00:00Z/2026-12-13T00:00:00Z
+https://example.org/rail#SOL2,2026-12-13T00:00:00Z/..
+```
+
+A period is written in UTC, `..` for an open side, as a literal of the datatype `tt:period`.
+`tt:periodStart`, `tt:periodEnd` and `tt:periodDuration` give its parts, and Allen's thirteen
+relations (`tt:periodBefore`, `tt:periodMeets`, `tt:periodOverlaps`, `tt:periodDuring` and the
+others) and `tt:periodIntersects` compare two periods. A date or a date-time without a
+timezone is read in UTC; when the data's dates are local days, as RINF's are, start the server
+with `--time-offset +01:00` (or `--time-offset rail=+01:00` for one dataset) to read them at
+that offset. See [the temporal functions](../function-matrix.md#d4-temporal-300).
+
 ## What you learnt
 
 - `tripletrail load` fills an on-disk dataset offline; `tripletrail serve --location DIR --dataset
@@ -414,6 +474,8 @@ See [vector search](../vector-search.md) for the details.
 - `SERVICE` queries another endpoint once `--service-allow` allows it.
 - `tt:cosine` and `tt:nearest` rank resources by their `tt:vector` embeddings, and
   `/{dataset}/search/similar` gives the nearest with their descriptions.
+- `tt:period` reads dates, date-times, years and open ends as one value, and
+  `tt:periodContains` tells whether it holds on a day.
 - `GET /{dataset}/data` exports everything.
 
 Next: [spatial queries](04-spatial.md).

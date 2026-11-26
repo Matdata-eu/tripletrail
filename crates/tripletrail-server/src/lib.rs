@@ -209,6 +209,9 @@ pub struct Options {
     /// besides the ones it always indexes, by dataset name (`*` for every dataset). Given to
     /// every dataset when it is served, those created or attached at run time too.
     pub text_properties: Vec<(String, tripletrail::oxigraph::model::NamedNode)>,
+    /// `--time-offset` (#300): the offset, in minutes, the temporal functions read values
+    /// without a timezone at, by dataset name (`*` for every dataset); UTC without one.
+    pub time_offsets: Vec<(String, i64)>,
     /// Serve the web UI at `/$/ui/` (and redirect `/` to it).
     pub ui: bool,
     /// Serve a Model Context Protocol endpoint at `/{ds}/mcp` (#153), for AI agents.
@@ -330,6 +333,12 @@ impl Options {
         }
         out
     }
+
+    /// The `--time-offset` of the dataset `name`: its own, else the one for `*`, else 0.
+    pub fn time_offset_of(&self, name: &str) -> i64 {
+        let of = |n: &str| self.time_offsets.iter().rev().find(|(d, _)| d == n);
+        of(name).or_else(|| of("*")).map_or(0, |(_, m)| *m)
+    }
 }
 
 impl Default for Options {
@@ -356,6 +365,7 @@ impl Default for Options {
             functions: Default::default(),
             indexed: IndexedPredicates::default(),
             text_properties: Vec::new(),
+            time_offsets: Vec::new(),
             ui: true,
             mcp: false,
             matgui_url: None,
@@ -452,6 +462,7 @@ impl State {
     pub(crate) fn prepare(&self, name: &str, engine: Engine) -> Engine {
         engine.set_text_properties(&self.options.text_properties_of(name));
         engine.set_vector_graph_min(self.options.vector_graph_min);
+        engine.set_time_offset(self.options.time_offset_of(name));
         if let tripletrail::store::Dataset::TripleTrail(store) = engine.store() {
             store.set_log_retention(self.options.keep_logs);
         }
