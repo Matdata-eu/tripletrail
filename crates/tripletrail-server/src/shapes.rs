@@ -890,6 +890,8 @@ fn active(
     let all = shapes::hide_generated(&all, &generated, &uppers);
     // A stored validation report as every class's data-quality facet (#92).
     let all = shapes::add_quality(&all, &uppers);
+    // The facets of parts on their parent, such as a section of line's tracks' (#248).
+    let all = shapes::add_rollups(&all);
     let source = match (&pack, own.is_some()) {
         (Some((label, _)), true) => format!("pack {label}; {source}"),
         (Some((label, _)), false) => format!("pack {label}"),

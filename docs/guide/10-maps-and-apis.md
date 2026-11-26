@@ -1534,6 +1534,59 @@ curl -s 'http://localhost:7878/ds/tiles/facets/Section' | grep -o '"key":"qualit
 It is computed on the map only, as a `tts:select` facet: the OGC API and the other readers
 have no such property. A class whose shape has a facet of key `quality` keeps its own.
 
+### Filter a line by its tracks
+
+Some properties belong to the parts of a feature: a section of line has tracks, and each
+track has its own ETCS level and speed. A shape can roll its facets up to the parent with
+`tts:rollsUpTo`, the path from a part to its parent and the parent's class. The map then gives
+the parent the parts' facets it lacks: a section matches a filter when one of its tracks does,
+counts once per value of its tracks, and is coloured by its fastest track. Tracks of two
+sections:
+
+<!-- test: file tracks.ttl -->
+```turtle
+@prefix rail: <https://example.org/rail#> .
+
+rail:T1 a rail:Track ; rail:isPartOf rail:S03 ; rail:etcs "2" ; rail:trackSpeed 160 .
+rail:T2 a rail:Track ; rail:isPartOf rail:S03 ; rail:etcs "1" ; rail:trackSpeed 140 .
+rail:T3 a rail:Track ; rail:isPartOf rail:S05 ; rail:etcs "1" ; rail:trackSpeed 120 .
+```
+
+The tracks' shape names their section through `rail:isPartOf`:
+
+<!-- test: file Track.ttl -->
+```turtle
+@prefix rail: <https://example.org/rail#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix tts: <http://w3id.org/tripletrail/shapes#> .
+
+rail:TrackShape a sh:NodeShape ;
+  sh:targetClass rail:Track ;
+  tts:rollsUpTo [ sh:path rail:isPartOf ; sh:class rail:Section ] ;
+  sh:property [ sh:path rail:etcs ; tts:key "etcs" ; sh:name "ETCS level" ;
+                tts:facet tts:Facet-Values ] ,
+    [ sh:path rail:trackSpeed ; tts:key "trackSpeed" ; tts:facet tts:Facet-Range ] .
+```
+
+<!-- test: run -->
+```sh
+curl -s -X POST 'http://localhost:7878/ds/data' -H 'Content-Type: text/turtle' --data-binary @tracks.ttl -o /dev/null
+curl -s -X PUT 'http://localhost:7878/$/datasets/ds/shapes/files/Track.ttl' --data-binary @Track.ttl -o /dev/null
+curl -s 'http://localhost:7878/ds/tiles/facets/Section' | grep -o '"key":"etcs"[^]]*]'
+curl -s 'http://localhost:7878/ds/tiles/facets/Section?etcs=2' | grep -o '"features":[0-9]*' | head -1
+```
+
+<!-- test: output -->
+```text
+"key":"etcs","more":false,"title":"ETCS level","values":[{"count":2,"label":null,"value":"1"},{"count":1,"label":null,"value":"2"}]
+"features":1
+```
+
+S03 counts for both levels, S05 for level 1, and the filter on level 2 keeps S03. A filter
+scoped to the tracks (`Track.etcs=2` on a map of several layers) leaves the sections alone. The
+rolled-up facets are the map's only: the OGC API's sections have no `etcs`. A facet computed
+with `tts:select` stays with the parts.
+
 ### Show the features of a time
 
 Features with a time, such as works on the network with a start and an end, can be shown for

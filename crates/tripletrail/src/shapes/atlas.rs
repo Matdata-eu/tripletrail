@@ -16,6 +16,7 @@
 //! | `atlas:order` of a node shape | `sh:order` (where the map's legend lists the class) |
 //! | `atlas:unit` of a facet (a QUDT unit's local name) | `qudt:hasUnit` |
 //! | `atlas:colorBy` of a facet | `tts:colorBy` (suggested first in the map's "Colour by") |
+//! | `atlas:geometryFrom P` of a running track or track, with a `section-of-line` shape | `tts:rollsUpTo [ sh:path P ; sh:class ]` the section's class: the section takes its tracks' facets on the map, as RINF Atlas's `ROLLUP` |
 //! | a view (`atlas:view`, in `views/`) | an `tts:MapView`: `tts:key`, `rdfs:label`, `rdfs:comment`, `sh:order` |
 //! | `atlas:viewClass` of a view | `tts:showsClass`: the class of the node shape with that `atlas:key` |
 //! | `atlas:filter [ atlas:facet ; sh:in ]` of a view | `tts:filter [ tts:key ; sh:in ]` |
@@ -38,6 +39,10 @@ use oxigraph::model::{
     Triple, TripleRef,
 };
 use std::collections::BTreeMap;
+
+/// The classes (by `atlas:key`) RINF Atlas counts, filters and colours by the facets of their
+/// parts, with the parts' classes: its `ROLLUP` (`api/app/query.py`).
+const ROLLUP: [(&str, &[&str]); 1] = [("section-of-line", &["running-track", "track"])];
 
 const QUDT_UNIT: &str = "http://qudt.org/vocab/unit/";
 
@@ -175,6 +180,31 @@ pub fn from_atlas(shapes: &Graph, hidden_from: &[Reader]) -> (Graph, Vec<String>
                     before: Some(from.into_owned()),
                     path: g.clone(),
                 });
+            }
+        }
+        // RINF Atlas rolls the facets of a section's tracks up to the section (its `ROLLUP`):
+        // the tracks' link to their section, as `tts:rollsUpTo` (#248).
+        let own_key = match shapes.object_for_subject_predicate(node_ref, &key) {
+            Some(TermRef::Literal(l)) => l.value().to_owned(),
+            _ => String::new(),
+        };
+        for (parent_key, parts) in ROLLUP {
+            if !parts.contains(&own_key.as_str()) {
+                continue;
+            }
+            let parent_class = nodes.iter().find_map(|n| {
+                matches!(shapes.object_for_subject_predicate(n, &key),
+                    Some(TermRef::Literal(l)) if l.value() == parent_key)
+                .then(|| shapes.object_for_subject_predicate(n, &sh("targetClass")))
+                .flatten()
+            });
+            let link = shapes.object_for_subject_predicate(node_ref, &atlas("geometryFrom"));
+            if let (Some(TermRef::NamedNode(class)), Some(link)) = (parent_class, link) {
+                let up = BlankNode::default();
+                let link = copy_term(shapes, &mut out, link);
+                out.insert(TripleRef::new(subject, &tts("rollsUpTo"), &up));
+                out.insert(TripleRef::new(&up, &sh("path"), &link));
+                out.insert(TripleRef::new(&up, &sh("class"), class));
             }
         }
         // One path way, as TripleTrail's readers read the first: a path per candidate, as the
@@ -838,6 +868,34 @@ ex:fast a sh:NodeShape ; atlas:view "fast" ; rdfs:label "Fast lines" ; rdfs:comm
         #[allow(deprecated)]
         let answer = store.query(query.as_str()).unwrap();
         matches!(answer, oxigraph::sparql::QueryResults::Boolean(true))
+    }
+
+    #[test]
+    fn tracks_roll_up_to_their_section() {
+        let shapes = r##"
+PREFIX atlas: <https://rinf-atlas.matdata.eu/ns#>
+PREFIX sh: <http://www.w3.org/ns/shacl#>
+PREFIX era: <http://data.europa.eu/949/>
+PREFIX ex: <https://example.org/>
+ex:sol a sh:NodeShape ; atlas:key "section-of-line" ; sh:targetClass era:SectionOfLine .
+ex:rt a sh:NodeShape ; atlas:key "running-track" ; sh:targetClass era:RunningTrack ;
+  atlas:geometryFrom [ sh:alternativePath ( era:isPartOf [ sh:inversePath era:hasPart ] ) ] .
+ex:op a sh:NodeShape ; atlas:key "op" ; sh:targetClass era:OperationalPoint ;
+  atlas:geometryFrom era:isPartOf .
+"##;
+        let (set, _) = from_atlas(&parse(shapes), &[]);
+        assert!(
+            super::super::check(&set).is_empty(),
+            "{:?}",
+            super::super::check(&set)
+        );
+        assert!(ask(
+            &set,
+            "ex:rt tts:rollsUpTo [ sh:class era:SectionOfLine ; \
+             sh:path [ sh:alternativePath ( era:isPartOf [ sh:inversePath era:hasPart ] ) ] ]"
+        ));
+        // Only the classes RINF Atlas rolls up.
+        assert!(!ask(&set, "ex:op tts:rollsUpTo ?u"));
     }
 
     #[test]
