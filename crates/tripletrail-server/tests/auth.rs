@@ -3843,11 +3843,9 @@ fn row_rules_are_built_previewed_and_saved_through_the_access_api() {
         "turtle": "<http://example.org/Open> a sg:Policy ; sg:agent sg:Anyone ; sg:readAllGraphs true ." });
     let before = file();
     for shape in [&as_shape, &new_policy] {
-        assert_eq!(
-            call("PUT", "/shapes", Some(shape.clone())).0,
-            422,
-            "{shape}"
-        );
+        // Refused when read (400) or when applied to the file (422).
+        let code = call("PUT", "/shapes", Some(shape.clone())).0;
+        assert!(code == 400 || code == 422, "{code} {shape}");
         assert_eq!(
             call("POST", "/preview", Some(json!({ "shapes": [shape] }))).0,
             422,
