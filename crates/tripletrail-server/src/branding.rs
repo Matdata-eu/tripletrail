@@ -179,7 +179,21 @@ impl Branding {
                     && !e.chars().any(|c| {
                         c.is_whitespace()
                             || c.is_control()
-                            || matches!(c, '"' | '<' | '>' | '\\' | ',' | ';' | '(' | ')')
+                            || matches!(
+                                c,
+                                '"' | '<'
+                                    | '>'
+                                    | '\\'
+                                    | ','
+                                    | ';'
+                                    | '('
+                                    | ')'
+                                    | '{'
+                                    | '}'
+                                    | '|'
+                                    | '^'
+                                    | '`'
+                            )
                     });
                 if !ok {
                     return Err(format!("--contact-email: {e} is not an e-mail address"));
@@ -481,7 +495,15 @@ fn image(option: &str, value: &str) -> Result<Image, String> {
         if value
             .chars()
             .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '"' | '<' | '>' | '\\'))
-            || value.split("://").nth(1).is_none_or(|rest| rest.is_empty())
+            || value.split("://").nth(1).is_none_or(|rest| {
+                // The host goes into a Content-Security-Policy as it is: letters, digits,
+                // dots, dashes, a port and an IPv6 address's brackets only.
+                let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+                host.is_empty()
+                    || !host.chars().all(|c| {
+                        c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']')
+                    })
+            })
         {
             return Err(format!("{option}: {value} is not a URL"));
         }
@@ -640,6 +662,9 @@ mod tests {
             ("javascript:alert(1)", "file or an http(s) URL"),
             ("ftp://example.org/x.svg", "file or an http(s) URL"),
             ("https://example.org/a\"b.svg", "not a URL"),
+            ("https://example.org;script-src/x.svg", "not a URL"),
+            ("https://user@example.org/x.svg", "not a URL"),
+            ("https://a.org,b.org/x.svg", "not a URL"),
             ("logo.gif", "not an SVG"),
             ("/no/such/logo.svg", "cannot read"),
         ] {
@@ -742,6 +767,9 @@ mod tests {
             "a b@example.org",
             "<a@example.org>",
             "a@b@example.org",
+            "a{b}@example.org",
+            "a|b@example.org",
+            "a^b`c@example.org",
         ] {
             assert!(
                 refused(None, None, None, &[], None, Some(bad)).contains("e-mail"),

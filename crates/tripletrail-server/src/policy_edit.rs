@@ -23,7 +23,23 @@ pub struct PolicySpec {
     /// `sg:readGraph`: graphs read, not written.
     pub read_graphs: Vec<String>,
     pub write_graphs: Vec<String>,
+    /// The row rules (enterprise#8): `None` keeps those the file has, for a client that does
+    /// not know them; `Some` writes these.
+    pub rows: Option<Vec<RowSpec>>,
+    /// `sg:hideReferences`, when given.
+    pub hide_references: Option<bool>,
 }
+
+/// One row rule of a policy: `sg:visibleIf`, `sg:hideProperties` or `sg:editableIf` (the
+/// local name, in `rule`) and the IRI of its shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowSpec {
+    pub rule: String,
+    pub shape: String,
+}
+
+/// The local names of the row rules a policy may have.
+pub const ROW_KINDS: &[&str] = &["visibleIf", "hideProperties", "editableIf"];
 
 impl PolicySpec {
     pub fn to_json(&self) -> serde_json::Value {
@@ -35,6 +51,11 @@ impl PolicySpec {
             "writeAllGraphs": self.write_all,
             "readGraphs": self.read_graphs,
             "writeGraphs": self.write_graphs,
+            "rowRules": self.rows.as_ref().map(|rows| rows
+                .iter()
+                .map(|r| serde_json::json!({ "rule": format!("sg:{}", r.rule), "shape": r.shape }))
+                .collect::<Vec<_>>()).unwrap_or_default(),
+            "hideReferences": self.hide_references,
         })
     }
 
@@ -62,6 +83,34 @@ impl PolicySpec {
             }
         };
         let write_all = flag("writeAllGraphs")?;
+        let rows = match v.get("rowRules") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::Array(a)) => Some(
+                a.iter()
+                    .map(|r| {
+                        let rule = r["rule"].as_str().unwrap_or_default();
+                        let rule = rule.strip_prefix("sg:").unwrap_or(rule);
+                        let rule = rule.strip_prefix(SG).unwrap_or(rule);
+                        if !ROW_KINDS.contains(&rule) {
+                            return Err(format!(
+                                "rowRules: rule must be sg:visibleIf, sg:hideProperties or sg:editableIf, not {}",
+                                r["rule"]
+                            ));
+                        }
+                        let shape = r["shape"]
+                            .as_str()
+                            .ok_or("rowRules: shape (the shape's IRI) is missing")?;
+                        NamedNode::new(shape).map_err(|e| format!("rowRules: shape {shape}: {e}"))?;
+                        Ok(RowSpec { rule: rule.to_owned(), shape: shape.to_owned() })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+            ),
+            Some(_) => return Err("rowRules must be a list".to_owned()),
+        };
+        let hide_references = match v.get("hideReferences") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(b) => Some(b.as_bool().ok_or("hideReferences must be true or false")?),
+        };
         Ok(Self {
             id: v
                 .get("id")
@@ -74,6 +123,8 @@ impl PolicySpec {
             write_all,
             read_graphs: strings("readGraphs")?,
             write_graphs: strings("writeGraphs")?,
+            rows,
+            hide_references,
         })
     }
 }
@@ -237,6 +288,8 @@ fn term(t: &Term, prefixes: &[(String, String)]) -> String {
 /// The Turtle block of a policy, with `extra` (its triples outside `sg:`) kept.
 fn block(
     policy: &PolicySpec,
+    rows: &[RowSpec],
+    hide_references: Option<bool>,
     extra: &[(NamedNode, Term)],
     prefixes: &[(String, String)],
 ) -> String {
@@ -269,6 +322,16 @@ fn block(
     for g in &policy.write_graphs {
         lines.push(format!("    {} {}", sg("writeGraph"), compact(g, prefixes)));
     }
+    for r in rows {
+        lines.push(format!(
+            "    {} {}",
+            sg(&r.rule),
+            compact(&r.shape, prefixes)
+        ));
+    }
+    if let Some(h) = hide_references {
+        lines.push(format!("    {} {h}", sg("hideReferences")));
+    }
     for (p, o) in extra {
         lines.push(format!(
             "    {} {}",
@@ -279,9 +342,6 @@ fn block(
     format!("{} .", lines.join(" ;\n"))
 }
 
-/// The statements about `id` (a policy IRI), and the triples of the file outside `sg:` about
-/// it.
-/// A policy's statements, and its triples outside `sg:`.
 /// The `sg:` terms of row rules.
 const ROW_RULES: &[&str] = &[
     "visibleIf",
@@ -291,12 +351,23 @@ const ROW_RULES: &[&str] = &[
     "allowTransitivePaths",
 ];
 
-type Found = (Vec<Span>, Vec<(NamedNode, Term)>);
+/// What the file says about a policy: its statements, its triples outside `sg:`, its row
+/// rules and its `sg:hideReferences`.
+struct Found {
+    spans: Vec<Span>,
+    extra: Vec<(NamedNode, Term)>,
+    rows: Vec<RowSpec>,
+    hide_references: Option<bool>,
+}
 
 fn find(text: &str, id: &str) -> Result<Found, String> {
     let mut directives = String::new();
-    let mut found = Vec::new();
-    let mut extra = Vec::new();
+    let mut found = Found {
+        spans: Vec::new(),
+        extra: Vec::new(),
+        rows: Vec::new(),
+        hide_references: None,
+    };
     for span in statements(text) {
         let statement = &text[span.start..span.end];
         if is_directive(statement) {
@@ -307,33 +378,47 @@ fn find(text: &str, id: &str) -> Result<Found, String> {
         let triples = triples(&directives, statement)?;
         let about =
             |s: &NamedOrBlankNode| matches!(s, NamedOrBlankNode::NamedNode(n) if n.as_str() == id);
-        if triples.first().is_some_and(|t| about(&t.subject)) {
-            // The pages do not show row rules (#202), so they leave such a policy alone
-            // rather than write it back without them.
-            if let Some(t) = triples.iter().find(|t| {
-                about(&t.subject)
-                    && ROW_RULES
-                        .iter()
-                        .any(|r| t.predicate.as_str().strip_prefix(SG) == Some(r))
-            }) {
-                return Err(format!(
-                    "Policy {id} has row-level rules (sg:{}): edit it in its file",
-                    t.predicate.as_str().strip_prefix(SG).unwrap_or_default()
-                ));
-            }
-            found.push(span);
-            extra.extend(
-                triples
-                    .into_iter()
-                    .filter(|t| about(&t.subject) && !t.predicate.as_str().starts_with(SG))
-                    .filter(|t| {
-                        t.predicate.as_str() != "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
-                    })
-                    .map(|t| (t.predicate, t.object)),
-            );
+        if !triples.first().is_some_and(|t| about(&t.subject)) {
+            continue;
         }
+        for t in triples.iter().filter(|t| about(&t.subject)) {
+            let Some(local) = t.predicate.as_str().strip_prefix(SG) else {
+                continue;
+            };
+            if !ROW_RULES.contains(&local) {
+                continue;
+            }
+            match (&t.object, local) {
+                (Term::NamedNode(shape), _) if ROW_KINDS.contains(&local) => {
+                    found.rows.push(RowSpec {
+                        rule: local.to_owned(),
+                        shape: shape.as_str().to_owned(),
+                    });
+                }
+                (Term::Literal(l), "hideReferences") => {
+                    found.hide_references = Some(matches!(l.value(), "true" | "1"));
+                }
+                // A shape written in place (a blank node) is in the same statement, and the
+                // pages would lose it: such a policy is left to its file (#202).
+                _ => {
+                    return Err(format!(
+                        "Policy {id} has a row rule (sg:{local}) the pages cannot write back: edit it in its file"
+                    ));
+                }
+            }
+        }
+        found.spans.push(span);
+        found.extra.extend(
+            triples
+                .into_iter()
+                .filter(|t| about(&t.subject) && !t.predicate.as_str().starts_with(SG))
+                .filter(|t| {
+                    t.predicate.as_str() != "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                })
+                .map(|t| (t.predicate, t.object)),
+        );
     }
-    Ok((found, extra))
+    Ok(found)
 }
 
 /// Removes the statements in `spans` (with the line break after each), and puts `with` where
@@ -378,7 +463,14 @@ pub fn write(text: &str, policy: &PolicySpec) -> Result<String, String> {
     if policy.agents.is_empty() && policy.groups.is_empty() {
         return Err("A policy needs an agent or a group".to_owned());
     }
-    let (spans, extra) = find(text, &policy.id)?;
+    let found = find(text, &policy.id)?;
+    let rows = policy.rows.as_ref().unwrap_or(&found.rows);
+    let hide_references = if policy.rows.is_some() {
+        policy.hide_references
+    } else {
+        policy.hide_references.or(found.hide_references)
+    };
+    let spans = found.spans;
     let mut text = text.to_owned();
     let mut prefixes = prefixes(&text);
     // The sg: prefix, when the file has none for the vocabulary and the name is free.
@@ -393,7 +485,7 @@ pub fn write(text: &str, policy: &PolicySpec) -> Result<String, String> {
         prefixes.push(("sg".to_owned(), SG.to_owned()));
         return write(&text, policy);
     }
-    let block = block(policy, &extra, &prefixes);
+    let block = block(policy, rows, hide_references, &found.extra, &prefixes);
     Ok(if spans.is_empty() {
         let sep = if text.is_empty() || text.ends_with("\n\n") {
             ""
@@ -410,11 +502,331 @@ pub fn write(text: &str, policy: &PolicySpec) -> Result<String, String> {
 
 /// `text` without the statements about the policy `id`.
 pub fn remove(text: &str, id: &str) -> Result<String, String> {
-    let (spans, _) = find(text, id)?;
+    let spans = find(text, id)?.spans;
     if spans.is_empty() {
         return Err(format!("No policy {id} in the file"));
     }
     Ok(splice(text, &spans, None))
+}
+
+const SHACL: &str = "http://www.w3.org/ns/shacl#";
+const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+/// The directives of `text` (its `@prefix` and `@base` lines), for reading a piece of Turtle
+/// with the file's prefixes.
+fn directives(text: &str) -> String {
+    statements(text)
+        .into_iter()
+        .map(|s| &text[s.start..s.end])
+        .filter(|s| is_directive(s))
+        .map(|s| format!("{s}\n"))
+        .collect()
+}
+
+/// Turtle for a predicate: `a` for `rdf:type`.
+fn predicate(p: &str, prefixes: &[(String, String)]) -> String {
+    if p == format!("{RDF}type") {
+        "a".to_owned()
+    } else {
+        compact(p, prefixes)
+    }
+}
+
+/// Turtle for the object `o`: a blank node written in place (`[ … ]`, or `( … )` for a list),
+/// with its own triples, at `depth` levels of indentation.
+fn object(
+    o: &Term,
+    triples: &[Triple],
+    prefixes: &[(String, String)],
+    depth: usize,
+    seen: &mut Vec<tripletrail::oxigraph::model::BlankNode>,
+) -> Result<String, String> {
+    let Term::BlankNode(b) = o else {
+        return Ok(term(o, prefixes));
+    };
+    if seen.contains(b) {
+        return Err("A blank node of the shape is used twice or in a cycle".to_owned());
+    }
+    seen.push(b.clone());
+    let about: Vec<&Triple> = triples
+        .iter()
+        .filter(|t| matches!(&t.subject, NamedOrBlankNode::BlankNode(s) if s == b))
+        .collect();
+    let first = format!("{RDF}first");
+    let rest = format!("{RDF}rest");
+    // A list: rdf:first and rdf:rest only.
+    if !about.is_empty()
+        && about
+            .iter()
+            .all(|t| t.predicate.as_str() == first || t.predicate.as_str() == rest)
+    {
+        let mut items = Vec::new();
+        let mut node = o.clone();
+        loop {
+            match &node {
+                Term::NamedNode(n) if n.as_str() == format!("{RDF}nil") => break,
+                Term::BlankNode(b) => {
+                    let get = |p: &str| {
+                        triples.iter().find(|t| {
+                            matches!(&t.subject, NamedOrBlankNode::BlankNode(s) if s == b)
+                                && t.predicate.as_str() == p
+                        })
+                    };
+                    let (Some(f), Some(r)) = (get(&first), get(&rest)) else {
+                        return Err("A list of the shape is not well formed".to_owned());
+                    };
+                    if !items.is_empty() {
+                        if seen.contains(b) {
+                            return Err("A list of the shape is in a cycle".to_owned());
+                        }
+                        seen.push(b.clone());
+                    }
+                    items.push(object(&f.object, triples, prefixes, depth + 1, seen)?);
+                    node = r.object.clone();
+                }
+                _ => return Err("A list of the shape is not well formed".to_owned()),
+            }
+        }
+        return Ok(format!("( {} )", items.join(" ")));
+    }
+    if about.is_empty() {
+        return Ok("[]".to_owned());
+    }
+    let pad = "    ".repeat(depth + 1);
+    let mut lines = Vec::new();
+    for t in about {
+        lines.push(format!(
+            "{pad}{} {}",
+            predicate(t.predicate.as_str(), prefixes),
+            object(&t.object, triples, prefixes, depth + 1, seen)?
+        ));
+    }
+    Ok(format!(
+        "[\n{}\n{}]",
+        lines.join(" ;\n"),
+        "    ".repeat(depth)
+    ))
+}
+
+/// The Turtle block of the shape `id`, from `triples`: those about it, with the blank nodes
+/// they name written in place. Every triple must be about `id` or one of those blank nodes.
+fn shape_block(
+    id: &str,
+    triples: &[Triple],
+    prefixes: &[(String, String)],
+) -> Result<String, String> {
+    let mut lines = Vec::new();
+    let mut seen = Vec::new();
+    let mut typed = false;
+    for t in triples
+        .iter()
+        .filter(|t| matches!(&t.subject, NamedOrBlankNode::NamedNode(n) if n.as_str() == id))
+    {
+        if t.predicate.as_str() == format!("{RDF}type") {
+            typed = true;
+        }
+        lines.push(format!(
+            "    {} {}",
+            predicate(t.predicate.as_str(), prefixes),
+            object(&t.object, triples, prefixes, 1, &mut seen)?
+        ));
+    }
+    if lines.is_empty() {
+        return Err(format!("The Turtle has no triples about the shape {id}"));
+    }
+    if !typed {
+        lines.insert(
+            0,
+            format!("    a {}", compact(&format!("{SHACL}NodeShape"), prefixes)),
+        );
+    }
+    let written = triples.iter().filter(|t| match &t.subject {
+        NamedOrBlankNode::NamedNode(n) => n.as_str() == id,
+        NamedOrBlankNode::BlankNode(b) => seen.contains(b),
+    });
+    if written.count() != triples.len() {
+        return Err(format!(
+            "The Turtle may only describe the shape {id} and the blank nodes it uses"
+        ));
+    }
+    let first = lines.remove(0);
+    let first = first.trim_start();
+    Ok(if lines.is_empty() {
+        format!("{} {first} .", compact(id, prefixes))
+    } else {
+        format!(
+            "{} {first} ;\n{} .",
+            compact(id, prefixes),
+            lines.join(" ;\n")
+        )
+    })
+}
+
+/// Every triple of a policy file's text.
+fn file_triples(text: &str) -> Result<Vec<Triple>, String> {
+    RdfParser::from_format(RdfFormat::Turtle)
+        .for_slice(text.as_bytes())
+        .map(|t| t.map(Triple::from).map_err(|e| e.to_string()))
+        .collect()
+}
+
+/// Whether `triples` type `id` as an `sg:Policy`.
+fn is_policy(triples: &[Triple], id: &str) -> bool {
+    triples.iter().any(|t| {
+        matches!(&t.subject, NamedOrBlankNode::NamedNode(n) if n.as_str() == id)
+            && t.predicate.as_str() == format!("{RDF}type")
+            && matches!(&t.object, Term::NamedNode(n) if n.as_str() == format!("{SG}Policy"))
+    })
+}
+
+/// The statements whose subject is `id`.
+fn spans_about(text: &str, id: &str) -> Result<Vec<Span>, String> {
+    let mut directives = String::new();
+    let mut found = Vec::new();
+    for span in statements(text) {
+        let statement = &text[span.start..span.end];
+        if is_directive(statement) {
+            directives.push_str(statement);
+            directives.push('\n');
+            continue;
+        }
+        let triples = triples(&directives, statement)?;
+        if triples.first().is_some_and(
+            |t| matches!(&t.subject, NamedOrBlankNode::NamedNode(n) if n.as_str() == id),
+        ) {
+            found.push(span);
+        }
+    }
+    Ok(found)
+}
+
+/// `text` with the shape `id` (enterprise#8) written from `turtle`, which may use the file's
+/// prefixes and declare its own: replacing the statements about it, or appended. The shape
+/// is written again from its triples, with the file's prefixes (and `sh:`, added when the
+/// file has no prefix for SHACL), so a page's Turtle never breaks the file around it.
+pub fn write_shape(text: &str, id: &str, turtle: &str) -> Result<String, String> {
+    NamedNode::new(id).map_err(|e| format!("Shape id {id}: {e}"))?;
+    // A shape is never a policy: the shapes endpoint must not write or replace one.
+    if is_policy(&file_triples(text)?, id) {
+        return Err(format!("{id} is a policy, not a shape"));
+    }
+    let mut text = text.to_owned();
+    let mut prefixes = prefixes(&text);
+    for (name, iri) in [("sh", SHACL), ("sg", SG)] {
+        if !prefixes.iter().any(|(_, n)| n == iri) && !prefixes.iter().any(|(p, _)| p == name) {
+            let at = text
+                .split_inclusive('\n')
+                .take_while(|l| l.trim_start().starts_with('#'))
+                .map(str::len)
+                .sum();
+            text.insert_str(at, &format!("@prefix {name}: <{iri}> .\n"));
+            prefixes.push((name.to_owned(), iri.to_owned()));
+        }
+    }
+    let triples = triples(&directives(&text), turtle)
+        .map_err(|e| format!("The shape's Turtle does not parse: {e}"))?;
+    if let Some(t) = triples.iter().find(|t| {
+        t.predicate.as_str().starts_with(SG)
+            || (t.predicate.as_str() == format!("{RDF}type")
+                && matches!(&t.object, Term::NamedNode(n) if n.as_str().starts_with(SG)))
+    }) {
+        return Err(format!(
+            "A shape may not use the sparql-guard vocabulary as a predicate or a type ({}): policies are written as policies",
+            t.predicate
+        ));
+    }
+    let block = shape_block(id, &triples, &prefixes)?;
+    let spans = spans_about(&text, id)?;
+    Ok(if spans.is_empty() {
+        let sep = if text.is_empty() || text.ends_with("\n\n") {
+            ""
+        } else if text.ends_with('\n') {
+            "\n"
+        } else {
+            "\n\n"
+        };
+        format!("{text}{sep}{block}\n")
+    } else {
+        splice(&text, &spans, Some(&block))
+    })
+}
+
+/// `text` without the statements about the shape `id`.
+pub fn remove_shape(text: &str, id: &str) -> Result<String, String> {
+    let all = file_triples(text)?;
+    if is_policy(&all, id) {
+        return Err(format!("{id} is a policy, not a shape"));
+    }
+    let typed = |class: &str| {
+        all.iter().any(|t| {
+            matches!(&t.subject, NamedOrBlankNode::NamedNode(n) if n.as_str() == id)
+                && t.predicate.as_str() == format!("{RDF}type")
+                && matches!(&t.object, Term::NamedNode(n) if n.as_str() == class)
+        })
+    };
+    if !typed(&format!("{SHACL}NodeShape")) {
+        return Err(format!("No shape {id} in the file"));
+    }
+    if let Some(t) = all.iter().find(|t| {
+        matches!(&t.object, Term::NamedNode(n) if n.as_str() == id)
+            && t.predicate
+                .as_str()
+                .strip_prefix(SG)
+                .is_some_and(|l| ROW_KINDS.contains(&l))
+    }) {
+        return Err(format!(
+            "Shape {id} is used by the rule sg:{} of policy {}: remove the rule first",
+            t.predicate.as_str().strip_prefix(SG).unwrap_or_default(),
+            t.subject
+        ));
+    }
+    let spans = spans_about(text, id)?;
+    if spans.is_empty() {
+        return Err(format!("No shape {id} in the file"));
+    }
+    Ok(splice(text, &spans, None))
+}
+
+/// The node shapes of a policy file's text, each as Turtle written from its triples (see
+/// [`write_shape`]), with its IRI.
+pub fn shapes(text: &str) -> Result<Vec<(String, String)>, String> {
+    let all: Vec<Triple> = RdfParser::from_format(RdfFormat::Turtle)
+        .for_slice(text.as_bytes())
+        .map(|t| t.map(Triple::from).map_err(|e| e.to_string()))
+        .collect::<Result<_, _>>()?;
+    let prefixes = prefixes(text);
+    let node_shape = format!("{SHACL}NodeShape");
+    let mut out = Vec::new();
+    for t in &all {
+        if let (NamedOrBlankNode::NamedNode(id), Term::NamedNode(class)) = (&t.subject, &t.object)
+            && t.predicate.as_str() == format!("{RDF}type")
+            && class.as_str() == node_shape
+        {
+            // Its triples and those of the blank nodes under it.
+            let mut keep: Vec<Triple> = Vec::new();
+            let mut todo = vec![NamedOrBlankNode::NamedNode(id.clone())];
+            while let Some(s) = todo.pop() {
+                for t in all.iter().filter(|t| t.subject == s) {
+                    if let Term::BlankNode(b) = &t.object
+                        && !keep
+                            .iter()
+                            .any(|k| matches!(&k.subject, NamedOrBlankNode::BlankNode(x) if x == b))
+                    {
+                        todo.push(NamedOrBlankNode::BlankNode(b.clone()));
+                    }
+                    if !keep.contains(t) {
+                        keep.push(t.clone());
+                    }
+                }
+            }
+            if let Ok(block) = shape_block(id.as_str(), &keep, &prefixes) {
+                out.push((id.as_str().to_owned(), block));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -515,6 +927,186 @@ ex:Writers a sg:Policy ;
                 }
             )
             .is_err()
+        );
+    }
+
+    const ROWS: &str = "@prefix sg: <https://matdata.eu/ns/sparql-guard#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+
+ex:Contractors a sg:Policy ; sg:group \"contractor\" ; sg:readAllGraphs true ;
+    sg:visibleIf ex:OwnArea ; sg:hideReferences false .
+
+ex:OwnArea a sh:NodeShape ; sh:targetClass ex:Project ;
+    sh:property [ sh:path ex:area ; sh:hasValue sg:requestingAgent ] .
+";
+
+    #[test]
+    fn row_rules_are_kept_when_a_client_leaves_them_out_and_written_when_it_gives_them() {
+        let mut spec = PolicySpec {
+            id: "http://example.org/Contractors".to_owned(),
+            groups: vec!["contractor".to_owned()],
+            read_all: true,
+            ..Default::default()
+        };
+        let kept = write(ROWS, &spec).unwrap();
+        assert!(kept.contains("sg:visibleIf ex:OwnArea"), "{kept}");
+        assert!(kept.contains("sg:hideReferences false"), "{kept}");
+        spec.rows = Some(vec![RowSpec {
+            rule: "editableIf".to_owned(),
+            shape: "http://example.org/OwnArea".to_owned(),
+        }]);
+        let changed = write(ROWS, &spec).unwrap();
+        assert!(changed.contains("sg:editableIf ex:OwnArea"), "{changed}");
+        assert!(
+            !changed.contains("visibleIf") && !changed.contains("hideReferences"),
+            "{changed}"
+        );
+        // As JSON, and back.
+        let json = spec.to_json();
+        assert_eq!(json["rowRules"][0]["rule"], "sg:editableIf");
+        assert_eq!(PolicySpec::from_json(&json).unwrap().rows, spec.rows);
+        let bad = serde_json::json!({ "id": "urn:p", "groups": ["g"], "rowRules": [{ "rule": "sg:hideAll", "shape": "urn:s" }] });
+        assert!(PolicySpec::from_json(&bad).is_err());
+        // A shape written in place stays in its file.
+        let inline = "@prefix sg: <https://matdata.eu/ns/sparql-guard#> .
+            <urn:p> a sg:Policy ; sg:group \"g\" ; sg:visibleIf [ a <http://www.w3.org/ns/shacl#NodeShape> ] .";
+        let err = write(
+            inline,
+            &PolicySpec {
+                id: "urn:p".to_owned(),
+                groups: vec!["g".to_owned()],
+                ..Default::default()
+            },
+        );
+        assert!(err.unwrap_err().contains("edit it in its file"));
+    }
+
+    #[test]
+    fn shapes_are_written_from_their_triples_and_listed() {
+        let turtle = "@prefix ex: <http://example.org/> .
+            ex:OwnArea a sh:NodeShape ; sh:targetClass ex:Project ;
+              sh:property [ sh:path ( ex:assignedTo ex:area ) ; sh:in ( ex:north ex:east ) ] .";
+        let written = write_shape(ROWS, "http://example.org/OwnArea", turtle).unwrap();
+        assert_eq!(
+            written.matches("ex:OwnArea a sh:NodeShape").count(),
+            1,
+            "{written}"
+        );
+        assert!(
+            written.contains("sh:path ( ex:assignedTo ex:area )"),
+            "{written}"
+        );
+        assert!(written.contains("sh:in ( ex:north ex:east )"), "{written}");
+        assert!(!written.contains("requestingAgent"), "{written}");
+        assert!(written.contains("sg:visibleIf ex:OwnArea"), "{written}");
+        // The file still reads, with the same policy.
+        assert!(
+            RdfParser::from_format(RdfFormat::Turtle)
+                .for_slice(written.as_bytes())
+                .all(|t| t.is_ok())
+        );
+        assert_eq!(
+            find(&written, "http://example.org/Contractors")
+                .unwrap()
+                .rows
+                .len(),
+            1
+        );
+        let listed = shapes(&written).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0, "http://example.org/OwnArea");
+        assert!(
+            listed[0].1.contains("sh:in ( ex:north ex:east )"),
+            "{}",
+            listed[0].1
+        );
+        // A new shape is appended, with sh: added to a file without it.
+        let fresh = write_shape(
+            "@prefix ex: <http://example.org/> .\n",
+            "http://example.org/Open",
+            "<http://example.org/Open> <http://www.w3.org/ns/shacl#targetClass> ex:Doc .",
+        )
+        .unwrap();
+        assert!(
+            fresh.contains("@prefix sh: <http://www.w3.org/ns/shacl#> ."),
+            "{fresh}"
+        );
+        assert!(
+            fresh.contains("ex:Open a sh:NodeShape ;\n    sh:targetClass ex:Doc ."),
+            "{fresh}"
+        );
+        // Triples about anything else are refused, and so is Turtle that does not parse.
+        assert!(
+            write_shape(
+                ROWS,
+                "http://example.org/OwnArea",
+                "ex:Other a sh:NodeShape ."
+            )
+            .is_err()
+        );
+        assert!(
+            write_shape(
+                ROWS,
+                "http://example.org/OwnArea",
+                "ex:OwnArea sh:targetClass"
+            )
+            .is_err()
+        );
+        // A shape a rule uses stays, with the policy named.
+        let used = remove_shape(&written, "http://example.org/OwnArea").unwrap_err();
+        assert!(
+            used.contains("http://example.org/Contractors") && used.contains("sg:visibleIf"),
+            "{used}"
+        );
+        let written = written.replace(" ;\n    sg:visibleIf ex:OwnArea", "");
+        assert!(!written.contains("sg:visibleIf"), "{written}");
+        let removed = remove_shape(&written, "http://example.org/OwnArea").unwrap();
+        assert!(!removed.contains("ex:OwnArea a"), "{removed}");
+        assert!(remove_shape(&removed, "http://example.org/OwnArea").is_err());
+    }
+
+    #[test]
+    fn the_shapes_writer_never_writes_or_removes_a_policy() {
+        let policy = "http://example.org/Contractors";
+        // An id the file types as a policy.
+        let as_shape = write_shape(
+            ROWS,
+            policy,
+            "<http://example.org/Contractors> sh:targetClass <urn:c> .",
+        );
+        assert!(as_shape.unwrap_err().contains("is a policy"));
+        assert!(
+            remove_shape(ROWS, policy)
+                .unwrap_err()
+                .contains("is a policy")
+        );
+        // Turtle that makes a new policy, or gives a shape sg: terms.
+        for turtle in [
+            "<urn:new> a sg:Policy ; sg:agent sg:Anyone ; sg:readAllGraphs true .",
+            "<urn:new> a sh:NodeShape ; sg:readAllGraphs true .",
+            "<urn:new> a sh:NodeShape ; sh:property [ sg:agent sg:Anyone ] .",
+        ] {
+            let refused = write_shape(ROWS, "urn:new", turtle).unwrap_err();
+            assert!(
+                refused.contains("sparql-guard vocabulary"),
+                "{turtle}: {refused}"
+            );
+        }
+        // sg:requestingAgent as a value stays allowed.
+        assert!(
+            write_shape(
+                ROWS,
+                "urn:new",
+                "<urn:new> sh:property [ sh:path <urn:p> ; sh:hasValue sg:requestingAgent ] ."
+            )
+            .is_ok()
+        );
+        // Removing anything but a node shape of the file is refused.
+        assert!(
+            remove_shape(ROWS, "http://example.org/Project")
+                .unwrap_err()
+                .contains("No shape")
         );
     }
 }
