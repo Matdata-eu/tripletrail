@@ -192,7 +192,7 @@ jobs:
         working-directory: python
         run: |
           rm -rf dist
-          maturin build --no-default-features --features geoparquet -o dist
+          maturin build --no-default-features --features geoparquet,postgres -o dist
           pip install dist/*.whl
           pytest tests
       # Last, and also after a failure: a test that leaves its temporary folder behind fails the

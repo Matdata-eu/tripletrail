@@ -518,6 +518,7 @@ fn stats_json(state: &State, registry: &Registry, entry: &Entry) -> Value {
         "queuedTotal": n(&entry.gate.queued_total),
         "rejectedBusy": n(&entry.gate.rejected),
         "rejectedQuota": n(&entry.gate.rejected_quota),
+        "quotaEvictions": n(&entry.gate.evictions),
         "memoryBytes": memory.map(|m| m.total()),
         "memory": memory.map(|m| {
             m.parts()

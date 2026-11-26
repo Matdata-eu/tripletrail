@@ -78,6 +78,38 @@ impl Policy {
                 .cloned()
                 .collect(),
             write_graphs: self.write_graphs.clone(),
+            rows: self
+                .rows
+                .iter()
+                .map(|r| {
+                    let (rule, shape) = match r {
+                        RowRule::VisibleIf { shape, .. } => ("visibleIf", shape),
+                        RowRule::HideProperties { shape } => ("hideProperties", shape),
+                        RowRule::EditableIf { shape } => ("editableIf", shape),
+                    };
+                    match shape {
+                        Term::NamedNode(n) => Some(crate::policy_edit::RowSpec {
+                            rule: rule.to_owned(),
+                            shape: n.as_str().to_owned(),
+                        }),
+                        // A shape written in place: the pages show no rules for the policy.
+                        _ => None,
+                    }
+                })
+                .collect(),
+            hide_references: self
+                .rows
+                .iter()
+                .any(|r| {
+                    matches!(
+                        r,
+                        RowRule::VisibleIf {
+                            references: false,
+                            ..
+                        }
+                    )
+                })
+                .then_some(false),
         })
     }
 
@@ -118,6 +150,15 @@ pub fn format_of(file: &Path) -> Result<RdfFormat, String> {
 #[cfg(test)]
 pub fn read_text(text: &str, format: RdfFormat) -> Result<Vec<Policy>, String> {
     policies(parse(format, text.as_bytes())?)
+}
+
+/// Reads the policies of documents taken together, as [`read`] reads files.
+pub fn read_texts(texts: &[(RdfFormat, String)]) -> Result<Vec<Policy>, String> {
+    let mut quads = Vec::new();
+    for (format, text) in texts {
+        quads.extend(parse(*format, text.as_bytes())?);
+    }
+    policies(quads)
 }
 
 fn parse(

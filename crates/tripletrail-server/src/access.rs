@@ -77,6 +77,13 @@ pub(crate) enum Change {
     Policy { dataset: String, policy: Value },
     /// A policy removed, by its IRI.
     RemovePolicy { dataset: String, id: String },
+    /// A shape of a row rule (enterprise#8) written into a dataset's policy file from its
+    /// Turtle, or removed (`turtle` `None`).
+    Shape {
+        dataset: String,
+        id: String,
+        turtle: Option<String>,
+    },
     /// Anonymous access turned on or off.
     Anonymous(bool),
     /// A version of the access history put back.
@@ -94,6 +101,11 @@ impl Change {
             Change::RemovePolicy { dataset, id } => {
                 json!({"kind": "removePolicy", "dataset": dataset, "id": id})
             }
+            Change::Shape {
+                dataset,
+                id,
+                turtle,
+            } => json!({"kind": "shape", "dataset": dataset, "id": id, "turtle": turtle}),
             Change::Anonymous(on) => json!({"kind": "anonymous", "anonymous": on}),
             Change::Restore(v) => json!({"kind": "restore", "version": v}),
             Change::Key(spec) => json!({"kind": "key", "key": spec}),
@@ -111,6 +123,11 @@ impl Change {
                 dataset: text("dataset")?,
                 id: text("id")?,
             },
+            "shape" => Change::Shape {
+                dataset: text("dataset")?,
+                id: text("id")?,
+                turtle: text("turtle"),
+            },
             "anonymous" => Change::Anonymous(v.get("anonymous")?.as_bool()?),
             "restore" => Change::Restore(v.get("version")?.as_u64()?),
             "key" => Change::Key(v.get("key")?.clone()),
@@ -126,6 +143,12 @@ impl Change {
                 policy["id"].as_str().unwrap_or("?")
             ),
             Change::RemovePolicy { dataset, id } => format!("Policy {id} of {dataset} removed"),
+            Change::Shape {
+                dataset,
+                id,
+                turtle: Some(_),
+            } => format!("Shape {id} of {dataset} written"),
+            Change::Shape { dataset, id, .. } => format!("Shape {id} of {dataset} removed"),
             Change::Anonymous(on) => {
                 format!("Anonymous access {}", if *on { "on" } else { "off" })
             }
@@ -191,6 +214,26 @@ pub(crate) fn apply(
             record(history)?;
             Ok((204, Value::Null))
         }
+        Change::Shape {
+            dataset,
+            id,
+            turtle,
+        } => {
+            auth.edit_policy(dataset, id, |text| {
+                let after = match turtle {
+                    Some(turtle) => policy_edit::write_shape(text, id, turtle)?,
+                    None => policy_edit::remove_shape(text, id)?,
+                };
+                crate::row_policies::check_change(&state.options, text, &after)?;
+                Ok(after)
+            })
+            .map_err(refused)?;
+            record(history)?;
+            Ok(match turtle {
+                Some(_) => (200, json!({ "shape": id })),
+                None => (204, Value::Null),
+            })
+        }
         Change::Key(spec) => {
             let (key, id) = auth.create_key(spec)?;
             let label = spec["label"].as_str().unwrap_or("");
@@ -217,7 +260,9 @@ fn known_dataset(
     auth: &crate::auth::Auth,
     change: &Change,
 ) -> Result<(), HttpError> {
-    if let Change::Policy { dataset, .. } | Change::RemovePolicy { dataset, .. } = change
+    if let Change::Policy { dataset, .. }
+    | Change::RemovePolicy { dataset, .. }
+    | Change::Shape { dataset, .. } = change
         && !datasets(&state.registry.read_unpoisoned())
             .iter()
             .any(|d| d == dataset)
@@ -272,6 +317,37 @@ fn route_one(
                 .ok_or_else(|| HttpError::bad_request("id (the policy's IRI) is missing"))?
                 .to_owned(),
         },
+        ["datasets", name, "shapes"] if matches!(method, Method::Get | Method::Head) => {
+            return shapes(state, auth, name, params);
+        }
+        ["datasets", name, "shapes"] if method == Method::Put => {
+            let body = body_json(request, 1 << 20)?;
+            let id = body["id"]
+                .as_str()
+                .ok_or_else(|| HttpError::bad_request("id (the shape's IRI) is missing"))?;
+            let turtle = body["turtle"]
+                .as_str()
+                .ok_or_else(|| HttpError::bad_request("turtle (the shape) is missing"))?;
+            // Checked now, so that a proposal holds a shape that can be written.
+            policy_edit::write_shape("", id, turtle).map_err(HttpError::bad_request)?;
+            Change::Shape {
+                dataset: (*name).to_owned(),
+                id: id.to_owned(),
+                turtle: Some(turtle.to_owned()),
+            }
+        }
+        ["datasets", name, "shapes"] if method == Method::Delete => Change::Shape {
+            dataset: (*name).to_owned(),
+            id: params
+                .get("id")
+                .ok_or_else(|| HttpError::bad_request("id (the shape's IRI) is missing"))?
+                .to_owned(),
+            turtle: None,
+        },
+        ["datasets", name, "preview"] if method == Method::Post => {
+            let body = body_json(request, 1 << 20)?;
+            return preview(state, auth, name, &body);
+        }
         ["keys"] if method == Method::Post => Change::Key(body_json(request, 1 << 16)?),
         ["keys", id] if method == Method::Delete => {
             // Revoking takes access away: never held for review.
@@ -438,17 +514,6 @@ fn explain(
             .collect()
     };
     let rules = auth.row_rules(&caller, &names);
-    let rule_json = |r: &tripletrail::RowRule| match r {
-        tripletrail::RowRule::VisibleIf { shape, references } => {
-            json!({ "rule": "sg:visibleIf", "shape": shape.to_string(), "hideReferences": references })
-        }
-        tripletrail::RowRule::HideProperties { shape } => {
-            json!({ "rule": "sg:hideProperties", "shape": shape.to_string() })
-        }
-        tripletrail::RowRule::EditableIf { shape } => {
-            json!({ "rule": "sg:editableIf", "shape": shape.to_string() })
-        }
-    };
     let mut out = json!({
         "dataset": entry.name,
         "agent": caller.agent,
@@ -468,23 +533,9 @@ fn explain(
     let readable = access
         .partial
         .then(|| auth.readable_graphs(&caller, &names));
-    let row_rules = rules.as_ref().map(|(shapes, rules)| tripletrail::RowRules {
-        shapes: Arc::clone(shapes),
-        rules: rules.clone(),
-        agent: caller.agent.clone(),
-        graphs: readable.as_ref().map(|r| {
-            r.default_graph
-                .then_some(tripletrail::oxigraph::model::GraphName::DefaultGraph)
-                .into_iter()
-                .chain(
-                    r.named
-                        .iter()
-                        .cloned()
-                        .map(tripletrail::oxigraph::model::GraphName::NamedNode),
-                )
-                .collect()
-        }),
-    });
+    let row_rules = rules
+        .as_ref()
+        .map(|(shapes, rules)| row_rules_for(shapes, rules, &caller, readable.as_ref()));
     // Each triple pattern of a query, with how many matches it has and how many the caller
     // sees.
     if let Some(query) = params.get("query") {
@@ -579,6 +630,368 @@ fn explain(
         });
     }
     Ok(json_reply(200, &out))
+}
+
+/// A row rule as the explain and preview answers give it.
+fn rule_json(r: &tripletrail::RowRule) -> Value {
+    match r {
+        tripletrail::RowRule::VisibleIf { shape, references } => {
+            json!({ "rule": "sg:visibleIf", "shape": shape.to_string(), "hideReferences": references })
+        }
+        tripletrail::RowRule::HideProperties { shape } => {
+            json!({ "rule": "sg:hideProperties", "shape": shape.to_string() })
+        }
+        tripletrail::RowRule::EditableIf { shape } => {
+            json!({ "rule": "sg:editableIf", "shape": shape.to_string() })
+        }
+    }
+}
+
+/// The row rules `rules` (with their `shapes`) for `caller`, judged over the graphs it may
+/// read when only some.
+fn row_rules_for(
+    shapes: &Arc<tripletrail::RowShapes>,
+    rules: &[tripletrail::RowRule],
+    caller: &Caller,
+    readable: Option<&tripletrail::ReadableGraphs>,
+) -> tripletrail::RowRules {
+    tripletrail::RowRules {
+        shapes: Arc::clone(shapes),
+        rules: rules.to_vec(),
+        agent: caller.agent.clone(),
+        graphs: readable.map(|r| {
+            r.default_graph
+                .then_some(tripletrail::oxigraph::model::GraphName::DefaultGraph)
+                .into_iter()
+                .chain(
+                    r.named
+                        .iter()
+                        .cloned()
+                        .map(tripletrail::oxigraph::model::GraphName::NamedNode),
+                )
+                .collect()
+        }),
+    }
+}
+
+/// The caller an admin asks about: `agent` (an IRI, or `anonymous`, the default) with
+/// `groups` (separated by commas), checked as "view as" checks them.
+fn asked_caller(agent: Option<&str>, groups: Option<&str>) -> Result<Caller, HttpError> {
+    let admin = Caller {
+        agent: None,
+        groups: vec![crate::auth::ADMIN.to_owned()],
+        method: crate::auth::Method::Anonymous,
+        datasets: None,
+    };
+    crate::auth::view_as(admin, &|header| match header {
+        crate::auth::VIEW_AS => Some(agent.unwrap_or("anonymous").to_owned()),
+        crate::auth::VIEW_AS_GROUPS => groups.map(str::to_owned),
+        _ => None,
+    })
+}
+
+/// The rows of a SELECT query, each a list of its values as text (IRIs without brackets).
+fn select_rows(
+    engine: &tripletrail::Engine,
+    query: &str,
+    options: Option<tripletrail::QueryOptions>,
+) -> Result<Vec<Vec<Option<String>>>, HttpError> {
+    let results = match options {
+        Some(options) => engine.query_with_options(query, options),
+        None => engine.query(query),
+    }?;
+    let QueryResults::Solutions(solutions) = results else {
+        return Ok(Vec::new());
+    };
+    let variables: Vec<_> = solutions.variables().to_vec();
+    solutions
+        .map(|row| {
+            let row = row.map_err(|e| match e.to_string() {
+                m if m.contains("cancelled") => HttpError(503, crate::TIMED_OUT.to_owned()),
+                m => HttpError(500, m),
+            })?;
+            Ok(variables
+                .iter()
+                .map(|v| {
+                    row.get(v).map(|t| match t {
+                        tripletrail::oxigraph::model::Term::Literal(l) => l.value().to_owned(),
+                        tripletrail::oxigraph::model::Term::NamedNode(n) => n.as_str().to_owned(),
+                        other => other.to_string(),
+                    })
+                })
+                .collect())
+        })
+        .collect()
+}
+
+/// How many classes the shapes and preview answers list.
+const CLASSES: usize = 200;
+/// How many instances of a class the preview judges one by one for its examples.
+const SAMPLED: usize = 100;
+/// How many classes the preview gives examples for.
+const EXAMPLE_CLASSES: usize = 20;
+
+/// The classes of the data with their instances, most first.
+fn classes(
+    engine: &tripletrail::Engine,
+    options: Option<tripletrail::QueryOptions>,
+) -> Result<Vec<(String, u64)>, HttpError> {
+    let rows = select_rows(
+        engine,
+        &format!(
+            "SELECT ?c (COUNT(DISTINCT ?s) AS ?n) WHERE {{ ?s a ?c FILTER(isIRI(?c)) }} \
+             GROUP BY ?c ORDER BY DESC(?n) ?c LIMIT {CLASSES}"
+        ),
+        options,
+    )?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| Some((r[0].clone()?, r[1].as_deref()?.parse().ok()?)))
+        .collect())
+}
+
+/// `GET /$/access/datasets/{ds}/shapes[?class=]` (enterprise#8): the node shapes of the
+/// dataset's policy files, each as Turtle with the policies whose row rules use it, and the
+/// classes of the data with their instances, for the row rule builder. With `class`, also
+/// the properties of that class's instances, most used first.
+fn shapes(
+    state: &Arc<State>,
+    auth: &crate::auth::Auth,
+    name: &str,
+    params: &Params,
+) -> Result<Reply, HttpError> {
+    let entry = state
+        .registry
+        .read_unpoisoned()
+        .resolve(name)
+        .ok_or_else(|| HttpError(404, format!("No dataset {name}")))?;
+    // Under the dataset's query timeout, as every query is: the class counts and examples
+    // scan the data.
+    let timeout = crate::limits::Limits::of(state, &entry.name).timeout(None);
+    let (engine, _deadline) = crate::with_deadline(&entry.engine, timeout);
+    let (texts, _) = auth.policy_texts(name, "").map_err(|e| HttpError(409, e))?;
+    let policies = crate::policy::read_texts(&texts).map_err(|e| HttpError(422, e))?;
+    let mut shapes = Vec::new();
+    for (format, text) in &texts {
+        if *format != tripletrail::oxigraph::io::RdfFormat::Turtle {
+            continue;
+        }
+        for (id, turtle) in policy_edit::shapes(text).map_err(|e| HttpError(422, e))? {
+            let used: Vec<Value> = policies
+                .iter()
+                .filter_map(|p| p.spec())
+                .flat_map(|p| {
+                    let id = id.clone();
+                    p.rows
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(move |r| r.shape == id)
+                        .map(move |r| json!({ "policy": p.id, "rule": format!("sg:{}", r.rule) }))
+                })
+                .collect();
+            shapes.push(json!({ "id": id, "turtle": turtle, "usedBy": used }));
+        }
+    }
+    let mut out = json!({
+        "dataset": name,
+        "shapes": shapes,
+        "classes": classes(&engine, None)?
+            .into_iter()
+            .map(|(c, n)| json!({ "class": c, "instances": n }))
+            .collect::<Vec<_>>(),
+    });
+    if let Some(class) = params.get("class") {
+        let class = tripletrail::oxigraph::model::NamedNode::new(class)
+            .map_err(|e| HttpError::bad_request(format!("class is not an IRI: {e}")))?;
+        let rows = select_rows(
+            &engine,
+            &format!(
+                "SELECT ?p (COUNT(*) AS ?n) (SAMPLE(?o) AS ?example) (SAMPLE(?k) AS ?kind) WHERE {{ \
+                 ?s a {class} ; ?p ?o \
+                 BIND(IF(isIRI(?o), \"iri\", IF(isLiteral(?o), \"literal\", \"blank\")) AS ?k) }} \
+                 GROUP BY ?p ORDER BY DESC(?n) ?p LIMIT {CLASSES}"
+            ),
+            None,
+        )?;
+        out["properties"] = rows
+            .into_iter()
+            .filter_map(|r| {
+                Some(json!({
+                    "path": r[0].clone()?,
+                    "uses": r[1].as_deref()?.parse::<u64>().ok()?,
+                    "example": r[2],
+                    "kind": r[3],
+                }))
+            })
+            .collect();
+    }
+    Ok(json_reply(200, &out))
+}
+
+/// `POST /$/access/datasets/{ds}/preview` (enterprise#8): what a policy change would hide
+/// from a caller, next to the policies in force, before it is saved. The body has the
+/// caller (`agent`, `groups` as in explain), and the change: `shapes` (`[{id, turtle}]`,
+/// written first) and `policy` (as `PUT …/policies` takes it), applied to the policy file
+/// in memory. The answer has, per class, its instances and how many the caller sees now and
+/// would see after, and for the first classes examples of hidden and visible instances
+/// after, judged one by one, with whether the caller could change them. Row rules only: the
+/// graphs the caller may read stay those in force.
+fn preview(
+    state: &Arc<State>,
+    auth: &crate::auth::Auth,
+    name: &str,
+    body: &Value,
+) -> Result<Reply, HttpError> {
+    let entry = state
+        .registry
+        .read_unpoisoned()
+        .resolve(name)
+        .ok_or_else(|| HttpError(404, format!("No dataset {name}")))?;
+    // Under the dataset's query timeout, as every query is: the class counts and examples
+    // scan the data.
+    let timeout = crate::limits::Limits::of(state, &entry.name).timeout(None);
+    let (engine, _deadline) = crate::with_deadline(&entry.engine, timeout);
+    let until = timeout.map(|t| std::time::Instant::now() + t);
+    let groups = match &body["groups"] {
+        Value::Array(a) => Some(
+            a.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+        Value::String(g) => Some(g.clone()),
+        _ => None,
+    };
+    let caller = asked_caller(body["agent"].as_str(), groups.as_deref())?;
+    // The policy file as the change would leave it.
+    let spec = match &body["policy"] {
+        Value::Null => None,
+        policy => Some(PolicySpec::from_json(policy).map_err(HttpError::bad_request)?),
+    };
+    let (mut texts, chosen) = auth
+        .policy_texts(name, spec.as_ref().map_or("", |s| s.id.as_str()))
+        .map_err(|e| HttpError(409, e))?;
+    let text = &mut texts[chosen].1;
+    for shape in body["shapes"].as_array().into_iter().flatten() {
+        let id = shape["id"]
+            .as_str()
+            .ok_or_else(|| HttpError::bad_request("shapes: id (the shape's IRI) is missing"))?;
+        let turtle = shape["turtle"]
+            .as_str()
+            .ok_or_else(|| HttpError::bad_request("shapes: turtle (the shape) is missing"))?;
+        *text = policy_edit::write_shape(text, id, turtle).map_err(|e| HttpError(422, e))?;
+    }
+    if let Some(spec) = &spec {
+        *text = policy_edit::write(text, spec).map_err(|e| HttpError(422, e))?;
+    }
+    let candidate = crate::policy::read_texts(&texts).map_err(|e| HttpError(422, e))?;
+    let names = [name, entry.name.as_str()];
+    let access = auth.access(&caller, &names);
+    let may_read = access.read || access.partial;
+    let may_write = access.write || access.partial_write;
+    let readable = access
+        .partial
+        .then(|| auth.readable_graphs(&caller, &names));
+    let now = auth
+        .row_rules(&caller, &names)
+        .map(|(shapes, rules)| row_rules_for(&shapes, &rules, &caller, readable.as_ref()));
+    let after = if access.admin {
+        None
+    } else {
+        let mut shapes = None;
+        let mut rules: Vec<tripletrail::RowRule> = Vec::new();
+        for p in &candidate {
+            if p.rows.is_empty() || !p.applies_to(caller.agent.as_deref(), &caller.groups) {
+                continue;
+            }
+            shapes = shapes.or_else(|| p.shapes.clone());
+            for r in &p.rows {
+                if !rules.contains(r) {
+                    rules.push(r.clone());
+                }
+            }
+        }
+        shapes.map(|s| row_rules_for(&s, &rules, &caller, readable.as_ref()))
+    };
+    let under = |rules: &Option<tripletrail::RowRules>| -> Result<std::collections::HashMap<String, u64>, HttpError> {
+        if !may_read {
+            return Ok(Default::default());
+        }
+        Ok(classes(
+            &engine,
+            Some(tripletrail::QueryOptions {
+                readable: readable.clone(),
+                row_rules: rules.clone(),
+                ..Default::default()
+            }),
+        )?
+        .into_iter()
+        .collect())
+    };
+    let all = classes(&engine, None)?;
+    let visible_now = under(&now)?;
+    let visible_after = under(&after)?;
+    let mut rows = Vec::new();
+    for (i, (class, instances)) in all.iter().enumerate() {
+        let mut row = json!({
+            "class": class,
+            "instances": instances,
+            "visibleNow": visible_now.get(class).copied().unwrap_or(0),
+            "visibleAfter": visible_after.get(class).copied().unwrap_or(0),
+        });
+        if i < EXAMPLE_CLASSES {
+            let iri = tripletrail::oxigraph::model::NamedNode::new_unchecked(class.as_str());
+            let sample = select_rows(
+                &engine,
+                &format!(
+                    "SELECT DISTINCT ?s WHERE {{ ?s a {iri} FILTER(isIRI(?s)) }} LIMIT {SAMPLED}"
+                ),
+                None,
+            )?;
+            let (mut hidden, mut visible, mut editable, mut judged) =
+                (Vec::new(), Vec::new(), 0, 0);
+            for s in sample.into_iter().filter_map(|r| r[0].clone()) {
+                let Ok(node) = tripletrail::oxigraph::model::NamedNode::new(s.as_str()) else {
+                    continue;
+                };
+                if until.is_some_and(|u| std::time::Instant::now() >= u) {
+                    return Err(HttpError(503, crate::TIMED_OUT.to_owned()));
+                }
+                judged += 1;
+                let explained = match (&after, may_read) {
+                    (Some(rules), true) => engine.explain_resource(rules, node.as_ref())?,
+                    _ => tripletrail::ResourceExplained::default(),
+                };
+                let seen = may_read && explained.hidden_by.is_empty();
+                if seen && may_write && explained.not_editable_by.is_empty() {
+                    editable += 1;
+                }
+                let list = if seen { &mut visible } else { &mut hidden };
+                if list.len() < 3 {
+                    list.push(s);
+                }
+            }
+            row["sampled"] = json!(judged);
+            row["sampledEditable"] = json!(editable);
+            row["hidden"] = json!(hidden);
+            row["visible"] = json!(visible);
+        }
+        rows.push(row);
+    }
+    Ok(json_reply(
+        200,
+        &json!({
+            "dataset": entry.name,
+            "agent": caller.agent,
+            "groups": caller.groups,
+            "read": may_read,
+            "write": may_write,
+            "admin": access.admin,
+            "rowRulesNow": now.as_ref().map(|r| r.rules.iter().map(rule_json).collect::<Vec<_>>()).unwrap_or_default(),
+            "rowRulesAfter": after.as_ref().map(|r| r.rules.iter().map(rule_json).collect::<Vec<_>>()).unwrap_or_default(),
+            "classes": rows,
+        }),
+    ))
 }
 
 /// The named graphs of a dataset with their triple counts and labels.

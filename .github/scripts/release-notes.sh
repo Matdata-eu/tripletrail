@@ -4,7 +4,8 @@
 # Commits type. With --check, only checks that the release is consistent:
 #   - the workspace version in Cargo.toml is $1;
 #   - CHANGELOG.md has a "## $1" (or "## [$1]") section;
-#   - the newest entry of crates/tripletrail-server/ui/whats-new.json is for $1.
+#   - the newest entry of crates/tripletrail-server/ui/whats-new.json is for $1;
+#   - python/Cargo.toml and clients/js/package.json have version $1 (PyPI and npm).
 set -euo pipefail
 
 check=false
@@ -44,6 +45,18 @@ if $check; then
     crates/tripletrail-server/ui/whats-new.json)
   if [ "$news" != "$version" ]; then
     echo "whats-new.json starts with $news, not $version" >&2
+    status=1
+  fi
+  # The packages published to PyPI and npm carry the same version.
+  py_version=$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"/\1/p' python/Cargo.toml)
+  if [ "$py_version" != "$version" ]; then
+    echo "python/Cargo.toml has version $py_version, not $version" >&2
+    status=1
+  fi
+  js_version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
+    clients/js/package.json)
+  if [ "$js_version" != "$version" ]; then
+    echo "clients/js/package.json has version $js_version, not $version" >&2
     status=1
   fi
   exit $status

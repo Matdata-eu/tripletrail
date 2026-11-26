@@ -107,8 +107,20 @@ The mapping is Turtle text, YARRRML text with `yarrrml=True`, or a file at `path
 a `.yarrrml`, `.yml` or `.yaml` name). Source paths resolve against `base_dir`, by default the
 current directory; with `allowed` (a list of directories) no file outside them is read.
 Quads in the default graph go to `to_graph` when given, and a mapping's own graph maps are
-kept. A mapping error is a `ValueError`, a source that cannot be read an `OSError`. Mappings
-with logical targets, and database sources, are refused: use `tripletrail lift` for them. See
+kept. PostgreSQL tables and queries are read from the `d2rq:Database` a source names, or,
+for R2RML, from `database` (a connection string, `postgresql://user:password@host:port/name`,
+with TLS as its `sslmode` says):
+
+```python
+made = e.run_mapping(path="assets.r2rml.ttl", database="postgresql://reader@db/assets")
+```
+
+A mapping can name its own database, so running one connects to the host it names. With
+`allowed`, for mappings you did not write, that is refused (a `ValueError`, before any
+connection) unless you pass `databases=True`; the `database` you give is still read.
+
+A mapping error is a `ValueError`, a source that cannot be read an `OSError`. Mappings with
+logical targets are refused: use `tripletrail lift` for them. See
 [docs/rml.md](../docs/rml.md).
 
 ### A server: workspaces and datasets

@@ -1699,6 +1699,14 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                             }));
                         }
                         Rc::new(move |from| {
+                            // tripletrail (#256): no left row, no right side to build (the
+                            // labels of a facet without values were every label of the store).
+                            let mut left_iter = left(from.clone());
+                            let Some(first) = left_iter.next() else {
+                                return Box::new(empty());
+                            };
+                            let left_iter: InternalTuplesIterator<'_, D::InternalTerm> =
+                                Box::new(once(first).chain(left_iter));
                             let mut right_values = InternalTupleSet::new(keys.clone());
                             let mut guard = BuildGuard::new(right(from.clone()), &token);
                             right_values.extend(&mut guard);
@@ -1707,12 +1715,12 @@ impl<'a, D: QueryableDataset<'a>> SimpleEvaluator<'a, D> {
                             }
                             let (errors, meter) = guard.into_parts();
                             if right_values.is_empty() && errors.is_empty() {
-                                return left(from);
+                                return left_iter;
                             }
                             held(
                                 meter,
                                 HashLeftJoinIterator {
-                                    left_iter: left(from),
+                                    left_iter,
                                     right: right_values,
                                     buffered_results: errors,
                                     expression: Rc::clone(&expression),
