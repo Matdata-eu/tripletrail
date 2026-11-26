@@ -9,6 +9,7 @@ use tripletrail::spatial::IndexedPredicates;
 use tripletrail_server::{Mode, Options, Server, open_dataset};
 
 use tripletrail_server::lift;
+use tripletrail_server::schema_tools;
 
 /// mimalloc rather than the system allocator (#934): with glibc, rows allocated by the thread
 /// that evaluates a WHERE and freed by the thread that inserts them contend on the arena locks
@@ -316,7 +317,6 @@ enum Command {
     },
     /// Turns a source's schema into RDF: an OWL ontology, SHACL shapes and SKOS concept
     /// schemes (#278).
-    #[cfg(feature = "postgres")]
     Schema {
         #[command(subcommand)]
         command: SchemaCommand,
@@ -677,7 +677,6 @@ enum LicenseCommand {
     },
 }
 
-#[cfg(feature = "postgres")]
 #[derive(Subcommand)]
 enum SchemaCommand {
     /// A PostgreSQL schema's tables and views as an OWL ontology and SHACL shapes, named as
@@ -687,6 +686,7 @@ enum SchemaCommand {
     /// `CHECK`s it can translate, foreign keys' classes and unique keys. Code tables become
     /// SKOS concept schemes. Writes `ontology.ttl`, `shapes.ttl` and `skos.ttl` to `--out`,
     /// saying what changed when they are there already, or all as Turtle to standard output.
+    #[cfg(feature = "postgres")]
     Database {
         /// The database, as a connection string: `postgresql://user:password@host:port/name`.
         #[arg(long, env = "TRIPLETRAIL_DATABASE", value_name = "URL")]
@@ -710,6 +710,57 @@ enum SchemaCommand {
         #[arg(long, value_name = "DIR")]
         out: Option<PathBuf>,
     },
+    /// An XML Schema (XSD 1.0 or 1.1) as an OWL ontology, SHACL shapes and SKOS concept
+    /// schemes for its enumerations, made by the optional Python tool `xsd2rdf`
+    /// (`pip install xsd2rdf`). Schemas it includes or imports from URLs are not downloaded
+    /// unless `--allow-download` is given. Writes `ontology.ttl`, `shapes.ttl`, `skos.ttl` and
+    /// `provenance.ttl` (each shape and property's XSD component and XML name) to `--out`.
+    Xsd {
+        #[command(flatten)]
+        tool: SchemaToolArgs,
+        /// Download the schemas it includes or imports from `http(s)` URLs.
+        #[arg(long)]
+        allow_download: bool,
+    },
+    /// A JSON Schema, the same way, with `jsonschema2rdf` (`pip install jsonschema2rdf`).
+    Jsonschema {
+        #[command(flatten)]
+        tool: SchemaToolArgs,
+    },
+    /// The schemas of an OpenAPI document (YAML or JSON), the same way, with `openapi2rdf`
+    /// (`pip install openapi2rdf`).
+    Openapi {
+        #[command(flatten)]
+        tool: SchemaToolArgs,
+    },
+    /// An ASN.1 module, the same way, with `asn2rdf` (`pip install asn2rdf`).
+    Asn1 {
+        #[command(flatten)]
+        tool: SchemaToolArgs,
+    },
+}
+
+#[derive(clap::Args)]
+struct SchemaToolArgs {
+    /// The schema file.
+    file: PathBuf,
+    /// The IRI the classes, properties, shapes (`NAMESPACE shapes/`) and concepts start with:
+    /// the namespace of the lift of the source.
+    #[arg(long, value_name = "IRI")]
+    namespace: String,
+    /// The folder to write the files to (all as Turtle to standard output if omitted).
+    #[arg(long, value_name = "DIR")]
+    out: Option<PathBuf>,
+    /// The tool's program, when it is not on the `PATH`.
+    #[arg(long, value_name = "PATH")]
+    tool_path: Option<PathBuf>,
+    /// The date of `dct:created`, `dct:issued` and `dct:modified` (today if omitted), so that
+    /// a rerun on an unchanged schema changes nothing.
+    #[arg(long, value_name = "YYYY-MM-DD")]
+    date: Option<String>,
+    /// Stop the tool after this many seconds.
+    #[arg(long, default_value_t = 300, value_name = "SECONDS")]
+    timeout: u64,
 }
 
 #[derive(Subcommand)]
@@ -3448,37 +3499,66 @@ fn run() -> Result<()> {
                 stdout.write_all(body(&made.skos).as_bytes())?;
                 return Ok(());
             };
-            std::fs::create_dir_all(&dir)?;
-            for (file, text) in [
+            write_artefacts(
+                &dir,
+                &[
+                    ("ontology.ttl", &made.ontology),
+                    ("shapes.ttl", &made.shapes),
+                    ("skos.ttl", &made.skos),
+                ],
+            )
+        }
+        Command::Schema { command } => {
+            let (tool, args, download) = match command {
+                SchemaCommand::Xsd {
+                    tool,
+                    allow_download,
+                } => (schema_tools::Tool::Xsd, tool, allow_download),
+                SchemaCommand::Jsonschema { tool } => (schema_tools::Tool::JsonSchema, tool, false),
+                SchemaCommand::Openapi { tool } => (schema_tools::Tool::OpenApi, tool, false),
+                SchemaCommand::Asn1 { tool } => (schema_tools::Tool::Asn1, tool, false),
+                #[cfg(feature = "postgres")]
+                SchemaCommand::Database { .. } => unreachable!("matched above"),
+            };
+            let made = schema_tools::run(
+                tool,
+                &args.file,
+                &schema_tools::Run {
+                    program: args.tool_path,
+                    namespace: args.namespace,
+                    date: args.date,
+                    download,
+                    timeout: std::time::Duration::from_secs(args.timeout),
+                },
+            )
+            .map_err(|e| e.to_string())?;
+            for w in &made.warnings {
+                eprintln!("Warning: {w}");
+            }
+            let [classes, shapes, concepts, provenance] = made.counts;
+            eprintln!(
+                "{}: {classes} ontology, {shapes} shape, {concepts} SKOS ({} schemes) and {provenance} provenance triples",
+                args.file.display(),
+                made.schemes.len()
+            );
+            let files = [
                 ("ontology.ttl", &made.ontology),
                 ("shapes.ttl", &made.shapes),
                 ("skos.ttl", &made.skos),
-            ] {
-                let path = dir.join(file);
-                if path.is_file() {
-                    // Said against what is there: triples added and removed.
-                    let before = canonical_turtle(&std::fs::read(&path)?)?;
-                    let after = canonical_turtle(text.as_bytes())?;
-                    let diff = tripletrail::canon::diff(&before, &after);
-                    eprintln!(
-                        "{}: {} triples added, {} removed",
-                        path.display(),
-                        diff.added.len(),
-                        diff.removed.len()
-                    );
-                    for line in diff.removed.iter().take(20) {
-                        eprint!("- {line}");
+                ("provenance.ttl", &made.provenance),
+            ];
+            match args.out {
+                Some(dir) => write_artefacts(&dir, &files),
+                None => {
+                    use std::io::Write as _;
+                    // Turtle documents one after the other are one Turtle document.
+                    let mut stdout = std::io::stdout().lock();
+                    for (_, text) in files {
+                        stdout.write_all(text.as_bytes())?;
                     }
-                    for line in diff.added.iter().take(20) {
-                        eprint!("+ {line}");
-                    }
-                    std::fs::write(&path, text)?;
-                } else {
-                    std::fs::write(&path, text)?;
-                    eprintln!("{}: written", path.display());
+                    Ok(())
                 }
             }
-            Ok(())
         }
         #[cfg(feature = "postgres")]
         Command::DirectMapping {
@@ -4082,9 +4162,7 @@ fn read_functions(files: &[PathBuf]) -> Result<tripletrail::udf::Functions> {
     Ok(tripletrail::udf::Functions::from_triples(triples).map_err(|e| e.to_string())?)
 }
 
-/// The quads of `inputs` (files, or directories of on-disk datasets), canonicalized.
 /// A Turtle document's triples, canonical, read without a store or a word on standard error.
-#[cfg(feature = "postgres")]
 fn canonical_turtle(text: &[u8]) -> Result<tripletrail::canon::Canonical> {
     let quads = tripletrail::oxigraph::io::RdfParser::from_format(RdfFormat::Turtle)
         .for_slice(text)
@@ -4093,6 +4171,37 @@ fn canonical_turtle(text: &[u8]) -> Result<tripletrail::canon::Canonical> {
     tripletrail::canon::canonicalize(quads).map_err(|e| e.to_string().into())
 }
 
+/// Writes a schema's artefacts to `dir`, saying for each file already there how many triples
+/// were added and removed (#278, #276).
+fn write_artefacts(dir: &Path, files: &[(&str, &String)]) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for (file, text) in files {
+        let path = dir.join(file);
+        if path.is_file() {
+            let before = canonical_turtle(&std::fs::read(&path)?)?;
+            let after = canonical_turtle(text.as_bytes())?;
+            let diff = tripletrail::canon::diff(&before, &after);
+            eprintln!(
+                "{}: {} triples added, {} removed",
+                path.display(),
+                diff.added.len(),
+                diff.removed.len()
+            );
+            for line in diff.removed.iter().take(20) {
+                eprint!("- {line}");
+            }
+            for line in diff.added.iter().take(20) {
+                eprint!("+ {line}");
+            }
+        } else {
+            eprintln!("{}: written", path.display());
+        }
+        std::fs::write(&path, text)?;
+    }
+    Ok(())
+}
+
+/// The quads of `inputs` (files, or directories of on-disk datasets), canonicalized.
 fn read_canonical(inputs: &[PathBuf], store: StoreKind) -> Result<tripletrail::canon::Canonical> {
     let mut quads = Vec::new();
     for input in inputs {

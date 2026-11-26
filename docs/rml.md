@@ -81,6 +81,39 @@ column otherwise) as `skos:prefLabel`. Everything carries `dct:source` (`schema.
 several columns are not translated: each is said on standard error and in an `rdfs:comment` of
 the shape it belongs to.
 
+## Schema files
+
+`tripletrail schema xsd|jsonschema|openapi|asn1 FILE --namespace IRI [--out DIR]` makes an
+ontology, shapes and concept schemes of a schema file with an optional Python tool, run in a
+subprocess and never linked in. The tools are EUPL-1.2 and need Python 3.12 or later:
+
+| Command | Schema | Tool (`pip install …`) |
+|---|---|---|
+| `schema xsd` | XML Schema 1.0 or 1.1 | `xsd2rdf` 2.x |
+| `schema jsonschema` | JSON Schema | `jsonschema2rdf` 1.x |
+| `schema openapi` | the schemas of an OpenAPI document (YAML or JSON) | `openapi2rdf` 1.x |
+| `schema asn1` | an ASN.1 module | `asn2rdf` 1.x |
+
+The tool runs as `TOOL convert FILE --output-dir TMP --namespace IRI --source-provenance
+--strict --quiet` in a temporary folder, with `--no-download` for `xsd2rdf` unless
+`--allow-download` is given, and is stopped after `--timeout` seconds (300 by default).
+`--tool-path` names its program when it is not on the `PATH`; when it is missing, the command
+says how to install it. `--date YYYY-MM-DD` sets the `dct:created`, `dct:issued` and
+`dct:modified` it writes (today by default).
+
+What it writes becomes four files in `--out`, each file's blank nodes kept apart, with the
+same rerun report as [database schema](#database-schema):
+
+| File | From the tool's | What |
+|---|---|---|
+| `ontology.ttl` | `FILE.owl.ttl` | OWL classes and properties under the namespace |
+| `shapes.ttl` | `FILE.shape.ttl` | SHACL shapes under `NAMESPACE shapes/`, checked against SHACL-SHACL (`--strict`) |
+| `skos.ttl` | `FILE.skos.*.ttl` | a SKOS concept scheme per enumeration |
+| `provenance.ttl` | `FILE.provenance.ttl` | each shape, class, property and scheme's schema component (`dct:source`) and each property shape's XML name |
+
+Without `--out`, all four are written to standard output as one Turtle document. The tool's
+warnings and the number of triples of each file are written to standard error.
+
 ## Sources (RML-IO)
 
 A logical source names a file, relative to the base directory (`--base`, else the current

@@ -71,6 +71,7 @@ mod reason;
 mod replication;
 mod rest;
 mod row_policies;
+pub mod schema_tools;
 mod service_description;
 mod shapes;
 #[cfg(feature = "git")]

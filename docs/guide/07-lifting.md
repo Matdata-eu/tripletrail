@@ -418,6 +418,28 @@ says, for each file, how many triples were added and removed. These examples nee
 so the guide's tests don't run them; `tests/db_schema.rs` does. See
 [database schema](../rml.md#database-schema).
 
+## A schema file's own semantics
+
+XML, JSON and API data often come with a schema: an XSD, a JSON Schema, an OpenAPI document
+or an ASN.1 module. `tripletrail schema xsd|jsonschema|openapi|asn1` makes the same four files
+of it, with four optional Python tools (`xsd2rdf`, `jsonschema2rdf`, `openapi2rdf`, `asn2rdf`,
+EUPL-1.2) that TripleTrail runs and does not ship. Install the one you need, with Python 3.12
+or later:
+
+```sh
+pip install xsd2rdf
+tripletrail schema xsd stations.xsd --namespace https://data.example.org/stations/ --out schema/
+```
+
+`schema/ontology.ttl` has the classes and properties of its types, elements and attributes,
+`schema/shapes.ttl` their shapes (which pass SHACL-SHACL, or the run fails), `schema/skos.ttl`
+a concept scheme per enumeration, and `schema/provenance.ttl` the XSD component and XML name
+each comes from. Schemas the XSD imports from the web are not downloaded unless you add
+`--allow-download`. Give `--date 2026-11-26` to keep the files' dates, so that a rerun on an
+unchanged schema says `0 triples added, 0 removed`. The guide's tests can't install the
+tools, so they don't run this example; `tests/schema_tools.rs` does, in CI. See
+[schema files](../rml.md#schema-files).
+
 ## Useful options
 
 - `--output-dir out/` writes one file per query or mapping instead of one file.
