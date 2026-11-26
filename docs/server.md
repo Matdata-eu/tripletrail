@@ -1877,7 +1877,10 @@ ex:NetworkWriters a sg:Policy ; sg:group "network-assets" ; sg:writeAllGraphs tr
   it: every resource an update, Graph Store or RDF4J write changes must conform before and
   after (so a writer cannot claim a resource, nor give one away), else 403 and nothing
   changes. `sg:requestingAgent` in `sh:hasValue`, `sh:in` or
-  `sh:targetNode` stands for the caller (`urn:sparql-guard:anonymous` when anonymous). The
+  `sh:targetNode` stands for the caller (`urn:sparql-guard:anonymous` when anonymous). An
+  RDF 1.2 triple term whose triple the rules hide is hidden too, with every triple that names
+  it (`rdf:reifies`, annotations), and under rules that hide anything a nested triple term
+  (one whose object is a triple term) is hidden whole, as in sparql-guard. The
   shapes are in the same policy files. Rules of every policy that applies are added up (deny
   wins); visibility is judged over the graphs the caller may read, not over a query's own
   dataset. A literal target (of `sh:targetObjectsOf`) is a value, not a resource, and is

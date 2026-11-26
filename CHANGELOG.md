@@ -56,6 +56,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- Row rules (TripleTrail Enterprise) hide the RDF 1.2 triple terms of the triples they hide, with the triples that name them (`rdf:reifies`, annotations), and nested triple terms whole, as sparql-guard does. A caller could read a hidden triple inside `<<( … )>>` or through a reifier (enterprise #9).
 - With `#pragma tt.id-rewrites off`, `SAMPLE` gives the stored term as it is written in the data (`"-92"^^xsd:int`, `2.50`), as Jena does and as the other executors already did, not the canonical number (`-92`).
 - `COUNT(DISTINCT *)` over a pattern with a blank node and a filter counted the solutions on term ids without the blank node's values, which the evaluator tells them apart by (3,000 instead of 15,000 in the test). Such a count is now left to the evaluator.
 - On term ids, a `NaN` double or float compared with itself (`FILTER(?m = ?m)`, `?m IN (?m)`, or two variables holding the same `NaN`) was equal, so the row was kept. `NaN` now equals nothing, itself included, as the evaluator and Jena have it, under `=`, `!=` and `IN` (#11).
