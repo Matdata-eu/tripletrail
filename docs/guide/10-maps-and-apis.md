@@ -569,10 +569,20 @@ curl -s -o tile.mvt -w '%{http_code} %{content_type}\n' http://localhost:7878/ds
 Tiles of a whole country or continent stay small. Below zoom 8, a layer with more than 1,000
 features in a tile is drawn coarser (512 units a side instead of 4,096), and one feature
 remains where several fall on the same position. Each feature names its resource in the
-attribute `iri`; in such a coarser layer it is split in two, `ns` (the IRI up to its last `/`
-or `#`, kept once for the whole layer) and `local`, and the IRI is `ns` followed by `local`.
-A style or client that picks features by IRI reads either. The small network here keeps every
-feature.
+attribute `iri`; in such a coarser layer it has a number instead, the feature's id, and
+`/ds/tiles/iris/{collection}?id=…` gives the IRIs of numbers (the Map page asks it when you
+click such a feature). The small network here keeps every feature, with `iri`, but the
+lookup works on any number; `97728579416` is the number of `ex:LV`:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/tiles/iris/Station?id=97728579416'
+```
+
+<!-- test: output -->
+```text
+{"97728579416":["https://example.org/rail#LV"]}
+```
 
 A client that asks for gzip gets the tiles gzipped, as it does the map's facets and searches
 and the OGC API's answers; a browser always asks. Answers under 1 KB, as this network's tiles

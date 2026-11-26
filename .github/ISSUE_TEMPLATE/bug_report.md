@@ -2,6 +2,7 @@
 name: Bug report
 about: A query, command or page that gives a wrong answer, an error or a crash
 labels: bug
+type: Bug
 ---
 
 **What happened**

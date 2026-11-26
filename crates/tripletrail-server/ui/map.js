@@ -892,22 +892,41 @@ window.TripleTrailMap = (function () {
     } catch (e) { /* the world view stays */ }
   }
 
-  /** A tile feature's IRI: `iri`, or in a generalised low-zoom layer `ns` and `local`. */
-  function featureIri(f) {
-    const p = f.properties || {};
-    return p.iri || (p.local != null ? (p.ns || "") + p.local : null);
+  /** The number of feature `iri` in a generalised low-zoom tile, which carries no IRI. */
+  const featureNumber = (iri) => window.TripleTrailMapTools ? window.TripleTrailMapTools.featureNumber(iri) : -1;
+  /** A style filter for feature `iri`: by `iri`, or in a generalised layer by its number. */
+  const isFeature = (iri) => ["any", ["==", ["get", "iri"], iri], ["==", ["id"], featureNumber(iri)]];
+
+  /** The IRIs of tile features: `iri`, or for those of a generalised low-zoom layer, which
+   *  carry only a number, what `/{ds}/tiles/iris/{collection}` says (#261). */
+  async function featureIris(ds, hits) {
+    const out = [];
+    const numbered = new Map();
+    for (const f of hits) {
+      const iri = (f.properties || {}).iri;
+      if (iri) out.push([iri, f.sourceLayer]);
+      else if (f.id != null) {
+        if (!numbered.has(f.sourceLayer)) numbered.set(f.sourceLayer, new Set());
+        numbered.get(f.sourceLayer).add(f.id);
+      }
+    }
+    for (const [layer, ids] of numbered) {
+      const query = [...ids].slice(0, 1000).map((n) => "id=" + n).join("&");
+      try {
+        const found = await getJson(service(ds, "tiles/iris/" + encodeURIComponent(layer) + "?" + query));
+        for (const n of ids) for (const iri of found[n] || []) out.push([iri, layer]);
+      } catch (e) { /* those features stay out of the list */ }
+    }
+    return out;
   }
-  /** The same as a style expression. */
-  const IRI_OF = ["coalesce", ["get", "iri"], ["concat", ["coalesce", ["get", "ns"], ""], ["get", "local"]]];
 
   /** Lists the features under a click, with labels, each linking to its describe page. */
   async function pick(ds, e, collections, layers) {
     const hits = map.queryRenderedFeatures(box(e.point, 4), { layers });
     const byId = new Map(collections.map((c) => [c.id, c]));
     const seen = new Map();
-    for (const f of hits) {
-      const iri = featureIri(f);
-      if (iri && !seen.has(iri)) seen.set(iri, byId.get(f.sourceLayer) || { title: f.sourceLayer, color: "#888" });
+    for (const [iri, layer] of await featureIris(ds, hits)) {
+      if (!seen.has(iri)) seen.set(iri, byId.get(layer) || { title: layer, color: "#888" });
     }
     if (!seen.size) return;
     const picked = [...seen].slice(0, MAX_PICKED);
@@ -1019,7 +1038,7 @@ window.TripleTrailMap = (function () {
     const run = () => {
       for (const id of ["sel-fill", "sel-outline", "sel-band", "sel-line", "sel-point"]) if (map.getLayer(id)) map.removeLayer(id);
       if (!iri) return;
-      const has = ["==", IRI_OF, iri];
+      const has = isFeature(iri);
       const layer = collection || (drawn.find((c) => map.getSource("tripletrail") &&
         map.querySourceFeatures("tripletrail", { sourceLayer: c.id, filter: has }).length) || {}).id;
       if (!layer) return;
