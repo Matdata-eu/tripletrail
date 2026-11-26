@@ -2664,13 +2664,30 @@ fn serve(args: ServeArgs) -> Result<()> {
                 if !no_warm_up {
                     let (handle, names) = (handle.clone(), names.clone());
                     std::thread::spawn(move || {
+                        let mut watches = Vec::with_capacity(names.len());
                         for name in &names {
                             if let Some(done) = handle.warm_ranks(name) {
                                 eprintln!("{name}: {done}");
                             }
+                            // Read before the warm-up: a write during it is warmed after.
+                            watches.push(handle.map_watch(name));
                             match handle.warm_map(name) {
                                 Ok(done) => eprintln!("{name}: {done}"),
                                 Err(e) => eprintln!("{name}: the map was not made ahead: {e}"),
+                            }
+                        }
+                        // And again after each load or change of the shapes, once the dataset
+                        // keeps still (#258): a write leaves the counts to the next visitor.
+                        loop {
+                            std::thread::sleep(tripletrail_server::MAP_WATCH);
+                            for (name, watch) in names.iter().zip(watches.iter_mut()) {
+                                match handle.rewarm_map(name, watch) {
+                                    Some(Ok(done)) => eprintln!("{name}: after a change, {done}"),
+                                    Some(Err(e)) => {
+                                        eprintln!("{name}: the map was not made again: {e}")
+                                    }
+                                    None => {}
+                                }
                             }
                         }
                     });
