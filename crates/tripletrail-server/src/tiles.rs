@@ -1503,7 +1503,7 @@ fn facet_counts(
     let next = std::sync::atomic::AtomicUsize::new(0);
     let slots: Vec<Mutex<Option<Result<serde_json::Value, HttpError>>>> =
         collection.facets.iter().map(|_| Mutex::new(None)).collect();
-    let workers = collection.facets.len().clamp(1, PARALLEL);
+    let workers = collection.facets.len().clamp(1, facet_threads());
     std::thread::scope(|scope| {
         for _ in 0..workers {
             scope.spawn(|| {
@@ -2071,6 +2071,13 @@ type Layers = Vec<(String, Vec<u8>)>;
 
 /// Queries run at once for the layers of one tile.
 const PARALLEL: usize = 4;
+
+/// Facet queries run at once for one request (#256): the server's cores, at least
+/// [`PARALLEL`] and at most 16. A filter on RINF's 8 countries asks 130 of them, each a few
+/// tens of milliseconds, so the time of a request is theirs divided by the threads.
+fn facet_threads() -> usize {
+    std::thread::available_parallelism().map_or(PARALLEL, |n| n.get().clamp(PARALLEL, 16))
+}
 
 /// Most features without a geometry that the facet queries leave out by name rather than by
 /// testing every feature's geometry path.
