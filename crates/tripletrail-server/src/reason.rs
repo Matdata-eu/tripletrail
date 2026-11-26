@@ -125,6 +125,7 @@ pub(crate) fn validate(
         .map(|c| {
             json!({
                 "shape": term(&c.shape),
+                "shapeIri": c.iri.as_str(),
                 "property": c.property,
                 "focusNodes": c.focus_nodes,
                 "valueNodes": c.value_nodes,
