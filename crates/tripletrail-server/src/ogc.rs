@@ -17,7 +17,7 @@ use tripletrail::oxigraph::model::vocab::{rdf, rdfs, xsd};
 use tripletrail::oxigraph::model::{
     Graph, NamedNode, NamedOrBlankNode, NamedOrBlankNodeRef, Term, TermRef,
 };
-use tripletrail::oxigraph::sparql::QueryResults;
+use tripletrail::oxigraph::sparql::{CancellationToken, QueryResults};
 use tripletrail::shapes::Reader;
 
 mod cql2;
@@ -676,7 +676,18 @@ fn answer(
             allowed.extend(layer_keys.iter().map(String::as_str));
             only_params(&allowed)?;
             json_only(&["json", "geojson", "jsonfg"])?;
-            items(entry, &collection, &layers, params, base, timeout, fg, view)
+            let version = data_version(state, entry);
+            items(
+                entry,
+                &collection,
+                &layers,
+                params,
+                base,
+                timeout,
+                fg,
+                view,
+                version,
+            )
         }
         // The id is the percent-encoded IRI; a client that leaves its slashes unencoded
         // (the OGC test suite) sends it over several segments.
@@ -1799,7 +1810,16 @@ pub(crate) fn run(
     view: &View,
 ) -> Result<Vec<Vec<Option<Term>>>, HttpError> {
     let (engine, _deadline) = crate::with_deadline(&entry.engine, timeout);
-    let QueryResults::Solutions(rows) = query_in(&engine, query, view)? else {
+    rows_of(&engine, query, view)
+}
+
+/// The rows `query` gives on `engine` (as [`run`]).
+fn rows_of(
+    engine: &tripletrail::Engine,
+    query: &str,
+    view: &View,
+) -> Result<Vec<Vec<Option<Term>>>, HttpError> {
+    let QueryResults::Solutions(rows) = query_in(engine, query, view)? else {
         return Err(HttpError(500, "Expected solutions".to_owned()));
     };
     let variables: Vec<_> = rows.variables().to_vec();
@@ -1850,16 +1870,21 @@ fn items(
     timeout: Option<Duration>,
     fg: bool,
     view: &View,
+    version: Option<DataVersion>,
 ) -> Result<Reply, HttpError> {
     let limit = number(params, "limit", DEFAULT_LIMIT, 1)?.min(MAX_LIMIT);
     let offset = number(params, "offset", 0, 0)?;
     let bbox_crs = OutCrs::of(params, "bbox-crs")?;
     let crs = OutCrs::of(params, "crs")?;
     let window = params.get("bbox").map(|b| bbox(b, bbox_crs)).transpose()?;
-    let mut filter = window
+    // The window beside each way to the geometry, so each uses the spatial index (as the
+    // tiles do): a count of the tracks in a box around Brussels took 6.6 s with it after
+    // them all, 32 ms beside each (#317).
+    let inside = window
         .as_ref()
         .map(|w| format!("FILTER(<{GEOF}sfIntersects>(?w, \"{w}\"^^<{WKT}>))"))
         .unwrap_or_default();
+    let mut filter = String::new();
     // Property filters: a value of the property, compared as text.
     for (i, (name, value)) in params.0.iter().enumerate() {
         if !collection.filters.contains(name) {
@@ -1900,15 +1925,20 @@ fn items(
             "filter-lang and filter-crs need a filter",
         ));
     }
+    let filtered = !filter.is_empty() || window.is_some();
+    let started = std::time::Instant::now();
     // A page of distinct features: one may have several values on the geometry path.
-    let query = format!(
-        "SELECT DISTINCT ?f WHERE {{ ?f a <{}> . {} {filter} }} LIMIT {} OFFSET {offset}",
+    let pattern = format!(
+        "?f a <{}> . {} {filter}",
         collection.class.as_str(),
         match &window {
             Some(w) => collection.geometry.near(entry, view, "?f", w),
             None => collection.geometry.clone(),
         }
-        .pattern("?f", "?w"),
+        .filtered("?f", "?w", &inside),
+    );
+    let query = format!(
+        "SELECT DISTINCT ?f WHERE {{ {pattern} }} LIMIT {} OFFSET {offset}",
         limit + 1,
     );
     let rows = run(entry, &query, timeout, view)?;
@@ -1921,6 +1951,71 @@ fn items(
             _ => None,
         })
         .collect();
+    // The last page tells the number itself; otherwise it is counted beside the page's
+    // geometries and properties (#317), and a filtered count is waited for only until
+    // [`COUNT_WAIT`] after the page began, or the page's own end if later.
+    let known = (!more && (offset == 0 || !order.is_empty())).then(|| offset + order.len());
+    let stop = CancellationToken::new();
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        if known.is_none() {
+            let (pattern, collection, stop) = (&pattern, &*collection, stop.clone());
+            scope.spawn(move || {
+                let n = number_matched(
+                    entry,
+                    collection,
+                    pattern,
+                    filtered.then_some(stop),
+                    version,
+                    timeout,
+                    view,
+                );
+                let _ = send.send(n);
+            });
+        } else {
+            drop(send);
+        }
+        let page = page_of(
+            entry, collection, params, base, timeout, fg, view, &order, more, limit, offset, crs,
+        );
+        let matched = match known {
+            Some(n) => Some(n),
+            None if filtered => {
+                let wait = COUNT_WAIT.saturating_sub(started.elapsed());
+                let n = receive.recv_timeout(wait).ok().flatten();
+                if n.is_none() {
+                    stop.cancel();
+                }
+                n
+            }
+            None => receive.recv().ok().flatten(),
+        };
+        page.map(|(kind, mut body)| {
+            if let Some(n) = matched {
+                body["numberMatched"] = json!(n);
+            }
+            with_crs(json(kind, &body), crs)
+        })
+    })
+}
+
+/// The JSON of a page of items: the features of `order`, `more` when a next page follows.
+#[allow(clippy::too_many_arguments)]
+fn page_of(
+    entry: &Entry,
+    collection: &Collection,
+    params: &Params,
+    base: &str,
+    timeout: Option<Duration>,
+    fg: bool,
+    view: &View,
+    order: &[NamedNode],
+    more: bool,
+    limit: usize,
+    offset: usize,
+    crs: OutCrs,
+) -> Result<(&'static str, Value), HttpError> {
+    let order = order.to_vec();
     let mut geometries = geometries(
         entry,
         collection,
@@ -2010,7 +2105,93 @@ fn items(
             body["coordRefSys"] = json!(crs.iri());
         }
     }
-    Ok(with_crs(json(kind, &body), crs))
+    Ok((kind, body))
+}
+
+/// How long after it began a filtered page waits for its count: past it (and past the page's
+/// own end) the page goes without `numberMatched`, which OGC API Features lets a server leave
+/// out (#317).
+const COUNT_WAIT: Duration = Duration::from_secs(1);
+
+type CountCache = HashMap<(u64, String, Option<u64>), (DataVersion, usize)>;
+/// The number of features of each collection unfiltered, by (dataset, collection, grants'
+/// fingerprint), with the data version it was counted at.
+static COUNTS: Mutex<Option<CountCache>> = Mutex::new(None);
+/// Counts kept, over all datasets.
+const COUNTS_KEPT: usize = 4096;
+
+/// The number of features `pattern` (on `?f`) matches. Unfiltered (no `stop`), a
+/// collection's from the counts kept for the data version (which the warm-up makes, see
+/// [`count_features`]), else counted and kept; filtered, counted until `stop` is cancelled.
+/// `None` when it could not be counted.
+fn number_matched(
+    entry: &Entry,
+    collection: &Collection,
+    pattern: &str,
+    stop: Option<CancellationToken>,
+    version: Option<DataVersion>,
+    timeout: Option<Duration>,
+    view: &View,
+) -> Option<usize> {
+    let key = (entry.id, collection.id.clone(), view.fingerprint());
+    let kept = stop.is_none();
+    if kept
+        && let Some(version) = version
+        && let Some((at, n)) = COUNTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|c| c.get(&key))
+        && *at == version
+    {
+        return Some(*n);
+    }
+    let query = format!("SELECT (COUNT(DISTINCT ?f) AS ?n) WHERE {{ {pattern} }}");
+    let rows = match stop {
+        // The page's own timeout stops it too: the page waits for it no longer.
+        Some(stop) => rows_of(&entry.engine.with_cancellation_token(stop), &query, view),
+        None => run(entry, &query, timeout, view),
+    }
+    .ok()?;
+    let n = match rows.first().and_then(|r| r.first()).cloned().flatten() {
+        Some(Term::Literal(l)) => l.value().parse::<usize>().ok()?,
+        _ => return None,
+    };
+    if kept && let Some(version) = version {
+        let mut cache = COUNTS.lock().unwrap_or_else(|e| e.into_inner());
+        let cache = cache.get_or_insert_with(HashMap::new);
+        if cache.len() >= COUNTS_KEPT {
+            cache.clear();
+        }
+        cache.insert(key, (version, n));
+    }
+    Some(n)
+}
+
+/// Counts the features of each of `collections` for an unfiltered items page's
+/// `numberMatched`, as the map warm-up does once the dataset is open (#317). The errors, by
+/// collection id.
+pub(crate) fn count_features(
+    state: &State,
+    entry: &Entry,
+    timeout: Option<Duration>,
+) -> Vec<String> {
+    let version = data_version(state, entry);
+    let Ok(collections) = collections(state, entry, &View::default()) else {
+        return vec!["the OGC API's collections could not be made".to_owned()];
+    };
+    let mut failed = Vec::new();
+    for c in collections.iter() {
+        let pattern = format!(
+            "?f a <{}> . {}",
+            c.class.as_str(),
+            c.geometry.pattern("?f", "?w")
+        );
+        if number_matched(entry, c, &pattern, None, version, timeout, &View::default()).is_none() {
+            failed.push(format!("count of {}", c.id));
+        }
+    }
+    failed
 }
 
 /// Makes GeoJSON `features` (of `order`, their geometries in the CRS asked for) JSON-FG: each

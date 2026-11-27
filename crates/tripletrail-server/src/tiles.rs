@@ -313,6 +313,13 @@ pub(crate) fn warm(state: &State, entry: &Entry, within: Duration) -> Result<War
             out.failed.push(format!("search: {}", e.1));
         }
     }
+    // The OGC API's unfiltered counts, its items pages' `numberMatched` (#317).
+    let left = deadline.saturating_duration_since(std::time::Instant::now());
+    if !left.is_zero() {
+        let timeout = Some(limit.map_or(left, |t| t.min(left)));
+        out.failed
+            .extend(crate::ogc::count_features(state, entry, timeout));
+    }
     Ok(out)
 }
 

@@ -502,6 +502,21 @@ that gives it one (a track's own line before that of the section it is part of),
 longitudes and latitudes to 7 decimals, about a centimetre. `geometries=all` gives all of
 them as a `GeometryCollection`.
 
+A page says how many features match in all, so a client can show "1–2 of 5" before it pages
+on:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/ogc/collections/Station/items?bbox=4.2,50.75,4.8,51.05&limit=2' \
+  | grep -o '"number[A-Za-z]*":[0-9]*'
+```
+
+<!-- test: output -->
+```text
+"numberMatched":5
+"numberReturned":2
+```
+
 <!-- test: run -->
 ```sh
 curl -s -G http://localhost:7878/ds/ogc/collections/Section/items -d f=json \
