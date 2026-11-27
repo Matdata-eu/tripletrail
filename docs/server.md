@@ -3303,7 +3303,8 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   a feature outside the base, or whose local part is an IRI itself, keeps its IRI.
 - **Items** take `limit` (10 by default, at most 10,000), `offset` and `bbox` (four numbers,
   or six with heights, in CRS84; `minx > maxx` crosses the antimeridian), and give a `next`
-  link while there are more. A page holds `limit` distinct features; with `bbox`, a feature
+  link while there are more. The box is tested beside each way to the geometry (each
+  alternative of its path), so each uses the spatial index. A page holds `limit` distinct features; with `bbox`, a feature
   is in it when any of its geometries intersects the box, and comes once. They also take the
   map's spatial filter, `area`, `rel` and `dist` ([vector tiles](#vector-tiles)), and with
   `area=layer:{id}` that collection's own filters (`{id}.{key}`). Other parameters
@@ -3390,8 +3391,14 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   without the geometry cache, so it does not grow memory. The HTML page of a collection shows
   them.
 - **Conformance.** The OGC test suite (Team Engine, `ogccite/ets-ogcapi-features10`) passes
-  with no failures (567 tests); it skips the checks of `numberMatched`, which is not given:
-  counting every match of a large class would slow every page.
+  with no failures (567 tests).
+- **`numberMatched`** (#317): every items page says how many features match in all. The
+  last page knows it from its own rows. A page without filters takes the number from a
+  count kept for the collection until the next write; the warm-up makes these counts as the
+  dataset opens. A filtered page (`bbox`, properties, `datetime`, `area`, `filter`) is counted
+  next to the reading of its geometries and properties, within 2 s (or the dataset's
+  timeout, if shorter). A count that takes longer is left out of the page, as OGC API
+  Features allows.
 - **`/{ds}/ogc/api`** is an OpenAPI 3.0 definition with a path per collection, and
   `/{ds}/ogc/conformance` lists the conformance classes. Queries run under the dataset's
   limits and timeout, like any other read.

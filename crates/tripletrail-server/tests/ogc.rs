@@ -151,6 +151,12 @@ fn features_from_the_shapes() {
     assert_eq!(kind, "application/geo+json");
     assert_eq!(page["type"], "FeatureCollection");
     assert_eq!(page["numberReturned"], 10);
+    // All 25 match (#317): counted once, then kept until the next write.
+    assert_eq!(page["numberMatched"], 25, "{page}");
+    assert_eq!(
+        get(&format!("{ogc}/collections/Station/items")).2["numberMatched"],
+        25
+    );
     let mut seen = 0;
     let mut next = Some(format!("{ogc}/collections/Station/items?limit=7"));
     let mut ids = std::collections::HashSet::new();
@@ -161,6 +167,7 @@ fn features_from_the_shapes() {
             if seen < 21 { 7 } else { 4 },
             "{page}"
         );
+        assert_eq!(page["numberMatched"], 25, "{page}");
         for f in page["features"].as_array().unwrap() {
             assert!(ids.insert(f["id"].as_str().unwrap().to_owned()));
             seen += 1;
@@ -181,6 +188,18 @@ fn features_from_the_shapes() {
         .collect();
     names.sort();
     assert_eq!(names, ["S2", "S3", "S4"], "{boxed}");
+    // A filtered page is counted too: whole, the last page tells the number itself.
+    assert_eq!(boxed["numberMatched"], 3, "{boxed}");
+    let first = get(&format!(
+        "{ogc}/collections/Station/items?bbox=1.5,0,4.5,2&limit=1"
+    ))
+    .2;
+    assert_eq!(first["numberMatched"], 3, "{first}");
+    let past = get(&format!(
+        "{ogc}/collections/Station/items?bbox=1.5,0,4.5,2&offset=10"
+    ))
+    .2;
+    assert_eq!(past["numberMatched"], 3, "{past}");
     let s2 = boxed["features"]
         .as_array()
         .unwrap()
