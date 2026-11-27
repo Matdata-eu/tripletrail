@@ -3584,4 +3584,18 @@ fn items_carry_the_facets_as_labels_unless_asked_for_properties() {
     );
     let (_, _, all) = get(&format!("{items}/{id}?f=json&properties=*"));
     assert_eq!(all["properties"]["name"], "Köln Hbf", "{all}");
+    // Shapes without a facet: the features keep all their properties, not none.
+    let plain = own
+        .replace("tts:facet tts:Facet-Values ", "")
+        .replace("tts:facet tts:Facet-Range ", "");
+    ureq::put(&format!("{base}/$/datasets/kg/shapes/files/mine.ttl"))
+        .set("Authorization", "Bearer t")
+        .send_string(&plain)
+        .unwrap();
+    assert_eq!(
+        properties("", None)[0],
+        json!({ "country": "http://example.com/DEU", "tracks": 12, "name": "Köln Hbf" })
+    );
+    let (_, _, one) = get(&format!("{items}/{id}?f=json"));
+    assert_eq!(one["properties"]["name"], "Köln Hbf", "{one}");
 }

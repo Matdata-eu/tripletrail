@@ -3319,7 +3319,9 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   `tts:labelStrip` matches; an IRI without a label stays its IRI. `properties=*` (OGC API
   Features Part 6) gives every property shape's values instead, IRIs as IRIs, and
   `properties=a,b` those keys (of the property shapes or the facets), also IRIs as IRIs; an
-  unknown key is refused with `400`. One feature, `…/items/{id}`, takes the same.
+  unknown key is refused with `400`. A collection without facets (shapes without
+  `tts:facet`) gives every property by default, as `properties=*`. One feature,
+  `…/items/{id}`, takes the same.
 - **Property filters.** A property with an `tts:facet` in the shapes (generated shapes give
   one to properties with a few values or a range) filters the items by its key:
   `…/items?tracks=2&open=true` keeps the features with those values, compared as text (an

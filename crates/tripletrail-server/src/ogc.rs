@@ -101,7 +101,13 @@ pub(crate) enum Chosen {
 impl Chosen {
     fn of(params: &Params, collection: &Collection) -> Result<Self, HttpError> {
         let Some(given) = params.get("properties") else {
-            return Ok(Chosen::Facets);
+            // A collection without facets (hand-written shapes without `tts:facet`) keeps
+            // all its properties rather than none.
+            return Ok(if collection.facets.is_empty() {
+                Chosen::All
+            } else {
+                Chosen::Facets
+            });
         };
         if given.trim() == "*" {
             return Ok(Chosen::All);
