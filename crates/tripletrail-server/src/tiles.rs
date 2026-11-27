@@ -643,16 +643,48 @@ fn label_values(
     view: &View,
     version: Option<crate::ogc::DataVersion>,
 ) -> Result<(), HttpError> {
-    let mut iris: Vec<String> = answers
+    let iris: Vec<String> = answers
         .iter()
         .filter_map(|a| a["facets"].as_array())
         .flatten()
         .filter_map(|f| f["values"].as_array())
         .flatten()
         .filter_map(|v| v["value"].as_str())
-        .filter(|v| NamedNode::new(*v).is_ok())
         .map(str::to_owned)
         .collect();
+    let labels = labels_of(entry, iris, lang, strip, timeout, view, version)?;
+    for answer in answers {
+        // `get_mut`, not indexing, which would add the keys an answer has not.
+        let Some(facets) = answer.get_mut("facets").and_then(|f| f.as_array_mut()) else {
+            continue;
+        };
+        for value in facets
+            .iter_mut()
+            .filter_map(|f| f.get_mut("values").and_then(|v| v.as_array_mut()))
+            .flatten()
+        {
+            if let Some(label) = value["value"].as_str().and_then(|v| labels.get(v)) {
+                value["label"] = label.clone().into();
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The labels of those of `iris` that are IRIs and have one: the `rdfs:label` or
+/// `skos:prefLabel` that suits a reader of `lang` best ([`label_rank`]), without what `strip`
+/// matches (#260). Kept for the data version and language, those without a label too, so
+/// that the map's facets and the OGC items' properties (#356) look each one up once.
+pub(crate) fn labels_of(
+    entry: &Entry,
+    mut iris: Vec<String>,
+    lang: &str,
+    strip: Option<&regex::Regex>,
+    timeout: Option<Duration>,
+    view: &View,
+    version: Option<crate::ogc::DataVersion>,
+) -> Result<HashMap<String, String>, HttpError> {
+    iris.retain(|v| NamedNode::new(v.as_str()).is_ok());
     iris.sort_unstable();
     iris.dedup();
     // The labels found before for this data version (whose shapes give `strip`) and
@@ -728,22 +760,7 @@ fn label_values(
             known.insert(iri, label);
         }
     }
-    for answer in answers {
-        // `get_mut`, not indexing, which would add the keys an answer has not.
-        let Some(facets) = answer.get_mut("facets").and_then(|f| f.as_array_mut()) else {
-            continue;
-        };
-        for value in facets
-            .iter_mut()
-            .filter_map(|f| f.get_mut("values").and_then(|v| v.as_array_mut()))
-            .flatten()
-        {
-            if let Some(label) = value["value"].as_str().and_then(|v| labels.get(v)) {
-                value["label"] = label.clone().into();
-            }
-        }
-    }
-    Ok(())
+    Ok(labels)
 }
 
 /// A collection's facet filters, as SPARQL over `?f`, and a signature of them for the cache.

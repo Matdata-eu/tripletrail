@@ -2386,8 +2386,15 @@ ex:TrackShape a sh:NodeShape ; sh:targetClass ex:Track ; tts:key "track" ;
     assert!(
         text.contains("http://example.com/Meets") && text.contains("http://example.com/NoData")
     );
-    // No property of the OGC API's features, nor a filter there.
+    // The OGC API's features carry it by default, with the map's other facets (#356)...
     let (_, _, items) = get(&format!("{base}/kg/ogc/collections/track/items?f=json"));
+    let properties = &items["features"][0]["properties"];
+    assert!(properties.get("fast").is_some(), "{items}");
+    assert_eq!(properties["speed"], 200, "{items}");
+    // ... but it is no property of the shapes: not among all of them, nor a filter there.
+    let (_, _, items) = get(&format!(
+        "{base}/kg/ogc/collections/track/items?f=json&properties=*"
+    ));
     let properties = &items["features"][0]["properties"];
     assert!(properties.get("fast").is_none(), "{items}");
     assert_eq!(properties["speed"], 200, "{items}");
@@ -3478,4 +3485,103 @@ fn a_feature_takes_its_own_geometry_before_its_parents() {
         .find(|f| f["id"].as_str().is_some_and(|id| id.ends_with("t1")))
         .unwrap();
     assert_eq!(t1["geometry"]["type"], "GeometryCollection", "{t1}");
+}
+
+/// The items' properties (#356): by default the collection's facets, each IRI value as its
+/// label in the reader's language, as a map client reads them; `properties=*` every property
+/// of the shapes, with IRIs as IRIs; `properties=a,b` those (OGC API Features Part 6).
+#[test]
+fn items_carry_the_facets_as_labels_unless_asked_for_properties() {
+    let dir = tripletrail_testdir::tempdir("ogc-properties");
+    let ttl = "@prefix ex: <http://example.com/> .\n\
+               @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+               @prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
+               ex:DEU skos:prefLabel \"Germany\"@en , \"Deutschland\"@de , \"Allemagne\"@fr .\n\
+               ex:s1 a ex:Station ; ex:country ex:DEU ; ex:name \"Köln Hbf\" ; ex:tracks 12 ;\n\
+                 geo:hasGeometry [ geo:asWKT \"POINT(6.95 50.94)\"^^geo:wktLiteral ] .\n\
+               ex:s2 a ex:Station ; ex:country ex:NLD ; ex:name \"Venlo\" ; ex:tracks 5 ;\n\
+                 geo:hasGeometry [ geo:asWKT \"POINT(6.17 51.36)\"^^geo:wktLiteral ] .\n";
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    let server = Server::bind(
+        "127.0.0.1:0",
+        vec![("kg".to_owned(), engine)],
+        Options {
+            threads: 4,
+            admin_token: Some("t".to_owned()),
+            location: Some(dir.join("data")),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let base = format!("http://{}", server.address());
+    server.spawn();
+    let own = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+         @prefix tts: <http://w3id.org/tripletrail/shapes#> .\n\
+         @prefix geo: <http://www.opengis.net/ont/geosparql#> .\n\
+         <urn:my:stations> a sh:NodeShape ; sh:targetClass <http://example.com/Station> ;\n\
+           tts:key \"station\" ;\n\
+           tts:geometry [ sh:path ( geo:hasGeometry geo:asWKT ) ] ;\n\
+           sh:property [ sh:path <http://example.com/country> ; tts:key \"country\" ; sh:order 1 ;\n\
+             tts:facet tts:Facet-Values ] ,\n\
+             [ sh:path <http://example.com/tracks> ; tts:key \"tracks\" ; sh:order 2 ;\n\
+             tts:facet tts:Facet-Range ] ,\n\
+             [ sh:path <http://example.com/name> ; tts:key \"name\" ; sh:order 3 ] .\n";
+    ureq::put(&format!("{base}/$/datasets/kg/shapes/files/mine.ttl"))
+        .set("Authorization", "Bearer t")
+        .send_string(own)
+        .unwrap();
+    let items = format!("{base}/kg/ogc/collections/station/items");
+    let properties = |query: &str, accept: Option<&str>| -> Vec<Value> {
+        let mut request = ureq::get(&format!("{items}?f=json{query}"));
+        if let Some(accept) = accept {
+            request = request.set("Accept-Language", accept);
+        }
+        let out: Value =
+            serde_json::from_str(&request.call().unwrap().into_string().unwrap()).unwrap();
+        out["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["properties"].clone())
+            .collect()
+    };
+    // The facets, in the shapes' order, an IRI as its label (in English by default); a value
+    // without a label stays its IRI.
+    assert_eq!(
+        properties("", None),
+        vec![
+            json!({ "country": "Germany", "tracks": 12 }),
+            json!({ "country": "http://example.com/NLD", "tracks": 5 }),
+        ]
+    );
+    // The reader's language: `lang`, else the browser's.
+    assert_eq!(properties("&lang=de", None)[0]["country"], "Deutschland");
+    assert_eq!(
+        properties("", Some("fr-BE,fr;q=0.9"))[0]["country"],
+        "Allemagne"
+    );
+    // Every property of the shapes, IRIs as IRIs.
+    assert_eq!(
+        properties("&properties=*", None)[0],
+        json!({ "country": "http://example.com/DEU", "tracks": 12, "name": "Köln Hbf" })
+    );
+    // Those asked for, by key.
+    assert_eq!(
+        properties("&properties=name,country", None)[0],
+        json!({ "country": "http://example.com/DEU", "name": "Köln Hbf" })
+    );
+    let (status, _, body) = get(&format!("{items}?f=json&properties=nope"));
+    assert_eq!(status, 400, "{body}");
+    assert!(body.to_string().contains("nope"), "{body}");
+    // One feature alike.
+    let id = "http%3A%2F%2Fexample.com%2Fs1";
+    let (_, _, one) = get(&format!("{items}/{id}?f=json"));
+    assert_eq!(
+        one["properties"],
+        json!({ "country": "Germany", "tracks": 12 }),
+        "{one}"
+    );
+    let (_, _, all) = get(&format!("{items}/{id}?f=json&properties=*"));
+    assert_eq!(all["properties"]["name"], "Köln Hbf", "{all}");
 }

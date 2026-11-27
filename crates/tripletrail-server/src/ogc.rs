@@ -82,7 +82,80 @@ const ITEMS_PARAMS: &[&str] = &[
     "area",
     "rel",
     "dist",
+    "properties",
+    "lang",
 ];
+
+/// The properties a feature carries (`properties`, from OGC API Features Part 6, #356).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Chosen {
+    /// None given: the collection's facets, the properties a map shows and filters by, with
+    /// each IRI value as its label, as a map client reads them.
+    Facets,
+    /// `properties=*`: every property the shapes describe, with IRIs as IRIs.
+    All,
+    /// `properties=a,b`: those (properties or facets, by key), with IRIs as IRIs.
+    Keys(Vec<String>),
+}
+
+impl Chosen {
+    fn of(params: &Params, collection: &Collection) -> Result<Self, HttpError> {
+        let Some(given) = params.get("properties") else {
+            return Ok(Chosen::Facets);
+        };
+        if given.trim() == "*" {
+            return Ok(Chosen::All);
+        }
+        let keys: Vec<String> = given
+            .split(',')
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .map(str::to_owned)
+            .collect();
+        for key in &keys {
+            let known = collection.properties.iter().any(|(k, _)| k == key)
+                || collection.facets.iter().any(|f| &f.key == key);
+            if !known {
+                return Err(HttpError::bad_request(format!(
+                    "Unknown property {key} in properties: see {}'s queryables, or * for all",
+                    collection.id
+                )));
+            }
+        }
+        Ok(Chosen::Keys(keys))
+    }
+
+    /// `(key, pattern binding ?v to the values of ?f)` of the properties chosen, in the
+    /// shapes' order.
+    fn patterns(&self, collection: &Collection) -> Vec<(String, String)> {
+        let facets = || {
+            collection
+                .facets
+                .iter()
+                .map(|f| (f.key.clone(), f.bind("?f", "?v")))
+        };
+        let properties = || {
+            collection
+                .properties
+                .iter()
+                .map(|(k, path)| (k.clone(), format!(" ?f {path} ?v .")))
+        };
+        match self {
+            Chosen::Facets => facets().collect(),
+            Chosen::All => properties().collect(),
+            Chosen::Keys(keys) => {
+                let mut out: Vec<(String, String)> =
+                    properties().filter(|(k, _)| keys.contains(k)).collect();
+                // A facet the shapes compute (`tts:select`) has no property of its own.
+                let more: Vec<(String, String)> = facets()
+                    .filter(|(k, _)| keys.contains(k) && !out.iter().any(|(o, _)| o == k))
+                    .collect();
+                out.extend(more);
+                out
+            }
+        }
+    }
+}
 
 /// A CRS features are given or asked for in (OGC API – Features Part 2).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -554,6 +627,7 @@ pub(crate) fn route(
     html_first: bool,
     fg_first: bool,
     view: &View,
+    lang: &str,
 ) -> Result<Reply, HttpError> {
     let as_html = match params.get("f") {
         Some(f) => f == "html",
@@ -563,7 +637,7 @@ pub(crate) fn route(
         Some(f) => f == "jsonfg",
         None => fg_first && !html_first,
     };
-    let mut reply = answer(state, entry, rest, params, base, timeout, fg, view)?;
+    let mut reply = answer(state, entry, rest, params, base, timeout, fg, view, lang)?;
     if as_html {
         reply = html::page(rest, params, base, reply, &state.options.branding)?;
     }
@@ -584,6 +658,7 @@ fn answer(
     timeout: Option<Duration>,
     fg: bool,
     view: &View,
+    lang: &str,
 ) -> Result<Reply, HttpError> {
     let format = params.get("f");
     let json_only = |allowed: &[&str]| -> Result<(), HttpError> {
@@ -687,12 +762,13 @@ fn answer(
                 fg,
                 view,
                 version,
+                lang,
             )
         }
         // The id is the percent-encoded IRI; a client that leaves its slashes unencoded
         // (the OGC test suite) sends it over several segments.
         ["collections", id, "items", first, more @ ..] => {
-            only_params(&["f", "crs", "geometries", "timeout"])?;
+            only_params(&["f", "crs", "geometries", "timeout", "properties", "lang"])?;
             json_only(&["json", "geojson", "jsonfg"])?;
             let collection = find(state, entry, id, view)?;
             let fid = std::iter::once(*first)
@@ -702,7 +778,18 @@ fn answer(
             let iri = percent_decode(&fid)
                 .and_then(|s| collection.feature_iri(&s))
                 .ok_or_else(|| HttpError(404, format!("No feature {fid}")))?;
-            feature(entry, &collection, &iri, params, base, timeout, fg, view)
+            let version = data_version(state, entry);
+            feature(
+                entry,
+                &collection,
+                &iri,
+                params,
+                base,
+                timeout,
+                fg,
+                view,
+                (lang, version),
+            )
         }
         _ => Err(HttpError(404, "Not found".to_owned())),
     }
@@ -1871,8 +1958,10 @@ fn items(
     fg: bool,
     view: &View,
     version: Option<DataVersion>,
+    lang: &str,
 ) -> Result<Reply, HttpError> {
     let limit = number(params, "limit", DEFAULT_LIMIT, 1)?.min(MAX_LIMIT);
+    let chosen = Chosen::of(params, collection)?;
     let offset = number(params, "offset", 0, 0)?;
     let bbox_crs = OutCrs::of(params, "bbox-crs")?;
     let crs = OutCrs::of(params, "crs")?;
@@ -1976,7 +2065,17 @@ fn items(
             drop(send);
         }
         let page = page_of(
-            entry, collection, params, base, timeout, fg, view, &order, more, limit, offset, crs,
+            entry,
+            collection,
+            params,
+            base,
+            timeout,
+            fg,
+            view,
+            &order,
+            (more, limit, offset),
+            crs,
+            (&chosen, lang, version),
         );
         let matched = match known {
             Some(n) => Some(n),
@@ -2010,10 +2109,9 @@ fn page_of(
     fg: bool,
     view: &View,
     order: &[NamedNode],
-    more: bool,
-    limit: usize,
-    offset: usize,
+    (more, limit, offset): (bool, usize, usize),
     crs: OutCrs,
+    labels: (&Chosen, &str, Option<DataVersion>),
 ) -> Result<(&'static str, Value), HttpError> {
     let order = order.to_vec();
     let mut geometries = geometries(
@@ -2034,6 +2132,7 @@ fn page_of(
         base,
         timeout,
         view,
+        labels,
     )?;
     if fg {
         json_fg(
@@ -2433,7 +2532,9 @@ fn feature(
     timeout: Option<Duration>,
     fg: bool,
     view: &View,
+    (lang, version): (&str, Option<DataVersion>),
 ) -> Result<Reply, HttpError> {
+    let chosen = Chosen::of(params, collection)?;
     let query = format!("ASK {{ {iri} a <{}> }}", collection.class.as_str());
     let (engine, _deadline) = crate::with_deadline(&entry.engine, timeout);
     if !matches!(
@@ -2464,6 +2565,7 @@ fn feature(
         base,
         timeout,
         view,
+        (&chosen, lang, version),
     )?;
     if fg {
         json_fg(
@@ -2620,6 +2722,7 @@ fn geometries(
 }
 
 /// The features `order` lists, with their properties.
+#[allow(clippy::too_many_arguments)]
 fn features(
     entry: &Entry,
     collection: &Collection,
@@ -2628,16 +2731,17 @@ fn features(
     base: &str,
     timeout: Option<Duration>,
     view: &View,
+    (chosen, lang, version): (&Chosen, &str, Option<DataVersion>),
 ) -> Result<Vec<Value>, HttpError> {
+    let chosen_patterns = chosen.patterns(collection);
     let mut properties: HashMap<&NamedNode, Map<String, Value>> =
         order.iter().map(|f| (f, Map::new())).collect();
-    if !order.is_empty() && !collection.properties.is_empty() {
+    if !order.is_empty() && !chosen_patterns.is_empty() {
         let values: Vec<String> = order.iter().map(|f| f.to_string()).collect();
-        let unions: Vec<String> = collection
-            .properties
+        let unions: Vec<String> = chosen_patterns
             .iter()
             .enumerate()
-            .map(|(i, (_, path))| format!("{{ ?f {path} ?v BIND({i} AS ?k) }}"))
+            .map(|(i, (_, pattern))| format!("{{ {pattern} BIND({i} AS ?k) }}"))
             .collect();
         let query = format!(
             "SELECT ?f ?k ?v WHERE {{ VALUES ?f {{ {} }} {} }}",
@@ -2645,7 +2749,29 @@ fn features(
             unions.join(" UNION ")
         );
         let mut found: HashMap<(NamedNode, usize), Vec<Value>> = HashMap::new();
-        for row in run(entry, &query, timeout, view)? {
+        let rows = run(entry, &query, timeout, view)?;
+        // The facets' IRI values as their labels, as the map shows them (#356).
+        let labels = if *chosen == Chosen::Facets {
+            let iris: Vec<String> = rows
+                .iter()
+                .filter_map(|row| match &row[2] {
+                    Some(Term::NamedNode(v)) => Some(v.as_str().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            crate::tiles::labels_of(
+                entry,
+                iris,
+                lang,
+                collection.label_strip.as_ref(),
+                timeout,
+                view,
+                version,
+            )?
+        } else {
+            HashMap::new()
+        };
+        for row in rows {
             let (Some(Term::NamedNode(f)), Some(Term::Literal(k)), Some(v)) =
                 (&row[0], &row[1], &row[2])
             else {
@@ -2654,7 +2780,14 @@ fn features(
             let Ok(k) = k.value().parse::<usize>() else {
                 continue;
             };
-            if let Some(v) = value(v) {
+            let v = match v {
+                Term::NamedNode(n) => labels
+                    .get(n.as_str())
+                    .map(|l| Value::from(l.as_str()))
+                    .or_else(|| value(v)),
+                _ => value(v),
+            };
+            if let Some(v) = v {
                 found.entry((f.clone(), k)).or_default().push(v);
             }
         }
@@ -2668,7 +2801,19 @@ fn features(
                     values.sort_by_cached_key(Value::to_string);
                     Value::Array(values)
                 };
-                map.insert(collection.properties[k].0.clone(), value);
+                // Several rows of one value (a label shared by two IRIs) as one.
+                let value = match value {
+                    Value::Array(mut a) => {
+                        a.dedup();
+                        if a.len() == 1 {
+                            a.pop().expect("one")
+                        } else {
+                            Value::Array(a)
+                        }
+                    }
+                    v => v,
+                };
+                map.insert(chosen_patterns[k].0.clone(), value);
             }
         }
     }
@@ -2678,7 +2823,7 @@ fn features(
             let mut props = properties.remove(f).unwrap_or_default();
             // Keys in the shapes' order.
             let mut sorted = Map::new();
-            for (key, _) in &collection.properties {
+            for (key, _) in &chosen_patterns {
                 if let Some(v) = props.remove(key) {
                     sorted.insert(key.clone(), v);
                 }
