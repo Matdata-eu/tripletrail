@@ -4,7 +4,7 @@
   "description": "Browser tests of the web UI (dev and CI only, never shipped)",
   "type": "module",
   "devDependencies": {
-    "playwright": "1.63.0"
+    "playwright": "1.65.1"
   },
   "scripts": {
     "test": "node --test"
