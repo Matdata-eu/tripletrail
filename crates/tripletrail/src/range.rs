@@ -259,10 +259,13 @@ fn widen(bound: f64, direction: f64) -> f64 {
 pub(crate) struct RangeIndexes {
     /// With the generation of the store whose data the column holds; `None` on Oxigraph's
     /// store, whose columns follow its current data.
-    columns: Mutex<HashMap<NamedNode, (Option<u64>, Arc<NumericColumn>)>>,
+    columns: Mutex<HashMap<NamedNode, Held>>,
     /// Counts the invalidations.
     generation: AtomicU64,
 }
+
+/// A column, with the generation of the store whose data it holds (`None`: the current data).
+type Held = (Option<u64>, Arc<NumericColumn>);
 
 /// Whether no commit after generation `from`, up to and with `to` (either order), changed a
 /// quad of `predicate`: `false` when that is not known.
