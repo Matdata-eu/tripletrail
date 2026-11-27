@@ -64,7 +64,7 @@ jobs:
         run: |
           echo "::error::PROJECT_TOKEN is not set in this repository"
           exit 1
-      - uses: actions/github-script@v8
+      - uses: actions/github-script@v9
         env:
           ITEM: ${{ inputs.item }}
           SET: ${{ inputs.set }}

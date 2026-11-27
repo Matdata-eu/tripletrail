@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/github-script@v8
+      - uses: actions/github-script@v9
         with:
           script: |
             const isTracker = (issue) => /^tracker\s*:/i.test(issue.title);
