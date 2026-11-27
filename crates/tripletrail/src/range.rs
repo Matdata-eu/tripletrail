@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tripletrail_geo::sync::LockUnpoisoned;
+use tripletrail_store::{Dataset, Snapshot, Store};
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 /// Numeric datatypes, by local name.
@@ -75,21 +76,28 @@ pub(crate) struct NumericColumn {
 }
 
 impl NumericColumn {
+    /// From `at` (a snapshot of the tripletrail store), or from the engine's current data.
     /// `None` if reading the store fails: an incomplete column would drop rows.
-    fn build(engine: &Engine, predicate: &NamedNode) -> Option<Self> {
+    fn build(engine: &Engine, predicate: &NamedNode, at: Option<&Snapshot>) -> Option<Self> {
         let mut counts: HashMap<Literal, u64> = HashMap::new();
         let mut total = 0;
-        for quad in engine.store.quads_for_pattern(
-            None,
-            Some(predicate.as_ref()),
-            None,
-            Some(GraphNameRef::DefaultGraph),
-        ) {
+        let mut count = |object: Term| {
             total += 1;
-            if let Term::Literal(l) = quad.ok()?.object
+            if let Term::Literal(l) = object
                 && numeric_value(&l).is_some()
             {
                 *counts.entry(l).or_default() += 1;
+            }
+        };
+        let (p, g) = (Some(predicate.as_ref()), Some(GraphNameRef::DefaultGraph));
+        match at {
+            Some(at) => at
+                .quads_for_pattern(None, p, None, g)
+                .for_each(|q| count(q.object)),
+            None => {
+                for quad in engine.store.quads_for_pattern(None, p, None, g) {
+                    count(quad.ok()?.object);
+                }
             }
         }
         let mut entries: Vec<(f64, Literal, u64)> = counts
@@ -220,6 +228,17 @@ impl NumericColumn {
     }
 }
 
+/// Applies a write's changes for one predicate to its column; `false` when they are many
+/// against it or don't match it (the column is dropped then).
+fn patch(column: &mut Arc<NumericColumn>, changes: &[(bool, Term)]) -> bool {
+    changes.len() <= column.literals.len() / PATCH_RATIO + 64 && {
+        let c = Arc::make_mut(column);
+        changes
+            .iter()
+            .all(|(added, o)| c.apply(*added, o).is_some())
+    }
+}
+
 /// `bound` moved a little outwards: decimals and doubles of the same value can round to
 /// neighbouring doubles, and the FILTER makes the exact decision anyway.
 fn widen(bound: f64, direction: f64) -> f64 {
@@ -230,29 +249,89 @@ fn widen(bound: f64, direction: f64) -> f64 {
 }
 
 /// Value-ordered indexes of numeric objects, per predicate, built on first use.
+///
+/// On the tripletrail store each column is kept with the [`Store::generation`] whose data it
+/// holds (#328): a query reads a column only for the generation of its own snapshot, or for
+/// one whose commits since (or before) did not touch the predicate. Otherwise the column is
+/// built again from the query's snapshot, so that a write between the snapshot and the read
+/// never takes values from it (top-k, #297) or from its value blocks (the range rewrite).
 #[derive(Default)]
 pub(crate) struct RangeIndexes {
-    columns: Mutex<HashMap<NamedNode, Arc<NumericColumn>>>,
+    /// With the generation of the store whose data the column holds; `None` on Oxigraph's
+    /// store, whose columns follow its current data.
+    columns: Mutex<HashMap<NamedNode, (Option<u64>, Arc<NumericColumn>)>>,
     /// Counts the invalidations.
     generation: AtomicU64,
 }
 
+/// Whether no commit after generation `from`, up to and with `to` (either order), changed a
+/// quad of `predicate`: `false` when that is not known.
+fn untouched(store: &Store, predicate: &NamedNode, from: u64, to: u64) -> bool {
+    let (from, to) = (from.min(to), from.max(to));
+    if from == to {
+        return true;
+    }
+    let Some((_, predicates)) = store.touched_between(from, to) else {
+        return false;
+    };
+    // A predicate the dictionary does not know was in no commit.
+    store
+        .term_id(predicate.as_ref().into())
+        .is_none_or(|id| predicates.binary_search(&id.0).is_err())
+}
+
 impl RangeIndexes {
+    /// The column of `predicate` for a query reading `at` (the tripletrail store), or the
+    /// current data (Oxigraph's store, `at: None`).
     pub(crate) fn column(
         &self,
         engine: &Engine,
         predicate: &NamedNode,
+        at: Option<&Snapshot>,
     ) -> Option<Arc<NumericColumn>> {
-        if let Some(c) = self.columns.lock_unpoisoned().get(predicate) {
+        let store = match &engine.store {
+            Dataset::TripleTrail(store) => Some(store),
+            Dataset::Oxigraph(_) => None,
+        };
+        let (Some(store), Some(at)) = (store, at) else {
+            return self.current_column(engine, predicate);
+        };
+        // A transaction's view has no generation: built for it alone.
+        let Some(wanted) = at.generation() else {
+            return NumericColumn::build(engine, predicate, Some(at)).map(Arc::new);
+        };
+        if let Some((generation, c)) = self.columns.lock_unpoisoned().get_mut(predicate)
+            && let Some(held) = *generation
+            && (held == wanted || untouched(store, predicate, held, wanted))
+        {
+            // The same data at the later generation too.
+            *generation = Some(held.max(wanted));
+            return Some(Arc::clone(c));
+        }
+        let built = Arc::new(NumericColumn::build(engine, predicate, Some(at))?);
+        let mut columns = self.columns.lock_unpoisoned();
+        // Kept unless a newer one came in meanwhile (an older query's column is its own).
+        if columns
+            .get(predicate)
+            .is_none_or(|(g, _)| g.is_none_or(|g| g < wanted))
+        {
+            columns.insert(predicate.clone(), (Some(wanted), Arc::clone(&built)));
+        }
+        Some(built)
+    }
+
+    /// The column of the current data, for Oxigraph's store.
+    fn current_column(&self, engine: &Engine, predicate: &NamedNode) -> Option<Arc<NumericColumn>> {
+        if let Some((_, c)) = self.columns.lock_unpoisoned().get(predicate) {
             return Some(Arc::clone(c));
         }
         // Built outside the lock, so other predicates' lookups do not wait. A write between
         // the build and the insert would leave a stale column: the generation guards that.
         let generation = self.generation.load(Ordering::Acquire);
-        let built = Arc::new(NumericColumn::build(engine, predicate)?);
+        let built = Arc::new(NumericColumn::build(engine, predicate, None)?);
         let mut columns = self.columns.lock_unpoisoned();
         if self.generation.load(Ordering::Acquire) == generation {
-            columns.insert(predicate.clone(), Arc::clone(&built));
+            columns.insert(predicate.clone(), (None, Arc::clone(&built)));
         }
         Some(built)
     }
@@ -260,8 +339,16 @@ impl RangeIndexes {
     /// Brings the built columns up to date with the quads a write added (`true`) or removed
     /// (`false`), each listed once: patched in place (a query still holding a column keeps
     /// its own copy), or dropped when the changes for a predicate are many against its
-    /// column or don't match it. Columns not built yet need nothing.
-    pub(crate) fn apply(&self, changes: impl IntoIterator<Item = (bool, Quad)>) {
+    /// column or don't match it. Columns not built yet need nothing. `committed`: the
+    /// tripletrail store and the generation the write's commit made, if known. A column of an
+    /// earlier generation is patched only if the commits between left its predicate alone
+    /// (they may be brought in after this one); one a write of unknown generation changes is
+    /// dropped.
+    pub(crate) fn apply(
+        &self,
+        changes: impl IntoIterator<Item = (bool, Quad)>,
+        committed: Option<(&Store, Option<u64>)>,
+    ) {
         let mut columns = self.columns.lock_unpoisoned();
         self.generation.fetch_add(1, Ordering::AcqRel);
         if columns.is_empty() {
@@ -276,17 +363,31 @@ impl RangeIndexes {
                     .push((added, q.object));
             }
         }
+        if let Some((store, generation)) = committed {
+            columns.retain(|predicate, (held, column)| {
+                let changes = by_predicate.get(predicate);
+                let (Some(held_at), Some(g)) = (*held, generation) else {
+                    // Untouched columns of the tripletrail store keep their generation: a
+                    // query checks the commits since.
+                    return held.is_some() && changes.is_none();
+                };
+                if held_at >= g {
+                    // Built from a snapshot that holds this commit already.
+                    return true;
+                }
+                if !untouched(store, predicate, held_at, g - 1) {
+                    return false;
+                }
+                *held = Some(g);
+                changes.is_none_or(|changes| patch(column, changes))
+            });
+            return;
+        }
         for (predicate, changes) in by_predicate {
-            let Some(column) = columns.get_mut(&predicate) else {
+            let Some((_, column)) = columns.get_mut(&predicate) else {
                 continue;
             };
-            let patched = changes.len() <= column.literals.len() / PATCH_RATIO + 64 && {
-                let c = Arc::make_mut(column);
-                changes
-                    .iter()
-                    .all(|(added, o)| c.apply(*added, o).is_some())
-            };
-            if !patched {
+            if !patch(column, &changes) {
                 columns.remove(&predicate);
             }
         }
@@ -308,7 +409,7 @@ impl RangeIndexes {
         self.columns
             .lock_unpoisoned()
             .values()
-            .map(|c| size_of::<NumericColumn>() + c.literals.len() * PER_VALUE)
+            .map(|(_, c)| size_of::<NumericColumn>() + c.literals.len() * PER_VALUE)
             .sum()
     }
 
@@ -418,6 +519,8 @@ struct Candidate {
 
 struct Pass<'a> {
     engine: &'a Engine,
+    /// The snapshot the query reads, on the tripletrail store.
+    at: Option<&'a Snapshot>,
     decisions: Vec<String>,
 }
 
@@ -536,7 +639,12 @@ impl Pass<'_> {
             else {
                 continue;
             };
-            let Some(column) = self.engine.spatial.ranges.column(self.engine, &predicate) else {
+            let Some(column) = self
+                .engine
+                .spatial
+                .ranges
+                .column(self.engine, &predicate, self.at)
+            else {
                 continue;
             };
             let range = column.range(*low, *high);
@@ -632,14 +740,20 @@ impl Pass<'_> {
 }
 
 /// Adds value blocks for numeric ranges the index answers better than the FILTER, and
-/// returns what it decided, for `explain`.
-pub(crate) fn rewrite(query: Query, engine: &Engine) -> (Query, Vec<String>) {
+/// returns what it decided, for `explain`. `at`: the snapshot the query is evaluated on, on
+/// the tripletrail store (the blocks hold its values).
+pub(crate) fn rewrite(
+    query: Query,
+    engine: &Engine,
+    at: Option<&Snapshot>,
+) -> (Query, Vec<String>) {
     // `#pragma tt.range-rewrite off` (#238).
     if crate::Hints::current().range_rewrite_off {
         return (query, Vec::new());
     }
     let mut pass = Pass {
         engine,
+        at,
         decisions: Vec::new(),
     };
     let query = match query {
@@ -683,6 +797,14 @@ mod tests {
     use oxigraph::io::RdfFormat;
     use oxigraph::model::{GraphName, NamedNode, Quad};
 
+    /// The store's current snapshot, as a query reads it.
+    fn now(engine: &Engine) -> Snapshot {
+        let Dataset::TripleTrail(store) = &engine.store else {
+            panic!("the tripletrail store")
+        };
+        store.snapshot()
+    }
+
     /// A column as (value, literal, quads) in a fixed order, and the total.
     fn entries(c: &NumericColumn) -> (Vec<(u64, String, u64)>, u64) {
         let mut v: Vec<(u64, String, u64)> = (0..c.values.len())
@@ -714,7 +836,11 @@ mod tests {
         ttl += "ex:x ex:v 5.0 .\n";
         engine.load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
         let v = NamedNode::new("http://example.org/v").unwrap();
-        let c = engine.spatial.ranges.column(&engine, &v).unwrap();
+        let c = engine
+            .spatial
+            .ranges
+            .column(&engine, &v, Some(&now(&engine)))
+            .unwrap();
         let values = |r: std::ops::Range<usize>| -> Vec<String> {
             r.map(|i| c.literal(i).value().to_owned()).collect()
         };
@@ -736,7 +862,11 @@ mod tests {
         engine
             .update("PREFIX ex: <http://example.org/> INSERT DATA { ex:y ex:v \"text\" }")
             .unwrap();
-        let c = engine.spatial.ranges.column(&engine, &v).unwrap();
+        let c = engine
+            .spatial
+            .ranges
+            .column(&engine, &v, Some(&now(&engine)))
+            .unwrap();
         assert!(c.first(1, true).is_none());
     }
 
@@ -754,7 +884,7 @@ mod tests {
         let km = NamedNode::new("http://example.org/km").unwrap();
         let ranges = &engine.spatial.ranges;
         assert_eq!(ranges.heap_size(), 0);
-        let held = ranges.column(&engine, &km).unwrap();
+        let held = ranges.column(&engine, &km, Some(&now(&engine))).unwrap();
         let before = entries(&held);
         // Counted in the dataset's memory quota (#225).
         assert!(ranges.heap_size() > held.literals.len() * 16);
@@ -778,8 +908,8 @@ mod tests {
             engine.update(&format!("{p}{w}")).unwrap();
             // Patched, not dropped to be built again.
             assert!(ranges.columns.lock_unpoisoned().contains_key(&km), "{w}");
-            let patched = ranges.column(&engine, &km).unwrap();
-            let rebuilt = NumericColumn::build(&engine, &km).unwrap();
+            let patched = ranges.column(&engine, &km, Some(&now(&engine))).unwrap();
+            let rebuilt = NumericColumn::build(&engine, &km, None).unwrap();
             assert_eq!(entries(&patched), entries(&rebuilt), "{w}");
         }
         let quad = Quad::new(
@@ -795,8 +925,8 @@ mod tests {
                 engine.remove(&quad).unwrap();
             }
             assert!(ranges.columns.lock_unpoisoned().contains_key(&km));
-            let patched = ranges.column(&engine, &km).unwrap();
-            let rebuilt = NumericColumn::build(&engine, &km).unwrap();
+            let patched = ranges.column(&engine, &km, Some(&now(&engine))).unwrap();
+            let rebuilt = NumericColumn::build(&engine, &km, None).unwrap();
             assert_eq!(entries(&patched), entries(&rebuilt), "added {added}");
         }
         // A query that held the column before the writes still sees its version.
