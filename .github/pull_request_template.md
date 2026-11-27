@@ -1,6 +1,6 @@
 ## What and why
 
-<!-- What changes, and the issue it closes (Closes #…). -->
+<!-- What changes, and its issue: "Closes #…" when this finishes it, "Part of #…" when it is one step of it. -->
 
 ## How it was tested
 
