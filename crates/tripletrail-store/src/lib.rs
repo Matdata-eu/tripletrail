@@ -147,6 +147,8 @@ struct Applied {
     folded: Option<std::time::Duration>,
     /// Time spent writing a checkpoint, zero without one.
     checkpoint: std::time::Duration,
+    /// The [`Store::generation`] the commit made; `None` when it changed nothing.
+    generation: Option<u64>,
 }
 /// Bulk loads of at most this many quads into a store that holds data are applied like a
 /// transaction (see [`Store::bulk_load`]).
@@ -963,6 +965,12 @@ impl Store {
         self.inner.quads.read_unpoisoned().len()
     }
 
+    /// A number unique to this store among the stores of this process, as
+    /// [`Snapshot::store_id`] of its snapshots.
+    pub fn store_id(&self) -> u64 {
+        self.inner.id
+    }
+
     /// A number that changes whenever the quads change (each commit and bulk load), for
     /// caches of what is derived from them: equal generations mean the same data.
     pub fn generation(&self) -> u64 {
@@ -1086,6 +1094,7 @@ impl Store {
         }
         let logged = start.elapsed();
         let applied = self.commit(&pending, true, &mut writer)?;
+        let generation = applied.generation;
         drop(writer);
         let applied_at = start.elapsed();
         if let Some((durable, ticket)) = durable {
@@ -1139,6 +1148,7 @@ impl Store {
             Changes {
                 quads: pending,
                 inner: Some(Arc::clone(&self.inner)),
+                generation,
             },
         ))
     }
@@ -1163,6 +1173,7 @@ impl Store {
             applied.folded = Some(quads.fold_in(pending));
             let generation = self.set_quads(quads);
             self.note_touched(generation, pending);
+            applied.generation = Some(generation);
         } else {
             // In place: the deltas are only copied if a snapshot still holds them.
             let mut quads = self.inner.quads.write_unpoisoned();
@@ -1181,6 +1192,7 @@ impl Store {
                 + 1;
             drop(quads);
             self.note_touched(generation, pending);
+            applied.generation = Some(generation);
         }
         // The transaction is durable once it is in the log: a checkpoint that fails now is
         // not its failure. The log stays as it is and the next commit tries again.
@@ -2510,9 +2522,16 @@ impl<'a> Interner<'a> {
 pub struct Changes {
     quads: Vec<([u64; 4], bool)>,
     inner: Option<Arc<Inner>>,
+    generation: Option<u64>,
 }
 
 impl Changes {
+    /// The [`Store::generation`] the commit made, whose quads hold these changes and every
+    /// earlier commit's: `None` when it changed nothing, or for changes of no commit.
+    pub fn generation(&self) -> Option<u64> {
+        self.generation
+    }
+
     /// How many quads were added or removed.
     pub fn len(&self) -> usize {
         self.quads.len()
