@@ -45,6 +45,7 @@ pub mod statagg;
 mod statistics;
 pub mod temporal;
 pub mod text;
+mod topk;
 pub mod ttfn;
 pub mod udf;
 mod validate;
@@ -2753,10 +2754,15 @@ impl Engine {
                 if executor_ids() && !Hints::current().id_rewrites_off {
                     // With the tables the count pass just registered (groups read back, #185).
                     let tabled = snapshot.clone().with_pending_tables();
+                    let columns = |p: &NamedNode| self.spatial.ranges.column(self, p);
                     let eval = idtree::Eval {
                         snapshot: &tabled,
                         cancelled: &|| self.is_cancelled(),
                         graph,
+                        // Not for a caller with a dataset (readable graphs): as the range
+                        // rewrite, the columns are the whole default graph's.
+                        columns: (dataset.is_none() && graph == GraphSelector::Default)
+                            .then_some(&columns),
                     };
                     if let Some(answer) = direct::answer(&query, &eval) {
                         self.check_cancelled()?;
@@ -2957,10 +2963,12 @@ impl Engine {
                 // Which executor answers it (#11), as run_query_scoped decides.
                 if executor_ids() && !Hints::current().id_rewrites_off {
                     let tabled = snapshot.clone().with_pending_tables();
+                    let columns = |p: &NamedNode| self.spatial.ranges.column(self, p);
                     let eval = idtree::Eval {
                         snapshot: &tabled,
                         cancelled: &|| self.is_cancelled(),
                         graph,
+                        columns: (graph == GraphSelector::Default).then_some(&columns),
                     };
                     executor = Some(
                         if direct::answer(&query, &eval).is_some()

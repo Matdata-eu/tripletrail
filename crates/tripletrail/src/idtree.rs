@@ -296,7 +296,16 @@ pub(crate) struct Eval<'a> {
     /// The graphs a query's default graph reads: the default graph, or every graph of a
     /// snapshot that hides the copies of triples in several graphs (the union, #808).
     pub(crate) graph: GraphSelector,
+    /// The value-ordered numeric objects of a predicate in the default graph
+    /// ([`crate::range`]), when `graph` is the default graph: `ORDER BY ?v LIMIT k` reads the
+    /// best values from them (#297).
+    pub(crate) columns: Option<&'a Columns<'a>>,
 }
+
+/// The value-ordered numeric objects of a predicate, built on first use.
+pub(crate) type Columns<'a> = dyn Fn(&oxigraph::model::NamedNode) -> Option<std::sync::Arc<crate::range::NumericColumn>>
+    + Sync
+    + 'a;
 
 impl Eval<'_> {
     pub(crate) fn eval(&self, p: &GraphPattern) -> Option<Table> {
@@ -903,6 +912,7 @@ impl Eval<'_> {
             snapshot: self.snapshot,
             cancelled: self.cancelled,
             graph: GraphSelector::Graph(g),
+            columns: None,
         };
         let v = match name {
             NamedNodePattern::NamedNode(n) => {
@@ -1389,6 +1399,18 @@ impl Eval<'_> {
     /// The solutions of `p`, the right side of an operator over `t`'s rows: those of a basic
     /// graph pattern that share a value with a row of `t` only (a semi-join), so a few rows
     /// look its triples up by their values instead of scanning them.
+    /// `seed` joined with `p`: the rows of `p` that agree with a row of `seed`, its triples
+    /// looked up from the seed's values when they are few (#297).
+    pub(crate) fn seeded(&self, seed: &Table, p: &GraphPattern) -> Option<Table> {
+        let r = self.right(seed, p)?;
+        join(seed, &r, self.cancelled)
+    }
+
+    /// The rows of `t` that pass `expr`, as a `FILTER` over them keeps.
+    pub(crate) fn filtered(&self, expr: &Expression, t: Table) -> Option<Table> {
+        self.filter(expr, t)
+    }
+
     fn right(&self, t: &Table, p: &GraphPattern) -> Option<Table> {
         match p {
             GraphPattern::Bgp { patterns } => self.bgp_from(patterns, Some(t)),

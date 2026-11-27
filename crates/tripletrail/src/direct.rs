@@ -169,7 +169,20 @@ fn select(pattern: &GraphPattern, eval: &Eval, top: bool) -> Option<Selected> {
     {
         return None;
     }
-    let t = eval.eval(&body)?;
+    // `ORDER BY ?v LIMIT k` with `?v` the value of one triple pattern: the rows of its best
+    // values only (#297).
+    let picked = match (order, length) {
+        (Some(_), Some(l)) => {
+            let keys: Vec<(&Variable, bool)> = by.iter().map(|(v, d)| (v, *d)).collect();
+            let kept = distinct.then_some(variables.as_slice());
+            crate::topk::table(&body, &keys, start.saturating_add(l), kept, eval)
+        }
+        _ => None,
+    };
+    let t = match picked {
+        Some(t) => t,
+        None => eval.eval(&body)?,
+    };
     if streams && t.len().saturating_mul(width) > answer_cells() {
         return None;
     }
