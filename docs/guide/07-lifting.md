@@ -418,6 +418,40 @@ says, for each file, how many triples were added and removed. These examples nee
 so the guide's tests don't run them; `tests/db_schema.rs` does. See
 [database schema](../rml.md#database-schema).
 
+## A schema file's own semantics
+
+XML, JSON and API data often come with a schema: an XSD, a JSON Schema, an OpenAPI document
+or an ASN.1 module. `tripletrail schema xsd|jsonschema|openapi|asn1` makes the same four files
+of it, with four optional Python tools (`xsd2rdf`, `jsonschema2rdf`, `openapi2rdf`, `asn2rdf`,
+EUPL-1.2) that TripleTrail runs and does not ship. Install the one you need, with Python 3.12
+or later:
+
+```sh
+pip install xsd2rdf
+tripletrail schema xsd stations.xsd --namespace https://data.example.org/stations/ --out schema/
+```
+
+`schema/ontology.ttl` has the classes and properties of its types, elements and attributes,
+`schema/shapes.ttl` their shapes (which pass SHACL-SHACL, or the run fails), `schema/skos.ttl`
+a concept scheme per enumeration, and `schema/provenance.ttl` the XSD component and XML name
+each comes from. Schemas the XSD imports from the web are not downloaded unless you add
+`--allow-download`. Give `--date 2026-11-26` to keep the files' dates, so that a rerun on an
+unchanged schema says `0 triples added, 0 removed`. 
+
+The web UI does the same for a server started with `tripletrail serve --schema-tools`, with the
+tools installed where it runs. Drop the `.xsd` (or JSON Schema, OpenAPI document or `.asn`
+module) on **Add data**, and the Import page shows a **Schema to RDF** card. **Make OWL, SHACL
+and SKOS** shows what the tool makes; **Add to the dataset** writes it to the source's schema
+graphs, `https://data.example.org/src/stations/schema/owl`, `…/shapes`, `…/skos` and
+`…/provenance`, replacing what they held. The source namespace is the one the data file
+of the same name gets, so the lift of `stations.xml` and the schema of `stations.xsd` share
+it.
+
+The guide's tests can't install the tools, so they don't run these examples;
+`tests/schema_tools.rs` and the browser tests do, with a stand-in tool and, in CI, the real
+ones. See [schema files](../rml.md#schema-files) and
+[the import API](../server.md#importing-files).
+
 ## Useful options
 
 - `--output-dir out/` writes one file per query or mapping instead of one file.

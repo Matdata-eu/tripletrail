@@ -188,6 +188,14 @@ jobs:
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       # pyoxigraph only for the tests that compare with it.
       - run: pip install maturin pytest rdflib pyarrow pyoxigraph
+      # The optional schema tools (#276, EUPL-1.2): installed here only, run by the CLI in a
+      # subprocess, never linked in or shipped.
+      - name: Schema to RDF with the Python tools
+        run: |
+          pip install xsd2rdf jsonschema2rdf openapi2rdf asn2rdf
+          cargo test -p tripletrail-server --test schema_tools
+        env:
+          TRIPLETRAIL_SCHEMA_TOOLS_REQUIRED: "1"
       - name: Build and test the Python binding (in-memory build)
         working-directory: python
         run: |

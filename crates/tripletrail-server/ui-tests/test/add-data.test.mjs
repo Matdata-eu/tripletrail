@@ -8,7 +8,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,9 +28,10 @@ const TTL = "<https://example.org/a> <https://example.org/p> 1 .\n";
 
 let browser;
 
-async function start(args) {
+async function start(args, env = {}) {
   const child = spawn(bin, ["serve", "--bind", "127.0.0.1:0", "--dataset", "ds", ...args], {
     stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ...env },
   });
   const address = await new Promise((resolve, reject) => {
     let seen = "";
@@ -174,4 +175,46 @@ test("a file larger than the import keeps is drafted from its first lines", asyn
   // A large file of another kind: what to do instead.
   await page.setInputFiles("#imp-file", file("big.json", JSON.stringify({ a: "x".repeat(10000) }), "application/json"));
   await page.locator("#imp-work", { hasText: "tripletrail lift" }).waitFor();
+});
+
+// A stand-in for xsd2rdf (#276): writes the files the tool writes.
+const FAKE_XSD2RDF = `#!/bin/sh
+file="$2"; out="$4"; ns="$6"; base=$(basename "$file")
+echo "<\${ns}Station> a <http://www.w3.org/2002/07/owl#Class> ." > "$out/$base.owl.ttl"
+echo "<\${ns}shapes/Station> a <http://www.w3.org/ns/shacl#NodeShape> ; <http://www.w3.org/ns/shacl#targetClass> <\${ns}Station> ." > "$out/$base.shape.ttl"
+echo "<\${ns}concepts/Kind> a <http://www.w3.org/2004/02/skos/core#ConceptScheme> ." > "$out/$base.skos.Kind.ttl"
+echo "<\${ns}shapes/Station> <http://purl.org/dc/terms/source> 'station' ." > "$out/$base.provenance.ttl"
+`;
+
+test("an XML Schema becomes an ontology, shapes and code lists in the dataset", async (t) => {
+  const tools = mkdtempSync(join(tmpdir(), "ui-schema-tools-"));
+  writeFileSync(join(tools, "xsd2rdf"), FAKE_XSD2RDF);
+  chmodSync(join(tools, "xsd2rdf"), 0o755);
+  const { child, address: base } = await start(["--schema-tools", "--no-workspaces"], { PATH: tools + ":" + process.env.PATH });
+  t.after(async () => {
+    child.kill();
+    await new Promise((r) => (child.exitCode === null ? child.on("exit", r) : r()));
+    rmSync(tools, { recursive: true, force: true });
+  });
+  const page = await open(t, base);
+  await page.goto(base + "/$/ui/datasets/ds");
+  await page.locator("#ds-upload").waitFor();
+  await page.setInputFiles("#upload-file", [file("stations.xsd", "<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'/>", "application/xml")]);
+  await page.click("#upload-btn");
+  await page.waitForURL(/\/\$\/ui\/import\/ds$/);
+  await page.locator("#imp-schema-card", { hasText: "an XML Schema" }).waitFor();
+  await page.click("#imp-schema-make");
+  await page.locator("#imp-schema-made", { hasText: "1 ontology, 2 shape, 1 SKOS (1 concept schemes)" }).waitFor();
+  assert.deepEqual(await ask(base, "SELECT (COUNT(*) AS ?n) { GRAPH ?g { ?s ?p ?o } }"), ["n", "0"], "nothing written yet");
+  await page.click("#imp-schema-write");
+  await page.locator("#imp-schema-graphs").waitFor();
+  const ns = "https://data.example.org/src/stations/";
+  assert.deepEqual(
+    await ask(base, `SELECT ?c { GRAPH <${ns}schema/owl> { ?c a <http://www.w3.org/2002/07/owl#Class> } }`),
+    ["c", ns + "Station"],
+  );
+  assert.deepEqual(
+    await ask(base, `SELECT (COUNT(*) AS ?n) { GRAPH <${ns}schema/shapes> { ?s ?p ?o } }`),
+    ["n", "2"],
+  );
 });
