@@ -42,8 +42,10 @@ fn ask(file: &Path, query: &str) -> bool {
 /// A stand-in for the tools: writes what they write, says its arguments, and fails or hangs
 /// when asked to.
 const FAKE: &str = r#"#!/bin/sh
-echo "$@" > "$FAKE_ARGS"
-case "$FAKE_MODE" in
+here=$(dirname "$0")
+echo "$@" > "$here/args.txt"
+echo "${TT_TEST_SECRET:-none}" > "$here/token.txt"
+case "$(cat "$here/mode" 2>/dev/null)" in
   fail) echo "Error: the schema has no root element" >&2; exit 1 ;;
   hang) exec sleep 30 ;;
 esac
@@ -94,18 +96,21 @@ fn a_tool_runs_in_a_folder_of_its_own_and_its_files_become_four() {
             out.to_str().unwrap(),
         ];
         args.extend_from_slice(extra);
-        tripletrail(
-            &args,
-            &[
-                ("FAKE_ARGS", args_file.to_str().unwrap()),
-                ("FAKE_MODE", mode),
-            ],
-        )
+        // The mode is read from a file beside the tool: the tool's environment is cleared.
+        std::fs::write(dir.join("mode"), mode).unwrap();
+        tripletrail(&args, &[("TT_TEST_SECRET", "secret")])
     };
 
     let (ok, _, err) = run(&["--date", "2026-11-26"], "");
     assert!(ok, "{err}");
     let said = std::fs::read_to_string(&args_file).unwrap();
+    // The tool does not see the server's or the caller's secrets.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("token.txt"))
+            .unwrap()
+            .trim(),
+        "none"
+    );
     // Remote imports are not downloaded unless allowed; provenance is asked for.
     assert!(said.starts_with("convert "), "{said}");
     for flag in [
@@ -329,7 +334,7 @@ fn an_uploaded_schema_becomes_the_sources_schema_graphs() {
     std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
     // The stand-in and the system's own programs only: not the real tools, where CI has them.
     let path = format!("{}:/usr/bin:/bin", bin.display());
-    let args_file = dir.join("args.txt");
+    let args_file = bin.join("args.txt");
     let serve = |extra: &[&str]| {
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
@@ -347,7 +352,7 @@ fn an_uploaded_schema_becomes_the_sources_schema_graphs() {
             ])
             .args(extra)
             .env("PATH", &path)
-            .env("FAKE_ARGS", &args_file)
+            .env("TT_TEST_SECRET", "secret")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -411,6 +416,12 @@ fn an_uploaded_schema_becomes_the_sources_schema_graphs() {
     assert!(made["graphs"].is_null());
     let said = std::fs::read_to_string(&args_file).unwrap();
     assert!(said.contains("--no-download"), "{said}");
+    assert_eq!(
+        std::fs::read_to_string(bin.join("token.txt"))
+            .unwrap()
+            .trim(),
+        "none"
+    );
     let count = |graph: &str| -> String {
         ureq::get(&format!("{base}/ds/query"))
             .query(

@@ -96,7 +96,9 @@ subprocess and never linked in. The tools are EUPL-1.2 and need Python 3.12 or l
 
 The tool runs as `TOOL convert FILE --output-dir TMP --namespace IRI --source-provenance
 --strict --quiet` in a temporary folder, with `--no-download` for `xsd2rdf` unless
-`--allow-download` is given, and is stopped after `--timeout` seconds (300 by default).
+`--allow-download` is given, and is stopped after `--timeout` seconds (300 by default). Its
+environment is emptied but for `PATH`, `HOME`, `LANG`, `LC_*`, `TMPDIR`, `TZ` and
+`SOURCE_DATE_EPOCH`, so it sees no token, password or connection string.
 `--tool-path` names its program when it is not on the `PATH`; when it is missing, the command
 says how to install it. `--date YYYY-MM-DD` sets the `dct:created`, `dct:issued` and
 `dct:modified` it writes (today by default).

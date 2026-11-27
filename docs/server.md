@@ -294,6 +294,14 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   timezone, in place of UTC: `--time-offset rinf=+01:00` reads RINF's local days as Brussels
   winter days. A bare offset is every dataset's; a dataset's own wins. A value with its own
   timezone, and a call that gives one (`tt:period(?d, "+02:00")`), keep theirs.
+- `--schema-tools` (`TRIPLETRAIL_SCHEMA_TOOLS`) lets the Import page turn an uploaded XML
+  Schema, JSON Schema, OpenAPI document or ASN.1 module into OWL, SHACL and SKOS with the
+  optional Python tools on the server's `PATH` (`xsd2rdf`, `jsonschema2rdf`, `openapi2rdf`,
+  `asn2rdf`; see [schema files](rml.md#schema-files) and
+  [the import API](#importing-files)). Off by default. A tool runs in a subprocess of its own
+  with an emptied environment (only `PATH`, `HOME`, `LANG`, `LC_*`, `TMPDIR`, `TZ` and
+  `SOURCE_DATE_EPOCH` are kept), in a temporary folder, without downloading what a schema
+  imports, for at most 120 seconds.
 - The spatial index is built in the background at start, and again after a write that drops
   it, rather than on the first spatial query. `/$/ready` answers 200 once every dataset is open
   and its index built (503 before), and `/$/status` gives the state per dataset.

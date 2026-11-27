@@ -139,6 +139,20 @@ fn run_in(tool: Tool, file: &Path, options: &Run, out: &Path) -> Result<Artefact
         .clone()
         .unwrap_or_else(|| PathBuf::from(tool.program()));
     let mut command = Command::new(&program);
+    // Only what a program needs to start and read text: not the tokens, passwords and
+    // connection strings the server or the caller may hold in their environment.
+    command.env_clear();
+    for (key, value) in std::env::vars_os() {
+        let keep = key.to_str().is_some_and(|k| {
+            matches!(
+                k,
+                "PATH" | "HOME" | "LANG" | "TMPDIR" | "TZ" | "SOURCE_DATE_EPOCH"
+            ) || k.starts_with("LC_")
+        });
+        if keep {
+            command.env(key, value);
+        }
+    }
     command
         .arg("convert")
         .arg(file)
