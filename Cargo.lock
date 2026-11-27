@@ -4660,7 +4660,7 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "geo",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "gix",
  "gix-transport",
  "libc",
