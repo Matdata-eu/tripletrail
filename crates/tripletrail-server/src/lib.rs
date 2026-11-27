@@ -2715,6 +2715,12 @@ fn route(
                 )
                 .map(|reply| gzipped(request, reply));
             }
+            // The language of the facets' labels on the items (#356), as for the tiles.
+            let lang = params
+                .get("lang")
+                .map(str::to_owned)
+                .or_else(|| first_language(request))
+                .unwrap_or_else(|| "en".to_owned());
             // A browser (`text/html` before any JSON type in `Accept`) gets the HTML pages.
             context.vary_accept = true;
             let html_first = accepted(request)
@@ -2736,6 +2742,7 @@ fn route(
                 html_first,
                 fg_first,
                 &view,
+                &lang,
             )
             .map(|reply| gzipped(request, reply));
         }
