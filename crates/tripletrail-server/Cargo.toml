@@ -28,7 +28,7 @@ ctrlc = { version = "3", features = ["termination"] }
 form_urlencoded = "1"
 oxsdatatypes = "0.2.4"
 sha2 = "0.11.1"
-getrandom = "0.3"
+getrandom = "0.4"
 # The Import page turns a CONSTRUCT into an INSERT (#20); already in the engine.
 spargebra.workspace = true
 # tts:labelStrip patterns (#260); already in the engine.
