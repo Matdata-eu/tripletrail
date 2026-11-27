@@ -151,36 +151,81 @@ impl OutCrs {
     }
 }
 
-/// `geometry`, GeoJSON in CRS84, with its coordinates in `crs`.
+/// `geometry`, GeoJSON in CRS84, with its coordinates in `crs`: Web Mercator's to the
+/// centimetre, as a PostGIS `ST_AsGeoJSON(…, 2)` writes them.
 fn reproject(geometry: &mut Value, crs: OutCrs) {
-    fn walk(v: &mut Value, crs: OutCrs) {
+    match crs {
+        OutCrs::Crs84 => {}
+        OutCrs::Epsg4326 => map_coordinates(geometry, &|lon, lat| (lat, lon)),
+        OutCrs::WebMercator => map_coordinates(geometry, &|lon, lat| {
+            let (x, y) = crs.project(lon, lat);
+            (round_to(x, 2), round_to(y, 2))
+        }),
+    }
+}
+
+/// The most decimals of a longitude or latitude in the features: 7, about a centimetre, as
+/// RINF Atlas's PostGIS writes them (`ST_AsGeoJSON(…, 7)`) and well under RFC 7946's advice of
+/// 6 (§11.2). More seldom means anything (values transformed from another CRS, or written with
+/// a double's noise, carry 15), and those digits made a page of tracks half again as big
+/// gzipped (#316).
+const DEGREE_DECIMALS: i32 = 7;
+
+/// `geometry`, GeoJSON, with its longitudes and latitudes to [`DEGREE_DECIMALS`].
+fn round_degrees(geometry: &mut Value) {
+    map_coordinates(geometry, &|lon, lat| {
+        (
+            round_to(lon, DEGREE_DECIMALS),
+            round_to(lat, DEGREE_DECIMALS),
+        )
+    });
+}
+
+/// `x` to `decimals` places.
+fn round_to(x: f64, decimals: i32) -> f64 {
+    let scale = 10f64.powi(decimals);
+    let r = (x * scale).round() / scale;
+    if r.is_finite() { r } else { x }
+}
+
+/// `geometry`, GeoJSON, with each position's first two ordinates through `f`.
+fn map_coordinates(geometry: &mut Value, f: &dyn Fn(f64, f64) -> (f64, f64)) {
+    fn walk(v: &mut Value, f: &dyn Fn(f64, f64) -> (f64, f64)) {
         let Value::Array(items) = v else { return };
         if let [Value::Number(a), Value::Number(b), ..] = items.as_slice()
             && let (Some(a), Some(b)) = (a.as_f64(), b.as_f64())
         {
-            let (x, y) = crs.project(a, b);
-            if let (Some(x), Some(y)) = (
-                serde_json::Number::from_f64(x),
-                serde_json::Number::from_f64(y),
-            ) {
-                items[0] = Value::Number(x);
-                items[1] = Value::Number(y);
+            let (x, y) = f(a, b);
+            // The numbers as they were (an integer stays one) where they only move.
+            if (x, y) == (b, a) {
+                items.swap(0, 1);
+                return;
+            }
+            for (item, (old, new)) in items.iter_mut().zip([(a, x), (b, y)]) {
+                if new != old {
+                    // A whole number as an integer, as `geof:asGeoJSON` writes it.
+                    let number = if new.fract() == 0.0 && new.abs() < 1e15 {
+                        Some(serde_json::Number::from(new as i64))
+                    } else {
+                        serde_json::Number::from_f64(new)
+                    };
+                    if let Some(number) = number {
+                        *item = Value::Number(number);
+                    }
+                }
             }
             return;
         }
         for item in items {
-            walk(item, crs);
+            walk(item, f);
         }
     }
-    if crs == OutCrs::Crs84 {
-        return;
-    }
     if let Some(coordinates) = geometry.get_mut("coordinates") {
-        walk(coordinates, crs);
+        walk(coordinates, f);
     }
     if let Some(Value::Array(parts)) = geometry.get_mut("geometries") {
         for part in parts {
-            reproject(part, crs);
+            map_coordinates(part, f);
         }
     }
 }
@@ -2310,9 +2355,11 @@ fn all_geometries(params: &Params) -> Result<bool, HttpError> {
 }
 
 /// The geometry of each feature of `order`: its value on the geometry path as GeoJSON. Of
-/// several distinct values, the most detailed one (most coordinates, then most digits, then
-/// the first by its GeoJSON), or with `all` a `GeometryCollection` of them all, ordered by
-/// their GeoJSON.
+/// several distinct values, those of the first alternative of the path that has one (#316),
+/// and of those the most detailed one (most coordinates, then most digits, then the first by
+/// its GeoJSON); or with `all` a `GeometryCollection` of them all, ordered by their GeoJSON.
+/// Only the values kept are written as GeoJSON: a feature reached by several ways has most
+/// of its values once per way.
 fn geometries(
     entry: &Entry,
     collection: &Collection,
@@ -2321,26 +2368,49 @@ fn geometries(
     timeout: Option<Duration>,
     view: &View,
 ) -> Result<HashMap<NamedNode, Value>, HttpError> {
-    let mut found: HashMap<NamedNode, Vec<String>> = HashMap::new();
+    use geo::CoordsIter;
+    let mut found: HashMap<NamedNode, Vec<Term>> = HashMap::new();
     if !order.is_empty() {
         let values: Vec<String> = order.iter().map(|f| f.to_string()).collect();
         let query = format!(
-            "SELECT DISTINCT ?f (<{GEOF}asGeoJSON>(?w) AS ?g) WHERE {{ VALUES ?f {{ {} }} {} }}",
+            "SELECT DISTINCT ?f ?w WHERE {{ VALUES ?f {{ {} }} {} }}",
             values.join(" "),
-            collection.geometry.only("?f", &values).pattern("?f", "?w"),
+            {
+                let ways = collection.geometry.only("?f", &values);
+                if all {
+                    ways.pattern("?f", "?w")
+                } else {
+                    ways.chosen("?f", "?w", "")
+                }
+            },
         );
         for row in run(entry, &query, timeout, view)? {
-            if let (Some(Term::NamedNode(f)), Some(Term::Literal(g))) = (&row[0], &row[1]) {
-                found
-                    .entry(f.clone())
-                    .or_default()
-                    .push(g.value().to_owned());
+            if let (Some(Term::NamedNode(f)), Some(w @ Term::Literal(_))) = (&row[0], &row[1]) {
+                found.entry(f.clone()).or_default().push(w.clone());
             }
         }
     }
     Ok(found
         .into_iter()
-        .map(|(f, mut texts)| {
+        .map(|(f, terms)| {
+            let geoms: Vec<_> = terms
+                .iter()
+                .filter_map(tripletrail::geo::parse_wkt_literal)
+                .collect();
+            // The most detailed first: only those with the most coordinates are written.
+            let kept: Vec<_> = if all {
+                geoms.iter().collect()
+            } else {
+                let most = geoms.iter().map(|g| g.geometry.coords_count()).max();
+                geoms
+                    .iter()
+                    .filter(|g| Some(g.geometry.coords_count()) == most)
+                    .collect()
+            };
+            let mut texts: Vec<String> = kept
+                .into_iter()
+                .filter_map(|g| tripletrail::geo::as_geojson(g))
+                .collect();
             texts.sort();
             texts.dedup();
             if !all && texts.len() > 1 {
@@ -2357,11 +2427,12 @@ fn geometries(
                 .iter()
                 .filter_map(|t| serde_json::from_str(t).ok())
                 .collect();
-            let geometry = match parts.len() {
+            let mut geometry = match parts.len() {
                 0 => Value::Null,
                 1 => parts.pop().expect("one"),
                 _ => json!({ "type": "GeometryCollection", "geometries": parts }),
             };
+            round_degrees(&mut geometry);
             (f, geometry)
         })
         .collect())
