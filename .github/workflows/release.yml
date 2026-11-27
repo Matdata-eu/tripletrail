@@ -59,7 +59,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # The third-party list runs `cargo fetch`; the light runner has no Rust of its own.
@@ -78,7 +78,7 @@ jobs:
         run: .github/scripts/release-notes.sh --check "${{ steps.version.outputs.version }}"
       - name: Release notes
         run: .github/scripts/release-notes.sh "${{ steps.version.outputs.version }}" > notes.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: notes
           path: notes.md
@@ -95,11 +95,11 @@ jobs:
           python3 .github/scripts/third-party-licenses.py --package tripletrail-python \
             --manifest-path python/Cargo.toml --product '`tripletrail` Python package' \
             -o python-third-party/THIRD_PARTY_LICENSES.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: third-party
           path: THIRD_PARTY_LICENSES.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: third-party-python
           path: python-third-party/THIRD_PARTY_LICENSES.md
@@ -111,10 +111,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         # No build record artifact (`*.dockerbuild`): the release job downloads every
         # artifact of the run, and actions/download-artifact fails on that one.
         env:
@@ -125,7 +125,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           outputs: type=local,dest=out
           cache-from: type=gha
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: third-party
       - name: Package
@@ -141,7 +141,7 @@ jobs:
             tar -C pkg -czf "dist/$name.tar.gz" "$name"
           done
           ls -l dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: dist/*
@@ -152,7 +152,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build
         run: |
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
@@ -160,7 +160,7 @@ jobs:
             CARGO_PROFILE_RELEASE_DEBUG=false CARGO_PROFILE_RELEASE_STRIP=symbols \
               cargo build --release --locked -p tripletrail-server --target "$target"
           done
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: third-party
       - name: Package
@@ -176,7 +176,7 @@ jobs:
           done
           ./target/aarch64-apple-darwin/release/tripletrail --help > /dev/null
           ls -l dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos
           path: dist/*
@@ -187,13 +187,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build
         shell: bash
         env:
           CARGO_PROFILE_RELEASE_DEBUG: "false"
         run: cargo build --release --locked -p tripletrail-server --target x86_64-pc-windows-msvc
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: third-party
       - name: Package
@@ -207,7 +207,7 @@ jobs:
           & "pkg/$name/tripletrail.exe" --help | Out-Null
           Compress-Archive -Path "pkg/$name" -DestinationPath "dist/$name.zip"
           Get-ChildItem dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: dist/*
@@ -233,11 +233,11 @@ jobs:
       # target is 10.12). Only read on macOS.
       MACOSX_DEPLOYMENT_TARGET: "10.15"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: third-party-python
           path: python-third-party
@@ -270,7 +270,7 @@ jobs:
           print("license files in the wheel")
           EOF
           ls -l python/dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: python-wheels-${{ matrix.os }}-${{ matrix.target }}
           path: python/dist/*.whl
@@ -281,8 +281,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
       - name: Pack
@@ -291,7 +291,7 @@ jobs:
           cp ../../LICENSE ../../NOTICE .
           npm pack --json | tee pack.json
           ls -l ./*.tgz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: npm
           path: clients/js/*.tgz
@@ -308,7 +308,7 @@ jobs:
       contents: write
     steps:
       # Only the release's own artifacts, by name.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: "{linux,macos,windows,notes,third-party}"
           path: artifacts
@@ -341,7 +341,7 @@ jobs:
           fi
       - name: Keep the dry run
         if: github.event_name != 'push'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-dry-run
           path: |
@@ -361,7 +361,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: python-wheels-*
           path: dist
@@ -386,11 +386,11 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npm
       - name: Publish

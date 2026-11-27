@@ -48,7 +48,7 @@ jobs:
       - if: env.PROJECT_TOKEN == ''
         run: echo "::notice::PROJECT_TOKEN is not set; nothing added"
       - if: env.PROJECT_TOKEN != ''
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ env.PROJECT_TOKEN }}
           script: |
