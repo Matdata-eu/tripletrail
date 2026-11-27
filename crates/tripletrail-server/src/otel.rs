@@ -16,6 +16,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use ureq3 as ureq;
 
 /// Spans waiting to be sent, at most: past it new ones are dropped (and counted).
 const MAX_QUEUED: usize = 4096;
@@ -415,9 +416,10 @@ impl Tracer {
 }
 
 fn export_loop(endpoint: &str, options: &OtlpOptions, queue: &(Mutex<Queue>, Condvar)) {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .build();
+    let agent: ureq::Agent = crate::http_config()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .into();
     let (lock, wake) = queue;
     let mut warned = false;
     loop {
@@ -440,11 +442,13 @@ fn export_loop(endpoint: &str, options: &OtlpOptions, queue: &(Mutex<Queue>, Con
             q.spans.drain(..n).collect()
         };
         let body = export_body(&options.service_name, &batch).to_string();
-        let mut request = agent.post(endpoint).set("Content-Type", "application/json");
+        let mut request = agent
+            .post(endpoint)
+            .header("Content-Type", "application/json");
         for (k, v) in &options.headers {
-            request = request.set(k, v);
+            request = request.header(k, v);
         }
-        let ok = match request.send_string(&body) {
+        let ok = match request.send(&body) {
             Ok(_) => true,
             Err(e) => {
                 // Said once, not per batch: a collector that is down must not fill the log.

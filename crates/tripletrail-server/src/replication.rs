@@ -33,6 +33,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tiny_http::{Method, Request};
 use tripletrail::Engine;
 use tripletrail::geo::sync::{LockUnpoisoned, RwLockUnpoisoned};
+use ureq3 as ureq;
+
+/// A GET to the leader, not sent yet.
+type Get = ureq::RequestBuilder<ureq::typestate::WithoutBody>;
 use tripletrail::store::{Dataset, LogEntry, LogRead, Store};
 
 /// What a read of the log returns at most, unless asked for less (or for more, to get a
@@ -701,16 +705,16 @@ impl Follow {
         &self.urls[self.current]
     }
 
-    fn get(&self, agent: &ureq::Agent, path: &str) -> ureq::Request {
+    fn get(&self, agent: &ureq::Agent, path: &str) -> Get {
         self.get_at(agent, self.current, path)
     }
 
     /// A GET of `/$/replication/{dataset}{path}` on the server of the `i`th URL.
-    fn get_at(&self, agent: &ureq::Agent, i: usize, path: &str) -> ureq::Request {
+    fn get_at(&self, agent: &ureq::Agent, i: usize, path: &str) -> Get {
         let (base, dataset) = self.urls[i].rsplit_once('/').expect("checked by add_url");
         let request = agent.get(&format!("{base}/$/replication/{dataset}{path}"));
         match &self.token {
-            Some(t) => request.set("Authorization", &format!("Bearer {t}")),
+            Some(t) => request.header("Authorization", &format!("Bearer {t}")),
             None => request,
         }
     }
@@ -905,9 +909,10 @@ pub fn follow(handle: &Handle, location: &Path, follow: Follow) -> Result<(), Bo
         .replicas
         .lock_unpoisoned()
         .insert(follow.name.clone(), Arc::clone(&status));
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .build();
+    let agent: ureq::Agent = crate::http_config()
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .build()
+        .into();
     let handle = handle.clone();
     let location = location.to_owned();
     // On a thread of its own: the leader may be down, or still opening its datasets, when
@@ -1098,16 +1103,19 @@ fn copy_base(
             let v: Value = serde_json::from_str(
                 &follow
                     .get(agent, "")
-                    .timeout(Duration::from_secs(5))
+                    .config()
+                    .timeout_global(Some(Duration::from_secs(5)))
+                    .build()
                     .call()?
-                    .into_string()?,
+                    .body_mut()
+                    .read_to_string()?,
             )?;
             if v["role"] != "leader" {
                 return Err(format!("{} is not the leader", follow.url()).into());
             }
         }
         let response = follow.get(agent, "/base").call()?;
-        tar::Archive::new(response.into_reader()).unpack(&dir)?;
+        tar::Archive::new(response.into_body().into_reader()).unpack(&dir)?;
         let (timeline, generation, skip) =
             Store::base_position(&dir)?.ok_or("the leader sent a base without a BASE file")?;
         let engine = crate::admin::open_dataset(&dir, Mode::ReadWrite)?;
@@ -1234,12 +1242,15 @@ impl Follower {
             let call = self
                 .follow
                 .get_at(&self.agent, i, "")
-                .timeout(Duration::from_secs(5))
+                .config()
+                .timeout_global(Some(Duration::from_secs(5)))
+                .build()
                 .call();
-            let Ok(v) = call
-                .map_err(BoxError::from)
-                .and_then(|r| Ok(serde_json::from_str::<Value>(&r.into_string()?)?))
-            else {
+            let Ok(v) = call.map_err(BoxError::from).and_then(|mut r| {
+                Ok(serde_json::from_str::<Value>(
+                    &r.body_mut().read_to_string()?,
+                )?)
+            }) else {
                 continue;
             };
             if v["role"] != "leader" {
@@ -1331,18 +1342,22 @@ impl Follower {
             .follow
             .get(&self.agent, "/log")
             .query("timeline", &p.timeline)
-            .query("generation", &p.generation.to_string())
-            .query("offset", &p.offset.to_string())
-            .query("max", &self.max.to_string())
+            .query("generation", p.generation.to_string())
+            .query("offset", p.offset.to_string())
+            .query("max", self.max.to_string())
             .query("wait", &wait)
             .query("follower", &self.id)
+            .config()
             // A leader that went away without closing the connection (its machine down) is
             // given up on soon after its wait, so that another of its URLs can be tried.
-            .timeout(self.follow.wait + Duration::from_secs(5));
-        let response = match request.call() {
-            Ok(r) => r,
-            Err(ureq::Error::Status(code @ (409 | 410), r)) => {
-                let why = r.into_string().unwrap_or_default();
+            .timeout_global(Some(self.follow.wait + Duration::from_secs(5)))
+            // 409 and 410 are answered below, with the leader's reason.
+            .http_status_as_error(false)
+            .build();
+        let mut response = request.call()?;
+        match response.status().as_u16() {
+            code @ (409 | 410) => {
+                let why = response.body_mut().read_to_string().unwrap_or_default();
                 // On another timeline: the leader (or another of its URLs) may have been
                 // promoted from this follower's timeline, at this follower's position.
                 if code == 409
@@ -1355,9 +1370,16 @@ impl Follower {
                     why.trim()
                 )));
             }
-            Err(e) => return Err(e.into()),
+            code if code >= 400 => return Err(ureq::Error::StatusCode(code).into()),
+            _ => {}
+        }
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
         };
-        let header = |name: &str| response.header(name).and_then(|v| v.parse::<u64>().ok());
         let end =
             header("X-TripleTrail-Log-End").ok_or("no X-TripleTrail-Log-End from the leader")?;
         // A leader upgraded to a newer store format writes log entries this build may not
@@ -1372,9 +1394,12 @@ impl Follower {
             )
             .into());
         }
-        let retired = response.header("X-TripleTrail-Log-Retired") == Some("true");
+        let retired = response
+            .headers()
+            .get("X-TripleTrail-Log-Retired")
+            .is_some_and(|v| v == "true");
         let mut bytes = Vec::new();
-        std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes)?;
+        std::io::Read::read_to_end(&mut response.into_body().into_reader(), &mut bytes)?;
         let read_whole = bytes.len() >= self.max;
         let _applying = self.status.applying.lock_unpoisoned();
         if self.status.stop.load(Ordering::SeqCst) {
