@@ -2572,7 +2572,7 @@ impl Engine {
             }
         };
         let view = base.clone().with_rows(filter);
-        let (query, counted) = count::rewrite(query, &view, graph, &cancelled);
+        let (query, counted) = count::rewrite(query, &view, graph, &cancelled, None);
         let (query, read) = rows::rewrite(query, &view, graph, &cancelled);
         self.view_shortcuts
             .fetch_add((counted + read) as u64, Ordering::Relaxed);
@@ -2790,20 +2790,23 @@ impl Engine {
                 Some(_) => None,
             };
             if let Some((snapshot, graph)) = on {
-                query = count::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
+                // The value-ordered columns of predicates (#297), for a top-k of the query
+                // and of its sub-selects, counted or not (#360). Not for a caller with a
+                // dataset (readable graphs): as the range rewrite, the columns are the whole
+                // default graph's.
+                let columns = |p: &NamedNode| self.spatial.ranges.column(self, p, Some(at));
+                let columns: Option<&idtree::Columns> =
+                    (dataset.is_none() && graph == GraphSelector::Default).then_some(&columns);
+                query = count::rewrite(query, &snapshot, graph, &|| self.is_cancelled(), columns).0;
                 // The id executor (#11): the whole query from tables of ids, if they cover it.
                 if executor_ids() && !Hints::current().id_rewrites_off {
                     // With the tables the count pass just registered (groups read back, #185).
                     let tabled = snapshot.clone().with_pending_tables();
-                    let columns = |p: &NamedNode| self.spatial.ranges.column(self, p, Some(at));
                     let eval = idtree::Eval {
                         snapshot: &tabled,
                         cancelled: &|| self.is_cancelled(),
                         graph,
-                        // Not for a caller with a dataset (readable graphs): as the range
-                        // rewrite, the columns are the whole default graph's.
-                        columns: (dataset.is_none() && graph == GraphSelector::Default)
-                            .then_some(&columns),
+                        columns,
                     };
                     if let Some(answer) = direct::answer(&query, &eval) {
                         self.check_cancelled()?;
@@ -3005,16 +3008,18 @@ impl Engine {
                 Some((snapshot, GraphSelector::Default))
             };
             if let Some((snapshot, graph)) = on {
-                query = count::rewrite(query, &snapshot, graph, &|| self.is_cancelled()).0;
+                let columns = |p: &NamedNode| self.spatial.ranges.column(self, p, Some(at));
+                let columns: Option<&idtree::Columns> =
+                    (graph == GraphSelector::Default).then_some(&columns);
+                query = count::rewrite(query, &snapshot, graph, &|| self.is_cancelled(), columns).0;
                 // Which executor answers it (#11), as run_query_scoped decides.
                 if executor_ids() && !Hints::current().id_rewrites_off {
                     let tabled = snapshot.clone().with_pending_tables();
-                    let columns = |p: &NamedNode| self.spatial.ranges.column(self, p, Some(at));
                     let eval = idtree::Eval {
                         snapshot: &tabled,
                         cancelled: &|| self.is_cancelled(),
                         graph,
-                        columns: (graph == GraphSelector::Default).then_some(&columns),
+                        columns,
                     };
                     executor = Some(
                         if direct::answer(&query, &eval).is_some()
