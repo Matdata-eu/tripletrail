@@ -558,12 +558,12 @@ fn rss_mb() -> u64 {
 
 /// #406 on the rail KG: the post-process updates run in an overlay of the KG leave the KG as it
 /// was, and give the store a copy of it gets.
-/// `DIM_KG=kg.ttl DIM_UPDATES=dir cargo test --release -p tripletrail --test dim_kg overlay -- --ignored --nocapture`
+/// `KG_FILE=kg.ttl KG_UPDATES=dir cargo test --release -p tripletrail --test kg_postprocessing overlay -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn overlay_runs_the_post_process_updates_apart_from_the_kg() {
-    let (Ok(kg), Ok(dir)) = (std::env::var("DIM_KG"), std::env::var("DIM_UPDATES")) else {
-        eprintln!("set DIM_KG and DIM_UPDATES");
+    let (Ok(kg), Ok(dir)) = (std::env::var("KG_FILE"), std::env::var("KG_UPDATES")) else {
+        eprintln!("set KG_FILE and KG_UPDATES");
         return;
     };
     let t = Instant::now();
