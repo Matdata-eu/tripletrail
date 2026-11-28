@@ -875,6 +875,8 @@
     }
     // The tab title: the page, then the server's name (--site-name).
     const tab = $$(".tabs a").find((a) => a.dataset.page === page);
+    // Tabs that overflow scroll sideways (#365): the current one is kept in view.
+    requestAnimationFrame(currentTabInView);
     const site = document.documentElement.dataset.siteName || "TripleTrail";
     document.title = tab ? `${tab.textContent.trim()} · ${site}` : site;
     if (page === "datasets") { renderDatasets(); if (name) openDataset(name); }
@@ -948,6 +950,26 @@
   const preferred = (names) => (DEFAULT_DATASET && names.includes(DEFAULT_DATASET) ? DEFAULT_DATASET : names[0]);
   const shared = { preferred, api, el, toast, fail, go, copyText, copyButton, withCopy, store, viewAs, TOKEN_KEY, ApiError, openToken, confirmDialog, fmtNum, fmtBytes, fmtTime, explain: (url, q) => explain(url, q) };
   window.addEventListener("popstate", route);
+  // Tabs that overflow scroll sideways (#365): the current one is kept in view, also when tabs
+  // show or hide (after sign-in, say), fonts load or the window changes size.
+  function currentTabInView() {
+    const tab = document.querySelector('.tabs a[aria-current="page"]');
+    if (!tab) return;
+    const tabs = tab.parentElement, left = tab.offsetLeft - tabs.offsetLeft;
+    if (left < tabs.scrollLeft) tabs.scrollLeft = left;
+    else if (left + tab.offsetWidth > tabs.scrollLeft + tabs.clientWidth) tabs.scrollLeft = left + tab.offsetWidth - tabs.clientWidth + 24;
+  }
+  if (window.ResizeObserver) {
+    const watch = new ResizeObserver(() => currentTabInView());
+    for (const el of document.querySelectorAll(".tabs, .tabs a")) watch.observe(el);
+  }
+  // A mouse wheel over tabs that overflow scrolls them sideways (#365).
+  document.querySelector(".tabs")?.addEventListener("wheel", (e) => {
+    const tabs = e.currentTarget;
+    if (tabs.scrollWidth <= tabs.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    tabs.scrollLeft += e.deltaY;
+    e.preventDefault();
+  }, { passive: false });
   // MatGUI keeps its share links and map position in the URL's hash, so pages are paths.
   function go(path, replace) {
     const url = UI + path;

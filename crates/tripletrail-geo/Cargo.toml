@@ -16,7 +16,7 @@ serde_json.workspace = true
 zmij = "1"
 geo-traits.workspace = true
 quick-xml.workspace = true
-rstar = "0.12"
+rstar = "0.14"
 robust = "1.2"
 h3o = { version = "0.11", features = ["geo"] }
 proj4rs = { version = "0.3", default-features = false }

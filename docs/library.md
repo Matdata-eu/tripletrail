@@ -78,8 +78,11 @@ The same index answers `ORDER BY ?v LIMIT k` when `?v` is the object of one trip
 with a constant predicate whose objects are all numbers (`?t a ex:Track ; ex:speed ?v ;
 rdfs:label ?l`): the pattern is joined from the best values only, enough of them for a few
 times `k` triples, and from more when too few rows come out; past a share of the predicate's
-triples it is joined whole, as before. This is for the default graph and the ids executor; a
-predicate with more than about four million triples is left alone.
+triples it is joined whole, as before. The pattern may be that one triple pattern alone
+(`?t ex:speed ?v`), and the top-k may be a sub-select, also one that is only counted
+(`SELECT (COUNT(*) AS ?n) { { SELECT … ORDER BY DESC(?v) LIMIT 20 } }`). This is for the
+default graph and the ids executor; a predicate with more than about four million triples is
+left alone.
 
 ## Saving and opening datasets
 

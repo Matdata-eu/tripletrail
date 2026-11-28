@@ -209,7 +209,8 @@ functions](../docs/validation-and-reasoning.md#user-defined-functions).
 
 ### rdflib
 
-`pip install tripletrail[rdflib]` and use the engine as an rdflib store (adapted from
+Install with the `rdflib` extra (`pip install "./python[rdflib]"`, see [Install](#install)) and
+use the engine as an rdflib store (adapted from
 [oxrdflib](https://github.com/oxigraph/oxrdflib), which is not needed):
 
 ```python
@@ -228,9 +229,13 @@ The GIL is released during updates, loads and `explain`.
 
 ## Install
 
-`pip install tripletrail` installs a ready-made wheel from PyPI (Linux x86_64 and aarch64, macOS,
-Windows x86_64; Python 3.9 and later), with on-disk stores and GeoParquet. The `rdflib` extra
-adds the rdflib store plugin: `pip install "tripletrail[rdflib]"`.
+`pip install ./python`, from a checkout of the repository, builds and installs the package
+(Python 3.9 and later; it needs Rust), with on-disk stores and GeoParquet. The `rdflib` extra
+adds the rdflib store plugin: `pip install "./python[rdflib]"`.
+
+It is not on PyPI yet: v0.1.0 came out before releases published it there. A later release puts
+ready-made wheels on PyPI (Linux x86_64 and aarch64, macOS, Windows x86_64), and
+`pip install tripletrail` (or `pip install "tripletrail[rdflib]"`) then needs no Rust.
 
 ## Build
 

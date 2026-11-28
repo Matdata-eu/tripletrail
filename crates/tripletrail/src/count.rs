@@ -586,11 +586,13 @@ fn id_aggregates(aggregates: &[(Variable, AggregateExpression)]) -> Option<Vec<A
 }
 
 /// Rewrites the `GROUP`s of `query` it can answer from the counts, and says how many.
-pub(crate) fn rewrite(
+/// `columns`: as [`crate::idtree::Eval::columns`], for the sub-selects counted (#360).
+pub(crate) fn rewrite<'a>(
     query: Query,
-    snapshot: &Snapshot,
+    snapshot: &'a Snapshot,
     graph: GraphSelector,
-    cancelled: &(dyn Fn() -> bool + Sync),
+    cancelled: &'a (dyn Fn() -> bool + Sync),
+    columns: Option<&'a crate::idtree::Columns<'a>>,
 ) -> (Query, usize) {
     // `#pragma tt.id-rewrites off` (#238).
     if crate::Hints::current().id_rewrites_off {
@@ -600,6 +602,7 @@ pub(crate) fn rewrite(
         snapshot,
         cancelled,
         graph,
+        columns,
         done: 0,
         top: None,
     };
@@ -643,6 +646,9 @@ struct Pass<'a> {
     cancelled: &'a (dyn Fn() -> bool + Sync),
     /// As [`crate::idtree::Eval::graph`].
     graph: GraphSelector,
+    /// As [`crate::idtree::Eval::columns`]: a sub-select's `ORDER BY ?v LIMIT k` reads the
+    /// best values from them (#360).
+    columns: Option<&'a crate::idtree::Columns<'a>>,
     done: usize,
     /// The order (variable, descending) and the number of rows a `Slice` keeps of the
     /// pattern being walked, while only `Project`, `OrderBy` and `Extend` are in between.
@@ -1092,7 +1098,7 @@ impl Pass<'_> {
                     snapshot: self.snapshot,
                     cancelled: self.cancelled,
                     graph: self.graph,
-                    columns: None,
+                    columns: self.columns,
                 }
                 .eval(p)?;
                 if let Some(v) = &tagged {
@@ -1628,7 +1634,7 @@ impl Pass<'_> {
                     snapshot: self.snapshot,
                     cancelled: self.cancelled,
                     graph: self.graph,
-                    columns: None,
+                    columns: self.columns,
                 }
                 .eval(inner)?;
                 let groups = crate::idtree::group_rows(&t, keys, MAX_GROUPS)?;
@@ -2106,7 +2112,7 @@ impl Pass<'_> {
             snapshot: self.snapshot,
             cancelled: self.cancelled,
             graph: self.graph,
-            columns: None,
+            columns: self.columns,
         };
         // COUNT(*) without building the rows, where it can; COUNT(?v) too for a `?v` bound
         // in every row.

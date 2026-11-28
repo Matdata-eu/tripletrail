@@ -1238,9 +1238,21 @@ fn sweep_lazy(
             p.geom(refine.load_probe)
                 .is_some_and(|g| reaches(margin, &p.geometry.crs, &g.geometry, &ob[j]))
         };
-        let Some(candidates) = sweep::join(&pb, &ob, threads, MAX_CANDIDATES, &near) else {
+        let Some(candidates) =
+            sweep::join_until(&pb, &ob, threads, MAX_CANDIDATES, &near, refine.cancelled)
+        else {
+            if (refine.cancelled)() {
+                return None;
+            }
             // Too many candidates to hold: each pair is tested as the sweep finds it.
-            let found = sweep::join(&pb, &ob, threads, usize::MAX, &|i, j| accepts(pl[i], ol[j]))?;
+            let found = sweep::join_until(
+                &pb,
+                &ob,
+                threads,
+                usize::MAX,
+                &|i, j| accepts(pl[i], ol[j]),
+                refine.cancelled,
+            )?;
             out.extend(found.into_iter().map(|(i, j)| (pl[i].at, ol[j].at)));
             continue;
         };
@@ -1775,8 +1787,15 @@ impl<'a> Rewriter<'a> {
         if self.scoped > 0 || !self.ctx.sweep_join() {
             return None;
         }
-        let side_a = self.ctx.side_ids(pa, a)?;
-        let side_b = self.ctx.side_ids(pb, b)?;
+        // A side the context stopped reading because the query was cancelled (its timeout)
+        // ends the rewrite here: the other ways of joining would evaluate the sides again,
+        // which on large sides runs far past the timeout (#338).
+        let Some(side_a) = self.ctx.side_ids(pa, a) else {
+            return self.ctx.cancelled().then_some(None);
+        };
+        let Some(side_b) = self.ctx.side_ids(pb, b) else {
+            return self.ctx.cancelled().then_some(None);
+        };
         // Rows and geometries are numbered in 32 bits below.
         if [&side_a, &side_b]
             .iter()
@@ -3459,5 +3478,63 @@ mod tests {
             matches!(&pattern, GraphPattern::Values { bindings, .. } if bindings.len() == 2),
             "{pattern:?}"
         );
+    }
+
+    /// A store whose timeout passes while it reads a join side's rows: the rewrite must end
+    /// there, not evaluate the sides again for another way of joining (#338). On OSM Europe
+    /// those other ways ran on for minutes past the query's timeout.
+    #[test]
+    fn a_join_cancelled_while_reading_a_side_evaluates_nothing_more() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        #[derive(Default)]
+        struct TimesOut {
+            cancelled: AtomicBool,
+            sides: AtomicUsize,
+            evaluated: AtomicUsize,
+        }
+        impl SpatialContext for TimesOut {
+            fn index(&self) -> Option<Arc<SpatialIndex>> {
+                self.evaluated.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+            fn indexed_predicates(&self) -> Option<IndexedPredicates> {
+                Some(IndexedPredicates::default())
+            }
+            fn has_predicate(&self, _: &str) -> bool {
+                true
+            }
+            fn values_of(&self, _: &GraphPattern, _: &Variable) -> Option<Vec<Term>> {
+                self.evaluated.fetch_add(1, Ordering::Relaxed);
+                Some(Vec::new())
+            }
+            fn rows_of(&self, _: &GraphPattern, _: &[Variable]) -> Option<Vec<Vec<Option<Term>>>> {
+                self.evaluated.fetch_add(1, Ordering::Relaxed);
+                Some(Vec::new())
+            }
+            fn side_ids(&self, _: &GraphPattern, _: &Variable) -> Option<IdSide> {
+                // The timeout passes while the side is read: the store gives up on it.
+                self.sides.fetch_add(1, Ordering::Relaxed);
+                self.cancelled.store(true, Ordering::Relaxed);
+                None
+            }
+            fn cancelled(&self) -> bool {
+                self.cancelled.load(Ordering::Relaxed)
+            }
+        }
+        let q = spargebra::SparqlParser::new()
+            .parse_query(
+                "PREFIX geo: <http://www.opengis.net/ont/geosparql#> \
+                 PREFIX geof: <http://www.opengis.net/def/function/geosparql/> \
+                 SELECT (COUNT(*) AS ?n) WHERE { \
+                   ?t a <http://x/Track> ; geo:hasGeometry/geo:asWKT ?w1 . \
+                   ?l a <http://x/Landuse> ; geo:hasGeometry/geo:asWKT ?w2 . \
+                   FILTER(geof:sfIntersects(?w1, ?w2)) }",
+            )
+            .unwrap();
+        let ctx = TimesOut::default();
+        let (_, stats) = rewrite_query(q, &ctx);
+        assert_eq!(ctx.sides.load(Ordering::Relaxed), 1);
+        assert_eq!(ctx.evaluated.load(Ordering::Relaxed), 0, "{stats:?}");
+        assert_eq!(stats.joins, 0);
     }
 }
