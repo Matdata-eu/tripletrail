@@ -12,6 +12,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 /// A bounding box: lower and upper corners.
 pub(crate) type Bbox = ([f64; 2], [f64; 2]);
 
+/// Boxes a stripe's sweep takes between two looks at its `stop`.
+const STOP_EVERY: usize = 4096;
+
 /// Stripes per thread: more, smaller stripes even out the work when the data is uneven.
 const STRIPES_PER_THREAD: usize = 4;
 
@@ -25,13 +28,38 @@ pub(crate) fn join(
     limit: usize,
     test: &(dyn Fn(usize, usize) -> bool + Sync),
 ) -> Option<Vec<(usize, usize)>> {
+    join_until(left, right, threads, limit, test, &|| false)
+}
+
+/// [`join`] that gives up, with `None`, once `stop` holds (a cancelled query): it is checked
+/// between the steps that sort the boxes, between stripes, and every [`STOP_EVERY`] boxes of a
+/// stripe's sweep. A sweep over millions of boxes otherwise runs on for many seconds after
+/// its query's timeout, even with a `test` that fails at once (#338).
+pub(crate) fn join_until(
+    left: &[Bbox],
+    right: &[Bbox],
+    threads: usize,
+    limit: usize,
+    test: &(dyn Fn(usize, usize) -> bool + Sync),
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<(usize, usize)>> {
     if left.is_empty() || right.is_empty() {
         return Some(Vec::new());
+    }
+    if stop() {
+        return None;
     }
     let threads = threads.max(1);
     let bounds = stripe_bounds(left, right, threads * STRIPES_PER_THREAD);
     let stripes = bounds.len() + 1;
-    let (l_stripes, r_stripes) = (split(left, &bounds), split(right, &bounds));
+    if stop() {
+        return None;
+    }
+    let l_stripes = split(left, &bounds);
+    if stop() {
+        return None;
+    }
+    let r_stripes = split(right, &bounds);
     let next = AtomicUsize::new(0);
     let found = AtomicUsize::new(0);
     let over = AtomicBool::new(false);
@@ -41,6 +69,10 @@ pub(crate) fn join(
         loop {
             let s = next.fetch_add(1, Ordering::Relaxed);
             if s >= stripes || over.load(Ordering::Relaxed) {
+                return out;
+            }
+            if stop() {
+                over.store(true, Ordering::Relaxed);
                 return out;
             }
             let start = if s == 0 {
@@ -56,6 +88,7 @@ pub(crate) fn join(
                 &r_stripes[s],
                 start,
                 test,
+                stop,
                 &mut pairs,
             );
             let n = pairs.len();
@@ -311,6 +344,7 @@ fn bands_of(left: &[Bbox], right: &[Bbox], l_ids: &[u32], r_ids: &[u32]) -> Opti
 }
 
 /// Sweeps one stripe starting at `start`, appending the pairs it owns to `out`.
+#[allow(clippy::too_many_arguments)]
 fn sweep(
     left: &[Bbox],
     right: &[Bbox],
@@ -318,6 +352,7 @@ fn sweep(
     r_ids: &[u32],
     start: f64,
     test: &(dyn Fn(usize, usize) -> bool + Sync),
+    stop: &(dyn Fn() -> bool + Sync),
     out: &mut Vec<(usize, usize)>,
 ) {
     // Worked out when the sweep first needs them.
@@ -327,6 +362,10 @@ fn sweep(
     let mut l_active = Active::new();
     let mut r_active = Active::new();
     while li < l_ids.len() || ri < r_ids.len() {
+        // The caller sees `stop` too, and drops what this stripe found.
+        if (li + ri) % STOP_EVERY == 0 && stop() {
+            return;
+        }
         let take_left = ri == r_ids.len()
             || (li < l_ids.len()
                 && left[l_ids[li] as usize].0[0] <= right[r_ids[ri] as usize].0[0]);
@@ -580,6 +619,37 @@ mod tests {
             // Points: up to 4 band entries and visits each, and what they find there.
             assert!(work <= 16 * (left.len() + right.len()), "{work}");
         }
+    }
+
+    #[test]
+    fn a_stopped_join_gives_up() {
+        let mut rng = Lcg(7);
+        let left = boxes(&mut rng, 20_000, 0.01);
+        let right = boxes(&mut rng, 20_000, 0.01);
+        let tests = AtomicUsize::new(0);
+        let test = |_: usize, _: usize| {
+            tests.fetch_add(1, Ordering::Relaxed);
+            true
+        };
+        for threads in [1, 4] {
+            assert_eq!(
+                join_until(&left, &right, threads, usize::MAX, &test, &|| true),
+                None
+            );
+        }
+        assert_eq!(tests.load(Ordering::Relaxed), 0);
+        // Stopped part way: no pairs come back, and the sweep ends early.
+        let looks = AtomicUsize::new(0);
+        let stop = || looks.fetch_add(1, Ordering::Relaxed) >= 6;
+        assert_eq!(join_until(&left, &right, 1, usize::MAX, &test, &stop), None);
+        let all = join(&left, &right, 1, usize::MAX, &|_, _| true)
+            .unwrap()
+            .len();
+        assert!(
+            tests.load(Ordering::Relaxed) < all,
+            "{} of {all}",
+            tests.load(Ordering::Relaxed)
+        );
     }
 
     #[test]

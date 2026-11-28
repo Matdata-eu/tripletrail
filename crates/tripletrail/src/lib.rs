@@ -4702,29 +4702,34 @@ impl SpatialContext for Engine {
         // geometries it tests (#754). Empty and invalid geometries meet nothing.
         let threads = tripletrail_store::par::cores();
         let chunk = distinct.len().div_ceil(threads).max(4096);
-        let geometries = std::thread::scope(|scope| {
+        let geometries: Vec<_> = std::thread::scope(|scope| {
             let workers: Vec<_> = distinct
                 .chunks(chunk)
                 .map(|part| {
                     scope.spawn(move || {
-                        part.iter()
-                            .filter_map(|&id| {
-                                let (crs, bbox) = store.geometry_bbox(id)?;
-                                Some(tripletrail_spatial::SideGeometry {
-                                    id,
-                                    crs,
-                                    bbox: bbox?,
-                                })
-                            })
-                            .collect::<Vec<_>>()
+                        let mut out = Vec::with_capacity(part.len());
+                        for (i, &id) in part.iter().enumerate() {
+                            // Each box is a read of the geometry's record, which on a large
+                            // side that is not in memory takes minutes in all (#338).
+                            if i % 4096 == 0 && self.is_cancelled() {
+                                return None;
+                            }
+                            if let Some((crs, Some(bbox))) = store.geometry_bbox(id) {
+                                out.push(tripletrail_spatial::SideGeometry { id, crs, bbox });
+                            }
+                        }
+                        Some(out)
                     })
                 })
                 .collect();
             workers
                 .into_iter()
-                .flat_map(|w| w.join().unwrap())
-                .collect()
-        });
+                .map(|w| w.join().unwrap())
+                .collect::<Option<Vec<_>>>()
+        })?
+        .into_iter()
+        .flatten()
+        .collect();
         let parse = snapshot.clone();
         let read = snapshot.clone();
         Some(tripletrail_spatial::IdSide {

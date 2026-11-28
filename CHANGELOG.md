@@ -81,6 +81,8 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- A spatial join that reaches the query's timeout stops (#338). A join whose timeout passed while it read its sides fell back to probing the index, which evaluated both sides again: on OSM Europe at 1B triples `osm_track_landuse` ran on far past its 600 s timeout with a 55 GB heap, and the queries after it in the benchmark (`osm_track_track_5m`: 7.8 s before, 164 s) shared the machine with it. The join on term ids now also checks the timeout while it reads the geometry boxes and sweeps them.
+
 - The Query page reads a `\U` escape for a backslash or a quote in an N-Triples answer (CONSTRUCT, DESCRIBE) as that character; it used to fail to parse the line.
 
 - A query reads the numeric value columns of its own snapshot (#328). The range rewrite (#71) and the top-k values of `ORDER BY ?v LIMIT k` (#297) read columns that followed the engine's current data, so a `DELETE` between a query's snapshot and its reading the column could drop rows the snapshot has. Each column is now kept with the store generation it holds, and a query whose snapshot differs (where the predicate changed in between) builds it from its snapshot.
