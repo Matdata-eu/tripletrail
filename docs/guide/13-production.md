@@ -850,6 +850,58 @@ Server: TripleTrail
 Every option also works as an environment variable (`TRIPLETRAIL_SITE_NAME`, ...) and as a key
 of the `--config` file. See [the web UI](../server.md#web-ui).
 
+## Browsers and host names
+
+A web page a user opens can send requests to any server the user's browser reaches, also one
+on their own computer or on the company network. TripleTrail stops two ways a page of another
+site could use that.
+
+Changes (updates, uploads, admin requests) sent by a page of another site are refused,
+whatever the user signed in with. Clients that are not browsers, such as curl or scripts, send
+no `Origin` and work as before. To let the pages of your own application change data, list
+its origin with `--cors https://app.example.org`.
+
+<!-- test: serve -->
+```sh
+tripletrail serve --location data --dataset rail_v1
+```
+
+<!-- test: run -->
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Origin: https://other.example' \
+  --data-urlencode 'update=INSERT DATA { <urn:a> <urn:b> <urn:c> }' \
+  'http://localhost:7878/rail_v1/update'
+```
+
+<!-- test: output -->
+```text
+403
+```
+
+A server without authentication answers only for its own host names. Otherwise a page could
+give its own name the server's address (DNS rebinding) and read the answers. IP addresses and
+`localhost` always work. When the server listens on loopback (the default), other names are
+refused; when it listens beyond loopback, it warns at start. Give the names it is reached by
+with `--allowed-host`, such as the name a reverse proxy passes on:
+
+<!-- test: run -->
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: other.example' \
+  'http://localhost:7878/rail_v1/query?query=ASK%7B%7D'
+```
+
+<!-- test: output -->
+```text
+403
+```
+
+```sh
+tripletrail serve --location data --dataset rail_v1 --allowed-host kg.example.org
+```
+
+With authentication on ([chapter 12](12-access-control.md)), any name is answered: a page of
+another name has no credentials to use.
+
 ## What you learnt
 
 - Backups are one admin request, run on a schedule; store backups restore fastest.
@@ -864,6 +916,8 @@ of the `--config` file. See [the web UI](../server.md#web-ui).
   its notices and links; `--ui-home`, `--default-dataset`, `--ui-theme` and `--map-view` where
   a new viewer starts, and `--examples` and `--default-query` the queries they start with;
   `--ui-css` adds your own stylesheet.
+- Pages of other sites cannot change data; a server without authentication answers only the
+  names given with `--allowed-host` (besides IP addresses and `localhost`).
 - The enterprise edition is a separate build that reads an offline licence and never stops
   the server when it expires; its audit log records who changed what, in a chain that shows
   tampering.

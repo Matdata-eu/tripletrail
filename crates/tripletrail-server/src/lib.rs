@@ -31,6 +31,7 @@ mod audit;
 pub mod auth;
 mod binary_rdf;
 pub mod branding;
+mod browser;
 pub mod config;
 #[cfg(feature = "postgres")]
 pub mod database_sources;
@@ -163,6 +164,11 @@ pub struct Options {
     /// Without [`Options::cors`]: the origins (`https://example.com`) whose cross-origin
     /// requests are allowed; others get no CORS headers.
     pub cors_origins: Vec<String>,
+    /// The host names this server answers to when it has no authentication (`--allowed-host`):
+    /// `kg.example.org`, `.example.org` for it and the names under it, or `*` for any. IP
+    /// addresses and `localhost` are always answered. Empty: any name when listening beyond
+    /// loopback, none when listening on loopback (against DNS rebinding).
+    pub allowed_hosts: Vec<String>,
     /// When set, writes (updates, and `POST`/`PUT`/`DELETE` on `/{ds}/data`) need
     /// `Authorization: Bearer <token>` (this token or the admin token). Queries stay open.
     pub update_token: Option<String>,
@@ -361,6 +367,7 @@ impl Default for Options {
             config_file: None,
             cors: false,
             cors_origins: Vec::new(),
+            allowed_hosts: Vec::new(),
             update_token: None,
             max_body: Some(16 << 20),
             schema_tools: false,
@@ -447,6 +454,8 @@ pub(crate) struct State {
     pub(crate) in_flight: AtomicUsize,
     pub(crate) started: SystemTime,
     pub(crate) auth: Option<auth::Auth>,
+    /// The server listens on a loopback address only.
+    pub(crate) loopback: bool,
     pub(crate) limits: Option<limits::LimitsFile>,
     #[cfg(feature = "tls")]
     pub(crate) tls: Option<Arc<tls::Tls>>,
@@ -729,6 +738,7 @@ impl Server {
         tripletrail_enterprise::rows::install();
         let listener = std::net::TcpListener::bind(address)?;
         set_nodelay(&listener);
+        let loopback = listener.local_addr()?.ip().is_loopback();
         #[cfg(feature = "tls")]
         let mut tls_listener = None;
         let (http_listener, public) = match (&options.tls_cert, &options.tls_key) {
@@ -823,6 +833,7 @@ impl Server {
                 in_flight: AtomicUsize::new(0),
                 started: SystemTime::now(),
                 auth,
+                loopback,
                 limits,
                 #[cfg(feature = "tls")]
                 tls,
@@ -864,6 +875,11 @@ impl Server {
     }
 
     /// Whether users sign in with passwords (HTTP Basic, #825).
+    /// Whether callers are identified (`--auth-config`): without it, reads are open.
+    pub fn has_auth(&self) -> bool {
+        self.state.auth.is_some()
+    }
+
     pub fn has_password_users(&self) -> bool {
         self.state.auth.as_ref().is_some_and(auth::Auth::has_users)
     }
@@ -2054,6 +2070,7 @@ fn route(
     request: &mut Request,
     context: &mut Context,
 ) -> Result<Reply, HttpError> {
+    browser::check_host(state, request)?;
     let url = request.url().to_owned();
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
     let mut params = Params(
@@ -2074,6 +2091,7 @@ fn route(
     if let ["$", "sso", rest @ ..] = segments.as_slice() {
         return sso::route(state, request, rest, &params);
     }
+    browser::cross_site_change(state, request, &method)?;
     if let Some(auth) = &state.auth
         && !matches!(
             segments.as_slice(),
