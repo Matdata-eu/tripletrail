@@ -905,6 +905,20 @@ Pages of an exact name given this way may also change data, like the server's ow
 With authentication on ([chapter 12](12-access-control.md)), any name is answered: a page of
 another name has no credentials to use.
 
+The describe, Linked Data and OGC API pages are built from your data. Each of them carries a
+`Content-Security-Policy` that runs no inline script, so a label holding markup stays text:
+
+<!-- test: run -->
+```sh
+curl -s -o /dev/null -D - -H 'Accept: text/html' \
+  'http://localhost:7878/rail_v1/ogc/collections?f=html' | grep -io '^content-security-policy: default-src [^;]*; script-src [^;]*'
+```
+
+<!-- test: output -->
+```text
+Content-Security-Policy: default-src 'self'; script-src 'self'
+```
+
 ## What you learnt
 
 - Backups are one admin request, run on a schedule; store backups restore fastest.

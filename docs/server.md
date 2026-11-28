@@ -1525,6 +1525,22 @@ does).
   at start. With `--auth-config`, every name is answered.
 - Set `--timeout` so a single query cannot hold a worker for long; queries, updates, routing
   functions and long geo functions stop at the deadline with a 503.
+- Every answer carries `X-Content-Type-Options: nosniff`. Every HTML page carries
+  `Referrer-Policy: same-origin` and a `Content-Security-Policy`, so a value from the data
+  never runs as script on the server's origin, even if a page's escaping slipped. This covers
+  the describe, Linked Data and OGC API pages and the update's answer. The policy allows script
+  only from the server itself and never inline. It allows styles inline, images from anywhere
+  (pictures the data links to), the describe map's tiles from the `--map-tiles` host, and
+  MapLibre's workers from `blob:`:
+
+  ```text
+  default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src * data: blob:;
+  connect-src 'self' https://*.tile.example.org; worker-src 'self' blob:; object-src 'none';
+  frame-ancestors 'self'; base-uri 'self'; form-action 'self'
+  ```
+
+  The web UI, REST API and GraphQL pages keep their own policies. A link on a page built from
+  data is a link only for an `http` or `https` IRI.
 
 ## Authentication
 
