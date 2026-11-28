@@ -455,6 +455,15 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
     against their sums in the background (#436). The check pauses while the store is being
     written, rests after each read as long as the read took, and tells the kernel to drop the
     pages it read, so that it does not push the store's own pages out of memory (#437).
+- **Memory counted.** `Store::memory_use()` gives roughly the heap bytes of the dictionary, the
+  quads in memory (segments in a mapped checkpoint are files, not heap), the parsed geometries,
+  the union default graph's copies and, once built, the string ranks (#392: 4 bytes per term
+  and 4 more per IRI or string). `Engine::memory_use` adds the indexes and caches queries
+  build, and the server the map's caches; `/$/stats` and the memory quota read the sum. On
+  RINF Germany (11.7 M triples, served from disk, after the map's warm-up) it is 152.6 MiB
+  against the 145.1 MiB heap heaptrack measures, 5 % over. Before #392 it was 110.7 MiB of
+  146.0 MiB, 24 % under: the string ranks were not counted, and the full-text index's word
+  lists were counted by their length rather than their capacity.
 - **Saved and read-only datasets.** `Store::save_to(dir)` writes a store to a new directory
   (a checkpoint and an empty log, written to a temporary directory first and renamed into
   place). `Store::open_read_only(dir)` memory-maps the checkpoint files instead of reading

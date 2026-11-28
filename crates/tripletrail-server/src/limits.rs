@@ -843,10 +843,11 @@ impl Usage {
         }
     }
 
-    /// The heap memory the dataset's engine holds (see `Engine::memory_use`; memory-mapped
-    /// checkpoint files are not counted: the operating system pages them in and out).
+    /// The heap memory the dataset holds: its engine's (see `Engine::memory_use`) and the map's
+    /// caches of it (#392). Memory-mapped checkpoint files are not counted: the operating system
+    /// pages them in and out.
     pub(crate) fn memory(entry: &Entry) -> Option<u64> {
-        entry.engine.memory_use().map(|m| m.total() as u64)
+        crate::memory::of(entry).map(|m| m.total() as u64)
     }
 }
 
@@ -875,7 +876,10 @@ pub(crate) fn check_quota_unless(
     if let (Some(used), Some(quota)) = (usage.memory, limits.max_memory)
         && used >= quota
     {
-        let target = usize::try_from(quota.saturating_sub(1)).unwrap_or(usize::MAX);
+        // The engine's part of the quota: the map's caches of the dataset (#392) stay.
+        let caches = crate::memory::of(entry).map_or(0, |m| m.map_caches) as u64;
+        let target =
+            usize::try_from(quota.saturating_sub(1).saturating_sub(caches)).unwrap_or(usize::MAX);
         let dropped = entry.engine.evict_derived(target);
         if !dropped.is_empty() {
             entry.gate.evictions.fetch_add(1, Ordering::Relaxed);

@@ -124,6 +124,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Changed
 
+- `/$/stats` and `/$/metrics` count more of a dataset's heap in its memory, and so does a `maxMemory` quota (#392). Two new parts are counted: `stringRanks`, the order of the IRIs and strings that `MIN`, `MAX` and `ORDER BY` read, and `mapCaches`, the map's and the OGC API's collections, tiles, facet counts and labels of the dataset. The full-text index is counted by the room its word lists take, not their length. On RINF Germany after the map's warm-up, `memoryBytes` went from 24 % under the heap heaptrack measures to 5 % over it (152.6 MiB against 145.1 MiB). Over a quota, the map's caches stay and the engine's derived indexes go first, as before.
 - [TripleTrail Enterprise](docs/enterprise.md) and the production guide describe the enterprise image as it is delivered (#391): the public, licence-gated `ghcr.io/matdata-eu/tripletrail-enterprise`, which needs no token to pull and keeps its enterprise features off without a licence that covers them, where they spoke of a private registry.
 - A bulk load's checkpoint writes the dictionary's hash index in order from the heap, a window of at most half of `--memory-limit` at a time, instead of filling a mapped file at random (#232). Loading 400M triples with `--memory-limit 2560M` under a 10 GB memory cap wrote 85 to 99 GB, most of it while the 960 MB index was written; now 22 GB, and the load takes 1,413 s instead of 1,637 to 1,675 s.
 

@@ -59,6 +59,22 @@ fn the_map_is_made_before_its_first_request() {
     let both = get("facets?collection=Station&collection=Line");
     assert_eq!(both["features"], 3, "{both}");
     assert_eq!(asked(), before);
+    // What it made counts in the dataset's memory (#392), as do the string ranks.
+    assert!(handle.warm_ranks("kg").is_some());
+    let stats: serde_json::Value = serde_json::from_str(
+        &ureq::get(&format!("{base}/$/stats/kg"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap(),
+    )
+    .unwrap();
+    let s = &stats["datasets"]["/kg"];
+    let memory = s["memory"].as_object().unwrap();
+    assert!(memory["mapCaches"].as_u64().unwrap() > 0, "{s}");
+    assert!(memory["stringRanks"].as_u64().unwrap() > 0, "{s}");
+    let sum: u64 = memory.values().map(|v| v.as_u64().unwrap()).sum();
+    assert_eq!(sum, s["memoryBytes"].as_u64().unwrap(), "{s}");
     // A filtered request is counted.
     let hubs = get("facets/Station?bbox=0.5,0.5,1.5,1.5");
     assert_eq!(hubs["features"], 1, "{hubs}");

@@ -53,6 +53,7 @@ mod lift_out;
 mod limits;
 mod linked_data;
 mod mcp;
+mod memory;
 mod metrics;
 mod ogc;
 #[cfg(feature = "otel")]

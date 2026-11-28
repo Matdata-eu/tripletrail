@@ -128,8 +128,9 @@ pub struct TextIndex {
     pairs: Vec<((TermId, TermId), u32)>,
     /// For each word, the live documents holding it and how often, in document order.
     postings: BTreeMap<Box<str>, Vec<(u32, u32)>>,
-    /// The entries of `postings`, and the bytes of its words, for [`TextIndex::heap_size`].
-    posting_entries: usize,
+    /// The room of `postings`' lists (their capacity, which pushes grow past their length), and
+    /// the bytes of its words, for [`TextIndex::heap_size`] (#392).
+    posting_slots: usize,
     word_bytes: usize,
     /// Live documents and the words they hold, for BM25's averages.
     live: usize,
@@ -282,7 +283,7 @@ impl TextIndex {
             index.push(subject, literal, counts);
             index.pairs.push(((subject, literal), n));
         }
-        index.posting_entries = postings.values().map(Vec::len).sum();
+        index.posting_slots = postings.values().map(Vec::capacity).sum();
         index.word_bytes = postings.keys().map(|w| w.len()).sum();
         index.postings = postings.into_iter().collect();
         Ok(index)
@@ -348,9 +349,9 @@ impl TextIndex {
                 if let Some(list) = self.postings.get_mut(&w) {
                     if let Ok(k) = list.binary_search_by_key(&n, |e| e.0) {
                         list.remove(k);
-                        self.posting_entries -= 1;
                     }
                     if list.is_empty() {
+                        self.posting_slots -= list.capacity();
                         self.postings.remove(&w);
                         self.word_bytes -= w.len();
                     }
@@ -364,12 +365,17 @@ impl TextIndex {
             };
             let n = self.next_number()?;
             for (w, c) in &counts {
-                self.posting_entries += 1;
                 match self.postings.get_mut(w) {
-                    Some(list) => list.push((n, *c)),
+                    Some(list) => {
+                        let room = list.capacity();
+                        list.push((n, *c));
+                        self.posting_slots += list.capacity() - room;
+                    }
                     None => {
+                        let list = vec![(n, *c)];
                         self.word_bytes += w.len();
-                        self.postings.insert(w.clone(), vec![(n, *c)]);
+                        self.posting_slots += list.capacity();
+                        self.postings.insert(w.clone(), list);
                     }
                 }
             }
@@ -419,7 +425,7 @@ impl TextIndex {
             + self.pairs.capacity() * size_of::<((TermId, TermId), u32)>()
             + self.postings.len() * word
             + self.word_bytes
-            + self.posting_entries * size_of::<(u32, u32)>()
+            + self.posting_slots * size_of::<(u32, u32)>()
     }
 
     /// Documents indexed.

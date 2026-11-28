@@ -994,6 +994,9 @@ pub struct MemoryUse {
     pub routing_networks: usize,
     /// The copies of triples in several graphs, for the union default graph (#808).
     pub union_copies: usize,
+    /// The order of the store's IRIs and strings, which `MIN`, `MAX` and `ORDER BY` read
+    /// (#392).
+    pub string_ranks: usize,
 }
 
 impl MemoryUse {
@@ -1008,10 +1011,11 @@ impl MemoryUse {
             + self.result_cache
             + self.routing_networks
             + self.union_copies
+            + self.string_ranks
     }
 
     /// The parts by name, as `/$/stats` and `/$/metrics` show them.
-    pub fn parts(&self) -> [(&'static str, usize); 10] {
+    pub fn parts(&self) -> [(&'static str, usize); 11] {
         [
             ("dictionary", self.dictionary),
             ("quads", self.quads),
@@ -1023,6 +1027,7 @@ impl MemoryUse {
             ("resultCache", self.result_cache),
             ("routingNetworks", self.routing_networks),
             ("unionCopies", self.union_copies),
+            ("stringRanks", self.string_ranks),
         ]
     }
 }
@@ -4279,6 +4284,7 @@ impl Engine {
             result_cache: self.results.stats().bytes,
             routing_networks: self.networks().bytes(),
             union_copies: m.union_copies,
+            string_ranks: m.string_ranks,
         })
     }
 

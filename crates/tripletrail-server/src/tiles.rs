@@ -95,6 +95,42 @@ impl TileCache {
     }
 }
 
+/// The bytes the map's caches of the dataset `id` hold (#392): its kept tiles, its collections'
+/// unfiltered facet counts, and the labels of their values.
+pub(crate) fn cache_bytes(id: u64) -> usize {
+    let tiles: usize = CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .tiles
+        .iter()
+        .filter(|(k, _)| k.0 == id)
+        .map(|(k, t)| cost(k, t))
+        .sum();
+    let unfiltered: usize = UNFILTERED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(k, _)| k.0 == id)
+        .map(|(k, v)| KEY_BYTES + k.3.capacity() + crate::memory::json_bytes(v))
+        .sum();
+    // A label: its IRI, its text and a map entry of both.
+    const LABEL: usize = 2 * size_of::<String>() + size_of::<Option<String>>() + 16;
+    let labels: usize = LABELLED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(k, _)| k.0 == id)
+        .map(|(k, m)| {
+            KEY_BYTES
+                + k.3.capacity()
+                + m.iter()
+                    .map(|(iri, l)| LABEL + iri.capacity() + l.as_ref().map_or(0, String::capacity))
+                    .sum::<usize>()
+        })
+        .sum();
+    tiles + unfiltered + labels
+}
+
 /// Bytes a kept tile is counted for besides its own and its layer name's: the rest of its key
 /// and the bookkeeping. So empty tiles, and filtered ones with long names, fill the cache too.
 const KEY_BYTES: usize = 96;
