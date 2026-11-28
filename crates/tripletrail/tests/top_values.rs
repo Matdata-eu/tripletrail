@@ -168,6 +168,72 @@ fn a_predicate_with_other_objects_and_a_write_since() {
     }
 }
 
+#[test]
+fn one_triple_pattern_gives_the_same_rows_as_all_its_triples() {
+    // #360: the values of one pattern, as of a star.
+    let e = engine(5000);
+    for q in [
+        "SELECT ?t ?v WHERE { ?t ex:speed ?v } ORDER BY DESC(?v) ?t LIMIT 20",
+        "SELECT ?t ?v WHERE { ?t ex:speed ?v } ORDER BY ?v DESC(?t) LIMIT 7 OFFSET 30",
+        "SELECT ?v WHERE { ?t ex:speed ?v } ORDER BY DESC(?v) LIMIT 25",
+        "SELECT DISTINCT ?v WHERE { ?t ex:speed ?v } ORDER BY ?v LIMIT 10",
+        "SELECT ?t WHERE { ?t ex:speed ?v FILTER(?v < 100) } ORDER BY DESC(?v) ?t LIMIT 12",
+        "SELECT ?t ?v WHERE { ?t ex:speed ?v } ORDER BY DESC(?v) LIMIT 1",
+    ] {
+        for executor in [IDS, "#pragma tt.executor spareval\n"] {
+            assert_eq!(
+                rows(&e, &format!("{executor}{q}")),
+                rows(&e, &format!("{ORACLE}{q}")),
+                "{q}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ties_on_the_one_key_of_one_pattern_come_by_subject() {
+    // 5000 tracks at 8 speeds: 625 tie on the best one, of which 20 are kept. Joined from
+    // the best values only, the tied rows come in the order of all the triples ordered.
+    let e = engine(5000);
+    let q = "SELECT ?t ?v WHERE { ?t ex:speed ?v } ORDER BY DESC(?v) LIMIT 20";
+    let got = rows(&e, &format!("{IDS}{q}"));
+    assert_eq!(got.len(), 20);
+    assert!(got.iter().all(|r| r.contains("250")), "{got:?}");
+    // An order on `?v + 0` is the same order, but not on the value of a pattern: all the
+    // triples are joined and ordered.
+    let whole = rows(
+        &e,
+        &format!("{IDS}SELECT ?t ?v WHERE {{ ?t ex:speed ?v }} ORDER BY DESC(?v + 0) LIMIT 20"),
+    );
+    assert_eq!(got, whole);
+    let tracks = rows(&e, &format!("{IDS}SELECT ?t WHERE {{ ?t ex:speed 250 }}"));
+    assert!(
+        got.iter()
+            .all(|r| tracks.iter().any(|t| r.starts_with(t.as_str())))
+    );
+}
+
+#[test]
+fn a_sub_select_takes_the_best_values_too() {
+    // #360: counted, and joined with the rest of the query.
+    let e = engine(5000);
+    for q in [
+        "SELECT (COUNT(*) AS ?n) WHERE { { SELECT ?t ?v ?l WHERE { ?t a ex:Track ; ex:speed ?v ; rdfs:label ?l } ORDER BY DESC(?v) LIMIT 20 } }",
+        "SELECT (COUNT(*) AS ?n) WHERE { { SELECT ?t ?v WHERE { ?t ex:speed ?v } ORDER BY DESC(?v) LIMIT 20 } }",
+        "SELECT (COUNT(DISTINCT ?v) AS ?n) WHERE { { SELECT ?t ?v WHERE { ?t ex:speed ?v } ORDER BY ?v LIMIT 300 } }",
+        "SELECT ?t ?l WHERE { { SELECT ?t ?v WHERE { ?t ex:speed ?v } ORDER BY DESC(?v) ?t LIMIT 5 } ?t rdfs:label ?l } ORDER BY ?t",
+        "SELECT ?t ?v WHERE { { SELECT ?t ?v WHERE { ?t a ex:Other ; ex:speed ?v } ORDER BY ?v ?t LIMIT 8 OFFSET 2 } } ORDER BY ?t",
+    ] {
+        for executor in [IDS, "#pragma tt.executor spareval\n"] {
+            assert_eq!(
+                rows(&e, &format!("{executor}{q}")),
+                rows(&e, &format!("{ORACLE}{q}")),
+                "{q}"
+            );
+        }
+    }
+}
+
 /// Timings on a larger copy: `cargo test --release --test top_values -- --ignored --nocapture`.
 #[test]
 #[ignore]

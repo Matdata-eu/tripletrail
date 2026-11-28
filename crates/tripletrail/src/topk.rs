@@ -21,6 +21,9 @@
 //! come first; rows that tie on every key of the order come in the order this join gives
 //! them (by value, then subject), which need not be the whole join's.
 //!
+//! The pattern may be that one triple pattern alone, its triples then looked up for the best
+//! values only, and the top-k a sub-select, counted or joined with the rest (#360).
+//!
 //! Only for predicates whose objects are all numbers (others order apart from them), and only
 //! on the default graph (the columns cover it).
 
@@ -64,7 +67,7 @@ pub(crate) fn table(
         _ => return None,
     };
     let &(v, descending) = by.first()?;
-    if keep == 0 || patterns.len() < 2 {
+    if keep == 0 || patterns.is_empty() {
         return None;
     }
     let predicate = key_predicate(patterns, v)?;
