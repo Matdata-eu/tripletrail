@@ -97,7 +97,19 @@ for (const width of [1440, 390]) {
     await page.locator("main table tbody tr a").first().click();
     await page.waitForURL(/\/items\/[^?]+\?f=html/);
     assert.match(await page.locator("main").innerText(), /Brussels/);
-    // The feature page's IRI heading does not wrap yet on a phone (#372): check no sideways
-    // scroll there once it is fixed.
+    // A feature page does not scroll sideways, even with a long IRI as its heading (#372).
+    const wide = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert.ok((await wide()) <= 0, `the feature page is ${await wide()} px too wide`);
+    const iri = "https://example.org/rail/functionalInfrastructure/operationalPoints/" + "x".repeat(40);
+    assert.ok(iri.length >= 100);
+    const update = `PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+      INSERT DATA { <${iri}> a <https://example.org/rail#Station> ;
+        <http://www.w3.org/2000/01/rdf-schema#label> "A station with a long IRI" ;
+        geo:hasGeometry [ geo:asWKT "POINT(5.9 49.6)"^^geo:wktLiteral ] }`;
+    const r = await fetch(`${base}/ds/update`, { method: "POST", body: new URLSearchParams({ update }) });
+    assert.ok(r.ok, `update: ${r.status} ${await r.text()}`);
+    await page.goto(`${base}/ds/ogc/collections/Station/items/${encodeURIComponent(iri)}?f=html`);
+    assert.match(await page.locator("main").innerText(), /long IRI/);
+    assert.ok((await wide()) <= 0, `a long IRI's page is ${await wide()} px too wide`);
   });
 }
