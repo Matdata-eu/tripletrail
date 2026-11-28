@@ -69,7 +69,14 @@ pub(super) fn page(
         ["collections", id, "items"] => {
             crumbs.push((format!("{base}/collections"), "Collections".to_owned()));
             crumbs.push((format!("{base}/collections/{id}"), (*id).to_owned()));
-            (format!("{id}: features"), items(&doc, axes, &nav))
+            {
+                // Where the page starts: a bad offset was refused before the page was made.
+                let offset = params
+                    .get("offset")
+                    .and_then(|o| o.trim().parse().ok())
+                    .unwrap_or(0);
+                (format!("{id}: features"), items(&doc, offset, axes, &nav))
+            }
         }
         ["collections", id, "items", _, ..] => {
             crumbs.push((format!("{base}/collections"), "Collections".to_owned()));
@@ -310,9 +317,21 @@ fn collection(doc: &Value, nav: &dyn Fn(&str) -> String) -> String {
     out
 }
 
-fn items(doc: &Value, axes: Axes, nav: &dyn Fn(&str) -> String) -> String {
+/// A page of features, the first of them at `offset` among those that match.
+fn items(doc: &Value, offset: usize, axes: Axes, nav: &dyn Fn(&str) -> String) -> String {
     let features = doc["features"].as_array().cloned().unwrap_or_default();
-    let mut out = format!("<p>{} features on this page.</p>", features.len());
+    // "Features 3–4 of 5" when the count is known (#371), else the page's own count.
+    let mut out = match (doc["numberMatched"].as_u64(), features.len()) {
+        (Some(0), _) | (_, 0) => "<p>No features on this page.</p>".to_owned(),
+        (Some(matched), 1) => format!("<p>Feature {} of {matched}.</p>", offset + 1),
+        (Some(matched), n) => format!(
+            "<p>Features {}–{} of {matched}.</p>",
+            offset + 1,
+            offset + n
+        ),
+        (None, 1) => "<p>1 feature on this page.</p>".to_owned(),
+        (None, n) => format!("<p>{n} features on this page.</p>"),
+    };
     let shapes: Vec<(String, String, &Value)> = features
         .iter()
         .map(|f| (feature_href(f, nav), text(&f["id"]), &f["geometry"]))
