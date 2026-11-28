@@ -61,6 +61,8 @@ enum Kind {
     Assign,
     /// jena-geosparql's `spatial:` search functions (#827).
     Spatial(Spatial),
+    /// `tt:hasPeriod` (#301): the period of an OWL-Time instant or interval.
+    HasPeriod,
 }
 
 /// The `spatial:` property functions of jena-geosparql, with whether they take a geometry
@@ -126,6 +128,7 @@ fn kind(iri: &str) -> Option<Kind> {
         "strSplit" => Some(Kind::StrSplit),
         "splitIRI" => Some(Kind::SplitIri),
         "member" => Some(Kind::Member),
+        "hasPeriod" => Some(Kind::HasPeriod),
         _ => None,
     }
 }
@@ -151,6 +154,7 @@ pub fn property_functions() -> Vec<oxigraph::model::NamedNode> {
             "strSplit",
             "splitIRI",
             "member",
+            "hasPeriod",
         ]
         .iter()
         .map(|n| format!("{MG}{n}")),
@@ -493,6 +497,9 @@ fn step(c: &Call) -> Option<GraphPattern> {
     let first = || PropertyPathExpression::NamedNode(rdf("first"));
     let unit = || bgp(Vec::new());
     Some(match c.kind {
+        Kind::HasPeriod => {
+            crate::owltime::step(&term(c.subject.one()?), &term(c.object.one()?), &fresh)?
+        }
         Kind::ListMember => {
             let s = term(c.subject.one()?);
             let o = term(c.object.one()?);
@@ -1268,6 +1275,12 @@ pub(crate) fn group(left: Option<GraphPattern>, right: GraphPattern) -> GraphPat
         };
     }
     let mut extra = Vec::new();
+    // A blank node the calls share with the rest is the same variable on both sides (the
+    // middle node of a path ending in a property function, `?x ex:p/tt:hasPeriod ?p`).
+    for t in &mut rest {
+        t.subject = term(&t.subject);
+        t.object = term(&t.object);
+    }
     let base_bgp = bgp(std::mem::take(&mut rest));
     let base = match left {
         Some(l) => join(l, base_bgp),

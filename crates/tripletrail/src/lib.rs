@@ -29,6 +29,7 @@ mod idstring;
 mod idtree;
 mod idvalue;
 mod measures;
+mod owltime;
 pub use measures::warmed as measures_warmed;
 pub mod path;
 mod plan;
@@ -1411,6 +1412,10 @@ impl Engine {
             for (name, make) in statagg::aggregates() {
                 evaluator = evaluator.with_custom_aggregate_function(name, make);
             }
+            evaluator = evaluator.with_custom_aggregate_function(
+                NamedNode::new_unchecked(owltime::PARTS),
+                owltime::aggregate(Arc::clone(&self.time_offset)),
+            );
             evaluator
                 .with_custom_function(NamedNode::new_unchecked(statagg::ARGUMENTS), statagg::pack)
         });
