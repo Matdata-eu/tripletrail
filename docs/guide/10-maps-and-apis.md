@@ -589,6 +589,21 @@ curl -s 'http://localhost:7878/ds/ogc/collections/Station/items?f=jsonfg&limit=1
 "conformsTo":["http://www.opengis.net/spec/json-fg-1/1.0/conf/core"]
 ```
 
+Clients that build their requests from the API's definition (QGIS, GDAL, generated
+clients) find every parameter there: `/ds/ogc/api` is an OpenAPI 3.0 document that lists,
+per collection, the parameters the items take, such as `properties`, `lang` and the property
+filters:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/ogc/api' | grep -o '"name":"properties"' | head -1
+```
+
+<!-- test: output -->
+```text
+"name":"properties"
+```
+
 Each feature's `id` is its IRI. A dataset started with one `--base-iri` gives the features
 under it short ids instead: their IRI's part after the base, so `https://data.example.org/s1`
 is `s1` and is at `…/items/s1`.
