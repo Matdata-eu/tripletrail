@@ -357,8 +357,10 @@ fn features_from_the_shapes() {
     assert_eq!(ten["numberReturned"], 10, "{ten}");
     assert_eq!(
         api["paths"]["/collections/Station/items"]["get"]["parameters"]
-            .to_string()
-            .matches("\"limit\"")
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["name"] == "limit")
             .count(),
         1
     );
@@ -381,6 +383,54 @@ fn features_from_the_shapes() {
         406
     );
     assert_eq!(get(&format!("{ogc}/nope")).0, 404);
+
+    // The definition lists every parameter the items and one feature take, and their 400
+    // (#367): what the 400 of an unknown parameter says it takes.
+    for (path, url) in [
+        (
+            "/collections/Station/items",
+            format!("{ogc}/collections/Station/items?colour=red"),
+        ),
+        (
+            "/collections/Station/items/{featureId}",
+            format!("{ogc}/collections/Station/items/http%3A%2F%2Fexample.com%2Fs2?colour=red"),
+        ),
+    ] {
+        let (status, _, refused) = get(&url);
+        assert_eq!(status, 400, "{refused}");
+        let refused = refused.as_str().unwrap();
+        let mut taken: Vec<&str> = refused
+            .split("takes ")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{refused}"))
+            .trim()
+            .split(", ")
+            .collect();
+        taken.sort_unstable();
+        let operation = &api["paths"][path]["get"];
+        let mut documented: Vec<&str> = operation["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["in"] == "query")
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
+        documented.sort_unstable();
+        assert_eq!(documented, taken, "{path}");
+        assert!(operation["responses"]["400"].is_object(), "{path}");
+    }
+    let items = &api["paths"]["/collections/Station/items"]["get"]["parameters"];
+    let properties = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "properties")
+        .unwrap();
+    let keys = properties["schema"]["items"]["enum"].to_string();
+    assert!(
+        keys.contains("\"*\"") && keys.contains("\"tracks\""),
+        "{properties}"
+    );
 }
 
 /// `GET url` with `accept`: status, content type, body.

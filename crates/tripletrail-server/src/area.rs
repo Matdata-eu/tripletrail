@@ -31,7 +31,7 @@ const METRE: &str = "http://www.opengis.net/def/uom/OGC/1.0/metre";
 /// The longest WKT an `area` may be, in bytes.
 const MAX_WKT: usize = 200_000;
 /// The longest `dist`, in metres.
-const MAX_DIST: f64 = 1_000_000.0;
+pub(crate) const MAX_DIST: f64 = 1_000_000.0;
 /// How long reading the geometry of an `area` IRI may take.
 const LOOKUP: Duration = Duration::from_secs(10);
 
