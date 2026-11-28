@@ -571,9 +571,9 @@ check can run it; `--json` prints the same as `GET /$/license` on the running se
 
 A licence never stops the server. In its last 30 days the log warns at start and once a day;
 after it expires, everything keeps working for 30 more days with warnings; after that only the
-enterprise features turn off and the open features keep working. Updates come from Matdata's
-private registry with your subscription's token. [TripleTrail Enterprise](../enterprise.md) has
-the details.
+enterprise features turn off and the open features keep working. The enterprise image,
+`ghcr.io/matdata-eu/tripletrail-enterprise`, is public and needs no token to pull: the licence
+decides what it turns on. [TripleTrail Enterprise](../enterprise.md) has the details.
 
 ### Who changed what: the audit log
 
