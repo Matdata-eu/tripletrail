@@ -55,10 +55,19 @@ fn locations(n: usize) -> Engine {
     e
 }
 
+/// The time `q` takes on `e`: the best of a few runs, so that a pause of a loaded runner in
+/// one of them does not count (#373). The tests compare it on two sizes of the data, so a
+/// plan that grows with the square of the rows shows as a ratio far above the sizes'. The
+/// result cache, if an engine had one, answers none of the runs.
 fn seconds(e: &Engine, q: &str) -> f64 {
-    let t = Instant::now();
-    let _ = rows(e, q);
-    t.elapsed().as_secs_f64()
+    let q = format!("#pragma tt.result-cache off\n{q}");
+    (0..5)
+        .map(|_| {
+            let t = Instant::now();
+            let _ = rows(e, &q);
+            t.elapsed().as_secs_f64()
+        })
+        .fold(f64::INFINITY, f64::min)
 }
 
 #[test]

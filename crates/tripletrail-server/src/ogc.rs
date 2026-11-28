@@ -86,6 +86,9 @@ const ITEMS_PARAMS: &[&str] = &[
     "lang",
 ];
 
+/// The query parameters of one feature (`…/items/{id}`).
+const ITEM_PARAMS: &[&str] = &["f", "crs", "geometries", "timeout", "properties", "lang"];
+
 /// The properties a feature carries (`properties`, from OGC API Features Part 6, #356).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Chosen {
@@ -774,7 +777,7 @@ fn answer(
         // The id is the percent-encoded IRI; a client that leaves its slashes unencoded
         // (the OGC test suite) sends it over several segments.
         ["collections", id, "items", first, more @ ..] => {
-            only_params(&["f", "crs", "geometries", "timeout", "properties", "lang"])?;
+            only_params(ITEM_PARAMS)?;
             json_only(&["json", "geojson", "jsonfg"])?;
             let collection = find(state, entry, id, view)?;
             let fid = std::iter::once(*first)
@@ -1924,6 +1927,61 @@ fn rows_of(
     Ok(out)
 }
 
+/// The most IRI values of a property whose labels a filter looks through (#368).
+const MAX_LABELLED: usize = 10_000;
+
+/// The IRI values of `path` on `collection`'s features shown as `label` (the label in the
+/// reader's language, without what `tts:labelStrip` matches, as the items show them, #356).
+/// None when the property has more than [`MAX_LABELLED`] IRI values: then only the value
+/// itself filters.
+#[allow(clippy::too_many_arguments)]
+fn labelled(
+    entry: &Entry,
+    collection: &Collection,
+    path: &str,
+    label: &str,
+    lang: &str,
+    timeout: Option<Duration>,
+    view: &View,
+    version: Option<DataVersion>,
+) -> Result<Vec<String>, HttpError> {
+    // An IRI given as the value finds itself; no label is read for it.
+    if NamedNode::new(label).is_ok() {
+        return Ok(Vec::new());
+    }
+    let query = format!(
+        "SELECT DISTINCT ?v WHERE {{ ?f a <{}> . ?f {path} ?v . FILTER(isIRI(?v)) }} LIMIT {}",
+        collection.class.as_str(),
+        MAX_LABELLED + 1
+    );
+    let iris: Vec<String> = run(entry, &query, timeout, view)?
+        .into_iter()
+        .filter_map(|row| match row.into_iter().next().flatten() {
+            Some(Term::NamedNode(n)) => Some(n.into_string()),
+            _ => None,
+        })
+        .collect();
+    if iris.is_empty() || iris.len() > MAX_LABELLED {
+        return Ok(Vec::new());
+    }
+    let labels = crate::tiles::labels_of(
+        entry,
+        iris,
+        lang,
+        collection.label_strip.as_ref(),
+        timeout,
+        view,
+        version,
+    )?;
+    let mut found: Vec<String> = labels
+        .into_iter()
+        .filter(|(_, l)| l == label)
+        .map(|(iri, _)| iri)
+        .collect();
+    found.sort_unstable();
+    Ok(found)
+}
+
 /// `…/items`: a page of features, in the store's order.
 #[allow(clippy::too_many_arguments)]
 /// The filters of the layer an `area=layer:{id}` names, which the items take besides their
@@ -1989,7 +2047,20 @@ fn items(
             continue;
         };
         let text = serde_json::to_string(value).expect("a string");
-        filter.push_str(&format!(" ?f {path} ?q{i} . FILTER(STR(?q{i}) = {text})"));
+        // An IRI value is shown as its label (#356): that label finds it too (#368).
+        let named: Vec<String> =
+            labelled(entry, collection, path, value, lang, timeout, view, version)?
+                .iter()
+                .map(|iri| format!("<{iri}>"))
+                .collect();
+        let named = if named.is_empty() {
+            String::new()
+        } else {
+            format!(" || ?q{i} IN ({})", named.join(", "))
+        };
+        filter.push_str(&format!(
+            " ?f {path} ?q{i} . FILTER(STR(?q{i}) = {text}{named})"
+        ));
     }
     if let Some(datetime) = params.get("datetime") {
         filter.push_str(&time_filter(&collection.time, datetime)?);
@@ -2953,7 +3024,61 @@ fn openapi(entry: &Entry, base: &str, collections: &[Collection]) -> Value {
     };
     let ok = |kind: &str, description: &str| json!({ "200": { "description": description, "content": { kind: {} } } });
     // Features: GeoJSON, or JSON-FG for `Accept: application/vnd.ogc.fg+json` or `f=jsonfg`.
-    let ok_features = |description: &str| json!({ "200": { "description": description, "content": { GEOJSON: {}, JSON_FG: {} } } });
+    // An unknown parameter or a bad value is refused (#367).
+    let ok_features = |description: &str| {
+        json!({
+            "200": { "description": description, "content": { GEOJSON: {}, JSON_FG: {}, "text/html": {} } },
+            "400": { "description": "An unknown parameter, or a bad value", "content": { "text/plain": {} } },
+        })
+    };
+    // The parameters of one feature and of the items alike (#356, #367).
+    let feature_params = |c: &Collection| {
+        let mut keys: Vec<&str> = c.properties.iter().map(|(k, _)| k.as_str()).collect();
+        for f in &c.facets {
+            if !keys.contains(&f.key.as_str()) {
+                keys.push(&f.key);
+            }
+        }
+        keys.push("*");
+        vec![
+            param(
+                "f",
+                "query",
+                json!({ "type": "string", "enum": ["json", "geojson", "jsonfg", "html"] }),
+                "The format, in place of the Accept header: GeoJSON (json or geojson), JSON-FG or HTML",
+            ),
+            param(
+                "crs",
+                "query",
+                json!({ "type": "string", "format": "uri", "enum": OutCrs::ALL.map(OutCrs::iri), "default": CRS84 }),
+                "The CRS of the geometries",
+            ),
+            param(
+                "geometries",
+                "query",
+                json!({ "type": "string", "enum": ["one", "all"], "default": "one" }),
+                "With several geometry values, the most detailed one or a GeometryCollection of all",
+            ),
+            param(
+                "properties",
+                "query",
+                json!({ "type": "array", "items": { "type": "string", "enum": keys } }),
+                "The properties a feature carries (OGC API – Features Part 6): these keys, IRIs as IRIs, or * for every property. Without it, the collection's facets, each IRI as its label",
+            ),
+            param(
+                "lang",
+                "query",
+                json!({ "type": "string" }),
+                "The language of the labels of IRI values (else Accept-Language, else English)",
+            ),
+            param(
+                "timeout",
+                "query",
+                json!({ "type": "number", "minimum": 0 }),
+                "Seconds: a shorter timeout than the server's (never a longer one)",
+            ),
+        ]
+    };
     let mut paths = Map::new();
     paths.insert("/".into(), json!({ "get": { "summary": "Landing page", "operationId": "getLandingPage", "responses": ok(JSON, "The landing page") } }));
     paths.insert("/conformance".into(), json!({ "get": { "summary": "Conformance classes", "operationId": "getConformance", "responses": ok(JSON, "The conformance classes") } }));
@@ -2991,22 +3116,10 @@ fn openapi(entry: &Entry, base: &str, collections: &[Collection]) -> Value {
                 }
             ),
             param(
-                "crs",
-                "query",
-                json!({ "type": "string", "format": "uri", "enum": OutCrs::ALL.map(OutCrs::iri), "default": CRS84 }),
-                "The CRS of the geometries",
-            ),
-            param(
                 "bbox-crs",
                 "query",
                 json!({ "type": "string", "format": "uri", "enum": OutCrs::ALL.map(OutCrs::iri), "default": CRS84 }),
                 "The CRS of bbox",
-            ),
-            param(
-                "geometries",
-                "query",
-                json!({ "type": "string", "enum": ["one", "all"], "default": "one" }),
-                "With several geometry values, the most detailed one or a GeometryCollection of all",
             ),
             param(
                 "filter",
@@ -3026,9 +3139,28 @@ fn openapi(entry: &Entry, base: &str, collections: &[Collection]) -> Value {
                 json!({ "type": "string", "format": "uri", "enum": OutCrs::ALL.map(OutCrs::iri), "default": CRS84 }),
                 "The CRS of the geometries in filter",
             ),
+            param(
+                "area",
+                "query",
+                json!({ "type": "string" }),
+                "A spatial filter: a WKT geometry in CRS84, a feature's IRI (its geometry), or layer:{collection} for that collection's features, filtered by its own {collection}.{key} parameters",
+            ),
+            param(
+                "rel",
+                "query",
+                json!({ "type": "string", "enum": ["intersects", "within", "contains", "touches", "crosses", "overlaps", "disjoint", "dwithin"], "default": "intersects" }),
+                "How a feature's geometry must meet the area",
+            ),
+            param(
+                "dist",
+                "query",
+                json!({ "type": "number", "minimum": 0, "maximum": crate::area::MAX_DIST }),
+                "With rel=dwithin: the most metres between a feature's geometry and the area",
+            ),
         ]);
         paths.insert(format!("/collections/{id}"), json!({ "get": { "summary": format!("The collection {id}"), "operationId": format!("describe_{id}"), "responses": ok(JSON, "The collection") } }));
         if let Value::Array(list) = &mut items_params {
+            list.extend(feature_params(c));
             for key in &c.filters {
                 list.push(param(
                     key,
@@ -3040,7 +3172,7 @@ fn openapi(entry: &Entry, base: &str, collections: &[Collection]) -> Value {
         }
         paths.insert(format!("/collections/{id}/queryables"), json!({ "get": { "summary": format!("Queryables of {id}"), "operationId": format!("getQueryables_{id}"), "responses": ok(SCHEMA, "The queryables, as a JSON Schema") } }));
         paths.insert(format!("/collections/{id}/items"), json!({ "get": { "summary": format!("Features of {id}"), "operationId": format!("getFeatures_{id}"), "parameters": items_params, "responses": ok_features("A page of features") } }));
-        paths.insert(format!("/collections/{id}/items/{{featureId}}"), json!({ "get": { "summary": format!("One feature of {id}"), "operationId": format!("getFeature_{id}"), "parameters": [param("featureId", "path", json!({ "type": "string" }), "The feature's IRI (or, with a base IRI, its local part), percent-encoded")], "responses": ok_features("The feature") } }));
+        paths.insert(format!("/collections/{id}/items/{{featureId}}"), json!({ "get": { "summary": format!("One feature of {id}"), "operationId": format!("getFeature_{id}"), "parameters": std::iter::once(param("featureId", "path", json!({ "type": "string" }), "The feature's IRI (or, with a base IRI, its local part), percent-encoded")).chain(feature_params(c)).collect::<Vec<_>>(), "responses": ok_features("The feature") } }));
     }
     // A tag per collection (and one for the rest), and a description per operation, as
     // Spectral's OpenAPI rules ask.

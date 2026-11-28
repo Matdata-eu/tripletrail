@@ -536,6 +536,11 @@ curl -s -G http://localhost:7878/ds/ogc/collections/Section/items -d f=json \
 "line":"161"
 ```
 
+A facet whose values are IRIs shows each one as its label (in the reader's language, `lang=…`
+or the browser's), and a filter takes either: with a `country` facet, `country=Belgium` keeps the
+same features as `country=http://publications.europa.eu/resource/authority/country/BEL`, so a
+value copied from a feature filters by it.
+
 A section's `from` and `to` stations are no facets, so they are not among its properties.
 `properties=*` gives every property, IRIs as IRIs, and `properties=line,to` just those:
 
@@ -582,6 +587,21 @@ curl -s 'http://localhost:7878/ds/ogc/collections/Station/items?f=jsonfg&limit=1
 <!-- test: output -->
 ```text
 "conformsTo":["http://www.opengis.net/spec/json-fg-1/1.0/conf/core"]
+```
+
+Clients that build their requests from the API's definition (QGIS, GDAL, generated
+clients) find every parameter there: `/ds/ogc/api` is an OpenAPI 3.0 document that lists,
+per collection, the parameters the items take, such as `properties`, `lang` and the property
+filters:
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/ds/ogc/api' | grep -o '"name":"properties"' | head -1
+```
+
+<!-- test: output -->
+```text
+"name":"properties"
 ```
 
 Each feature's `id` is its IRI. A dataset started with one `--base-iri` gives the features
