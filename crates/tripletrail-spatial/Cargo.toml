@@ -11,6 +11,6 @@ license.workspace = true
 oxigraph.workspace = true
 spargebra.workspace = true
 geo.workspace = true
-rstar = "0.12"
+rstar = "0.14"
 tripletrail-geo.workspace = true
 tripletrail-store.workspace = true
