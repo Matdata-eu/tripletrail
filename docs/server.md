@@ -3411,7 +3411,10 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   timeout, if shorter). A count that takes longer is left out of the page, as OGC API
   Features allows.
 - **`/{ds}/ogc/api`** is an OpenAPI 3.0 definition with a path per collection, and
-  `/{ds}/ogc/conformance` lists the conformance classes. Queries run under the dataset's
+  `/{ds}/ogc/conformance` lists the conformance classes. It lists every parameter the items
+  and one feature take (with `properties` as an array of the collection's keys or `*`, `lang`,
+  `timeout`, `f`, and `area`, `rel` and `dist` for the items, #367) and their `400`; the
+  `{id}.{key}` filters of an `area=layer:{id}` are the other collection's and are not listed. Queries run under the dataset's
   limits and timeout, like any other read.
 - **HTML.** Every resource is also a page: with `f=html`, or without `f` for a client whose
   `Accept` names HTML before any JSON type (a browser), so `http://localhost:7878/kg/ogc` can
