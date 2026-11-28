@@ -263,9 +263,11 @@
   async function pollReady() {
     let state = "bad", text = "unreachable";
     try {
-      const r = await fetch("/$/ready");
+      // `report`: 200 whether ready or not, so a server still starting is no failed request
+      // in the console (#420).
+      const r = await fetch("/$/ready?report");
       const j = await r.json().catch(() => ({}));
-      if (r.ok) { state = "ok"; text = "ready"; }
+      if (r.ok && j.ready) { state = "ok"; text = "ready"; }
       else if (j.stopping) { state = "bad"; text = "stopping"; }
       else if (j.starting) { state = "warn"; text = "starting"; }
       else { state = "warn"; text = "building indexes"; }
@@ -826,7 +828,7 @@
   // ---------- server ----------
   async function renderServer() {
     try {
-      const [info, ready] = await Promise.all([api("GET", "/$/server"), fetch("/$/ready").then((r) => r.json()).catch(() => ({}))]);
+      const [info, ready] = await Promise.all([api("GET", "/$/server"), fetch("/$/ready?report").then((r) => r.json()).catch(() => ({}))]);
       serverInfo = info;
       stats($("#server-stats"), [
         ["Version", info.version], ["Uptime", fmtDuration(info.uptime)], ["Datasets", fmtNum(info.datasets.length)], ["Running tasks", fmtNum(info.runningTasks)],

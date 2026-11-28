@@ -391,7 +391,7 @@ admin token is accepted there too. Queries need no token.
 |---|---|
 | `GET /$/ping` | `ok`: the process answers |
 | `GET /$/role/{name}` | 200 `leader` when the server takes writes to the dataset; 503 `follower` (a read replica) or `read-only`; open without a token, for load balancers ([promotion](#read-replicas)) |
-| `GET /$/ready` | 200 when every dataset is open and its spatial index built; 503 while starting, building or stopping. Per dataset: `spatial_index`, and for the TripleTrail store `files` (the check of its files: `checking`, `verified`, `damaged` or `stopped`) with `damaged_file`. A damaged dataset does not hold readiness back; it is listed under `damaged` |
+| `GET /$/ready` | 200 when every dataset is open and its spatial index built; 503 while starting, building or stopping. Per dataset: `spatial_index`, and for the TripleTrail store `files` (the check of its files: `checking`, `verified`, `damaged` or `stopped`) with `damaged_file`. A damaged dataset does not hold readiness back; it is listed under `damaged`. `?report` answers 200 either way with the same body, for pages that show the state (the web UI's status dot) |
 | `GET /$/status` | readiness per dataset |
 | `GET /$/server` | version, uptime, settings, datasets |
 | `GET /$/datasets` | datasets and aliases, with Fuseki's `ds.name`, `ds.state`, `ds.services` and ours (mode, location, aliases...) |
