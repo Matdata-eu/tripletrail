@@ -107,8 +107,15 @@ So a join of 1.25 million tracks with 33 million landuse polygons reads only the
 a track, each once, and holds few of them at a time (#754). On a synthetic set of 8 million
 polygons and 308,000 lines (`cargo run --release -p tripletrail --example landuse_join`), the
 join answers in 23 to 26 s at 6 GB peak; before, it kept every polygon it tested and ran out of
-the machine's 15 GB. Beyond 64 million candidates, pairs are tested as the sweep finds them, as
-before. A constant test of the FILTER still parses its side's geometries first. This join
+the machine's 15 GB. Beyond 64 million candidates (1 GB), the probe side is split in two along
+x and each half is swept again against the polygons within its reach, until each part's
+candidates fit (#340). Before, the pairs were then tested as the sweep found them, which kept
+every polygon it read: on the synthetic set above with 2 million polygons and the cap lowered to
+300,000, the join took 4.4 s at 3.4 GB before and takes 4.4 s at 450 MB now. On OSM Europe
+(1.25 million tracks, 33 million landuse polygons) the heap reached 55 GB on a 64 GB machine
+and the join timed out. Only a single probe geometry with more candidates than the cap still
+tests them as they are found. A constant test of the FILTER still parses its side's geometries
+first. This join
 doesn't read the R-tree, and so doesn't wait for the index to be built or loaded.
 
 ### Exact tests
