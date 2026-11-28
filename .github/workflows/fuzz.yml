@@ -27,6 +27,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+# The jobs only read the repository.
+permissions:
+  contents: read
+
 jobs:
   fuzz:
     runs-on: ubuntu-latest

@@ -81,6 +81,8 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- The Query page reads a `\U` escape for a backslash or a quote in an N-Triples answer (CONSTRUCT, DESCRIBE) as that character; it used to fail to parse the line.
+
 - A query reads the numeric value columns of its own snapshot (#328). The range rewrite (#71) and the top-k values of `ORDER BY ?v LIMIT k` (#297) read columns that followed the engine's current data, so a `DELETE` between a query's snapshot and its reading the column could drop rows the snapshot has. Each column is now kept with the store generation it holds, and a query whose snapshot differs (where the predicate changed in between) builds it from its snapshot.
 - The map lists a collection's facets in the same order after each start (#257). Facets of the same `sh:order` (or none) whose property shapes are blank nodes, such as the ones rolled up from parts, came in the order of the blank nodes' labels, which change each time the shapes are read. They now come in the order of their `tts:key`.
 - The map's filtered facet counts are 2 to 9 times faster (#256). A facet's value, a computed facet's (`tts:select`) above all, is read after the other facets' filters and the check that a feature has a geometry, on the features they keep, not on every feature of the class. And an `OPTIONAL` whose left side has no rows no longer evaluates its right side (it read every `rdfs:label` and `skos:prefLabel` of the store to label nothing). On RINF France and Belgium (40,143 running tracks) with RINF Atlas's shapes, a country and a minimum speed, first request: 1.08 / 1.12 / 0.99 s to 0.43 / 0.34 / 0.12 s, with the same counts.

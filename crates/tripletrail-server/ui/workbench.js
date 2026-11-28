@@ -94,7 +94,7 @@ window.TripleTrailWorkbench = (function () {
   /** The terms of one N-Triples line (what CONSTRUCT and DESCRIBE answer). */
   function parseNTriples(text) {
     const term = /\s*(<[^>]*>|_:\S+|"(?:[^"\\]|\\.)*"(?:@[A-Za-z0-9-]+|\^\^<[^>]*>)?)/y;
-    const unescape = (s) => JSON.parse('"' + s.replace(/\\U([0-9A-Fa-f]{8})/g, (m, h) => String.fromCodePoint(parseInt(h, 16)).replace(/"/g, '\\"')) + '"');
+    const unescape = (s) => JSON.parse('"' + s.replace(/\\U([0-9A-Fa-f]{8})/g, (m, h) => JSON.stringify(String.fromCodePoint(parseInt(h, 16))).slice(1, -1)) + '"');
     const toTerm = (s) => {
       if (s[0] === "<") return { type: "uri", value: s.slice(1, -1) };
       if (s[0] === "_") return { type: "bnode", value: s.slice(2) };

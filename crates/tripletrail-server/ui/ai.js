@@ -62,7 +62,7 @@ window.TripleTrailAI = (function () {
   function saveConnection(c) {
     const s = readSettings();
     const services = (s.services || []).filter((x) => x.id !== c.id);
-    const id = c.id || "own-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const id = c.id || "own-" + Date.now().toString(36) + crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
     services.push({ id, name: c.name || undefined, baseUrl: c.baseUrl, apiKey: c.apiKey || undefined, model: c.model || undefined });
     writeSettings({ ...s, services, defaultService: id });
     return id;
