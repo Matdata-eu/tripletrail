@@ -536,6 +536,11 @@ curl -s -G http://localhost:7878/ds/ogc/collections/Section/items -d f=json \
 "line":"161"
 ```
 
+A facet whose values are IRIs shows each one as its label (in the reader's language, `lang=…`
+or the browser's), and a filter takes either: with a `country` facet, `country=Belgium` keeps the
+same features as `country=http://publications.europa.eu/resource/authority/country/BEL`, so a
+value copied from a feature filters by it.
+
 A section's `from` and `to` stations are no facets, so they are not among its properties.
 `properties=*` gives every property, IRIs as IRIs, and `properties=line,to` just those:
 
