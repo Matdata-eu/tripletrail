@@ -233,6 +233,14 @@ fn the_last_step_of_a_path_and_with_other_patterns() {
         rows(&e, "SELECT ?x ?p WHERE { ?x ex:validity/tt:hasPeriod ?p }"),
         ["track 2022-12-11T00:00:00Z/2079-01-01T00:00:00Z"]
     );
+    // From a named subject: a lookup per row instead of a join.
+    assert_eq!(
+        rows(
+            &e,
+            "SELECT ?p WHERE { ex:track ex:validity/tt:hasPeriod ?p }"
+        ),
+        [" 2022-12-11T00:00:00Z/2079-01-01T00:00:00Z"]
+    );
     // With the period's functions.
     assert_eq!(
         rows(

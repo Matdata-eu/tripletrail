@@ -382,6 +382,10 @@ geometry, and may end a path (`?track era:validity/tt:hasPeriod ?p`). It reads:
 - `time:hasTime`: the period of each instant or interval it leads to, one row each.
 
 A node with none of these has no row. A contradictory instant is not reported yet (#313).
+The periods are read for all the subjects at once and joined with the rest of the pattern, so
+`?x era:validity/tt:hasPeriod ?p` over 1.5 million validity links (five copies of RINF's
+Germany, Belgium, the Netherlands and Sweden, 56M triples) takes about half a second; after
+triples about one named subject, only that one's are read (a few ms).
 
 SPARQL's own `=` and `ORDER BY` see a `tt:period` as a literal of a datatype they do not know:
 `"2020/2021"^^tt:period` is not `=` to its canonical form, and periods sort by their text.

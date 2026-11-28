@@ -1212,6 +1212,11 @@ fn chain(base: GraphPattern, calls: Vec<Call>, triples: &mut Vec<TriplePattern>)
                 // Nothing before it: the step alone (it still sees an enclosing row).
                 out = if matches!(&out, GraphPattern::Bgp { patterns } if patterns.is_empty()) {
                     step
+                } else if c.kind == Kind::HasPeriod && !few_rows(&out) {
+                    // Grouped by its subject, so joined: the periods of all the subjects at
+                    // once rather than a lookup per row (#301). After triples about named
+                    // subjects only (a few rows), a lookup per row reads less.
+                    join(out, step)
                 } else {
                     lateral(out, step)
                 };
@@ -1221,6 +1226,12 @@ fn chain(base: GraphPattern, calls: Vec<Call>, triples: &mut Vec<TriplePattern>)
         }
     }
     out
+}
+
+/// Whether `p` is a basic graph pattern of triples about named subjects only: a few rows.
+fn few_rows(p: &GraphPattern) -> bool {
+    matches!(p, GraphPattern::Bgp { patterns } if !patterns.is_empty()
+        && patterns.iter().all(|t| matches!(t.subject, TermPattern::NamedNode(_))))
 }
 
 /// A call left as a triple pattern (its argument lists are not rebuilt: such a call only
