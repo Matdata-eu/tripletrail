@@ -1174,6 +1174,22 @@ fn pairs_pattern(
     })
 }
 
+/// A spatial join on term ids that runs longer than this logs each step to standard error as
+/// the step ends, so that a join cut off by its timeout still says where its time went (#340).
+const SLOW_JOIN: Duration = Duration::from_secs(5);
+
+/// Logs a step of a join that started at `start`, once the join is slow (see [`SLOW_JOIN`]).
+fn note_slow(start: Instant, step: impl FnOnce() -> String) {
+    let elapsed = start.elapsed();
+    if elapsed >= SLOW_JOIN {
+        eprintln!(
+            "tripletrail-spatial: slow join, at {:.1} s: {}",
+            elapsed.as_secs_f64(),
+            step()
+        );
+    }
+}
+
 /// How a join refines its candidate pairs (see [`sweep_lazy`]).
 struct Refine<'a> {
     /// Parses a geometry of the probe side, kept for the next pairs and queries.
@@ -1183,6 +1199,8 @@ struct Refine<'a> {
     /// The join's test, probe geometry first.
     test: &'a (dyn Fn(&Geom, &Geom) -> bool + Sync),
     cancelled: &'a (dyn Fn() -> bool + Sync),
+    /// When the join started, for [`note_slow`].
+    started: Instant,
 }
 
 /// Candidate pairs a join collects at most before testing them (16 bytes each while
@@ -1278,12 +1296,28 @@ impl Join<'_> {
             &near,
             refine.cancelled,
         );
+        let swept = |what: String| {
+            note_slow(refine.started, || {
+                format!(
+                    "{} probes swept against {} geometries: {what}",
+                    pl.len(),
+                    ol.len()
+                )
+            })
+        };
         if let Some(candidates) = candidates {
-            return Some(self.test_grouped(&pl, ol, candidates));
+            swept(format!("{} candidates", candidates.len()));
+            let n = candidates.len();
+            let found = self.test_grouped(&pl, ol, candidates);
+            note_slow(refine.started, || {
+                format!("{n} candidates tested, {} pairs", found.len())
+            });
+            return Some(found);
         }
         if (refine.cancelled)() {
             return None;
         }
+        swept(format!("more than {} candidates", self.max_candidates));
         if pl.len() > 1 {
             // Too many candidates to hold: the probes in two halves along x, each swept
             // again against the other side's geometries within its reach along x. A probe is
@@ -1877,6 +1911,15 @@ impl<'a> Rewriter<'a> {
         let Some(side_b) = self.ctx.side_ids(pb, b) else {
             return self.ctx.cancelled().then_some(None);
         };
+        note_slow(start, || {
+            format!(
+                "sides read: {a} {} rows ({} geometries), {b} {} rows ({} geometries)",
+                side_a.rows.len(),
+                side_a.geometries.len(),
+                side_b.rows.len(),
+                side_b.geometries.len()
+            )
+        });
         // Rows and geometries are numbered in 32 bits below.
         if [&side_a, &side_b]
             .iter()
@@ -1928,6 +1971,13 @@ impl<'a> Rewriter<'a> {
             keep(&side_a, &tests(a), threads),
             keep(&side_b, &tests(b), threads),
         );
+        note_slow(start, || {
+            format!(
+                "geometries kept after the constant tests: {a} {}, {b} {}",
+                geoms_a.len(),
+                geoms_b.len()
+            )
+        });
         // The smaller side probes, grown by the test's margin.
         let probe_a = geoms_a.len() <= geoms_b.len();
         let (probe, other) = if probe_a {
@@ -1974,6 +2024,7 @@ impl<'a> Rewriter<'a> {
             read_other,
             test: &test,
             cancelled: &cancelled,
+            started: start,
         };
         let found = sweep_lazy(
             plan.margin,
@@ -2029,6 +2080,7 @@ impl<'a> Rewriter<'a> {
         let mut variables = side_a.variables.clone();
         variables.extend(side_b.variables.iter().cloned());
         let table = self.ctx.table(&variables, IdRows { width, ids });
+        note_slow(start, || format!("a table of {total} rows"));
         self.stats.lookup += start.elapsed();
         let table = table?;
         if self.costed() {
@@ -3489,6 +3541,7 @@ mod tests {
             read_other: &load,
             test: &test,
             cancelled: &cancelled,
+            started: Instant::now(),
         };
         let expected: Vec<(u32, u32)> = (0..40)
             .flat_map(|p| (40..geoms.len()).map(move |o| (p, o)))
