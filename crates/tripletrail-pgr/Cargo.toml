@@ -17,5 +17,5 @@ tripletrail-store.workspace = true
 tripletrail-geo.workspace = true
 tripletrail-shacl.workspace = true
 geo.workspace = true
-rstar = "0.12"
+rstar = "0.14"
 rayon = "1.12"
