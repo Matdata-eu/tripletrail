@@ -1174,6 +1174,22 @@ fn pairs_pattern(
     })
 }
 
+/// A spatial join on term ids that runs longer than this logs each step to standard error as
+/// the step ends, so that a join cut off by its timeout still says where its time went (#340).
+const SLOW_JOIN: Duration = Duration::from_secs(5);
+
+/// Logs a step of a join that started at `start`, once the join is slow (see [`SLOW_JOIN`]).
+fn note_slow(start: Instant, step: impl FnOnce() -> String) {
+    let elapsed = start.elapsed();
+    if elapsed >= SLOW_JOIN {
+        eprintln!(
+            "tripletrail-spatial: slow join, at {:.1} s: {}",
+            elapsed.as_secs_f64(),
+            step()
+        );
+    }
+}
+
 /// How a join refines its candidate pairs (see [`sweep_lazy`]).
 struct Refine<'a> {
     /// Parses a geometry of the probe side, kept for the next pairs and queries.
@@ -1183,11 +1199,14 @@ struct Refine<'a> {
     /// The join's test, probe geometry first.
     test: &'a (dyn Fn(&Geom, &Geom) -> bool + Sync),
     cancelled: &'a (dyn Fn() -> bool + Sync),
+    /// When the join started, for [`note_slow`].
+    started: Instant,
 }
 
 /// Candidate pairs a join collects at most before testing them (16 bytes each while
-/// sweeping, 8 after): beyond, it tests pairs as the sweep finds them, keeping every parsed
-/// geometry until the join ends.
+/// sweeping, 8 after). Beyond, the probe side is split in two along x and each half is swept
+/// again (#340); only a single probe geometry with more candidates than this tests its pairs
+/// as the sweep finds them, keeping every parsed geometry until the join ends.
 const MAX_CANDIDATES: usize = 64 << 20;
 
 /// The pairs `(probe at, other at)` of geometries whose boxes meet (the probe's grown by
@@ -1207,8 +1226,8 @@ fn sweep_lazy(
     threads: usize,
     accepts: &(dyn Fn(&Lazy<'_>, &Lazy<'_>) -> bool + Sync),
     refine: &Refine<'_>,
+    max_candidates: usize,
 ) -> Option<Vec<(u32, u32)>> {
-    type Side<'a, 's> = (Vec<&'a Lazy<'s>>, Vec<sweep::Bbox>);
     let space = |crs: &Crs| match crs {
         Crs::Other(iri) => Some(iri.clone()),
         _ => None,
@@ -1228,35 +1247,134 @@ fn sweep_lazy(
             side.1.push(corners(Margin::None.around(&g.crs, g.bbox)));
         }
     }
+    let join = Join {
+        margin,
+        threads,
+        accepts,
+        refine,
+        max_candidates,
+    };
     let mut out = Vec::new();
-    for ((pl, pb), (ol, ob)) in spaces.into_values() {
+    for (probe, other) in spaces.into_values() {
+        out.extend(join.pairs(probe, &other)?);
+    }
+    // In the same order whichever worker tested which pair.
+    out.sort_unstable();
+    Some(out)
+}
+
+/// The geometries of one side of a join in one coordinate space, and their boxes.
+type Side<'a, 's> = (Vec<&'a Lazy<'s>>, Vec<sweep::Bbox>);
+
+/// One join of [`sweep_lazy`], in one coordinate space at a time.
+struct Join<'r> {
+    margin: Margin,
+    threads: usize,
+    accepts: &'r (dyn Fn(&Lazy<'_>, &Lazy<'_>) -> bool + Sync),
+    refine: &'r Refine<'r>,
+    max_candidates: usize,
+}
+
+impl Join<'_> {
+    /// The pairs of `probe` and `other` that pass the test (`None` when cancelled).
+    fn pairs(&self, probe: Side<'_, '_>, other: &Side<'_, '_>) -> Option<Vec<(u32, u32)>> {
+        let refine = self.refine;
+        let ((pl, pb), (ol, ob)) = (probe, other);
         let near = |i: usize, j: usize| {
             if (refine.cancelled)() {
                 return false;
             }
             let p = pl[i];
             p.geom(refine.load_probe)
-                .is_some_and(|g| reaches(margin, &p.geometry.crs, &g.geometry, &ob[j]))
+                .is_some_and(|g| reaches(self.margin, &p.geometry.crs, &g.geometry, &ob[j]))
         };
-        let Some(candidates) =
-            sweep::join_until(&pb, &ob, threads, MAX_CANDIDATES, &near, refine.cancelled)
-        else {
-            if (refine.cancelled)() {
-                return None;
+        let candidates = sweep::join_until(
+            &pb,
+            ob,
+            self.threads,
+            self.max_candidates,
+            &near,
+            refine.cancelled,
+        );
+        let swept = |what: String| {
+            note_slow(refine.started, || {
+                format!(
+                    "{} probes swept against {} geometries: {what}",
+                    pl.len(),
+                    ol.len()
+                )
+            })
+        };
+        if let Some(candidates) = candidates {
+            swept(format!("{} candidates", candidates.len()));
+            let n = candidates.len();
+            let found = self.test_grouped(&pl, ol, candidates);
+            note_slow(refine.started, || {
+                format!("{n} candidates tested, {} pairs", found.len())
+            });
+            return Some(found);
+        }
+        if (refine.cancelled)() {
+            return None;
+        }
+        swept(format!("more than {} candidates", self.max_candidates));
+        if pl.len() > 1 {
+            // Too many candidates to hold: the probes in two halves along x, each swept
+            // again against the other side's geometries within its reach along x. A probe is
+            // in one half only, so no pair is found twice.
+            let mut order: Vec<usize> = (0..pl.len()).collect();
+            let centre = |b: &sweep::Bbox| b.0[0] + b.1[0];
+            order.sort_unstable_by(|&a, &b| centre(&pb[a]).total_cmp(&centre(&pb[b])));
+            let (left, right) = order.split_at(order.len() / 2);
+            let mut found = Vec::new();
+            for part in [left, right] {
+                let probe: Side<'_, '_> = (
+                    part.iter().map(|&i| pl[i]).collect(),
+                    part.iter().map(|&i| pb[i]).collect(),
+                );
+                let (lo, hi) = probe
+                    .1
+                    .iter()
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), b| {
+                        (lo.min(b.0[0]), hi.max(b.1[0]))
+                    });
+                // In id order still, as the tests by the other side's geometry need.
+                let near: Side<'_, '_> = ol
+                    .iter()
+                    .zip(ob)
+                    .filter(|(_, b)| b.0[0] <= hi && lo <= b.1[0])
+                    .map(|(&l, &b)| (l, b))
+                    .unzip();
+                found.extend(self.pairs(probe, &near)?);
             }
-            // Too many candidates to hold: each pair is tested as the sweep finds it.
-            let found = sweep::join_until(
-                &pb,
-                &ob,
-                threads,
-                usize::MAX,
-                &|i, j| accepts(pl[i], ol[j]),
-                refine.cancelled,
-            )?;
-            out.extend(found.into_iter().map(|(i, j)| (pl[i].at, ol[j].at)));
-            continue;
-        };
-        // By the other side's geometry, in id order (`other` is sorted by id).
+            return Some(found);
+        }
+        // One probe with too many candidates: each pair is tested as the sweep finds it.
+        let found = sweep::join_until(
+            &pb,
+            ob,
+            self.threads,
+            usize::MAX,
+            &|i, j| (self.accepts)(pl[i], ol[j]),
+            refine.cancelled,
+        )?;
+        Some(
+            found
+                .into_iter()
+                .map(|(i, j)| (pl[i].at, ol[j].at))
+                .collect(),
+        )
+    }
+
+    /// Tests the candidate pairs `(probe, other)` grouped by the other side's geometry, in id
+    /// order (`other` is sorted by id), on every core.
+    fn test_grouped(
+        &self,
+        pl: &[&Lazy<'_>],
+        ol: &[&Lazy<'_>],
+        candidates: Vec<(usize, usize)>,
+    ) -> Vec<(u32, u32)> {
+        let (refine, threads) = (self.refine, self.threads);
         let mut candidates: Vec<(u32, u32)> = candidates
             .into_iter()
             .map(|(i, j)| (j as u32, i as u32))
@@ -1310,11 +1428,8 @@ fn sweep_lazy(
                 workers.into_iter().map(|w| w.join().unwrap()).collect()
             })
         };
-        out.extend(parts.into_iter().flatten());
+        parts.into_iter().flatten().collect()
     }
-    // In the same order whichever worker tested which pair.
-    out.sort_unstable();
-    Some(out)
 }
 
 /// Whether a part of `g` (a point, or a segment of a line) comes within `margin` of the box
@@ -1796,6 +1911,15 @@ impl<'a> Rewriter<'a> {
         let Some(side_b) = self.ctx.side_ids(pb, b) else {
             return self.ctx.cancelled().then_some(None);
         };
+        note_slow(start, || {
+            format!(
+                "sides read: {a} {} rows ({} geometries), {b} {} rows ({} geometries)",
+                side_a.rows.len(),
+                side_a.geometries.len(),
+                side_b.rows.len(),
+                side_b.geometries.len()
+            )
+        });
         // Rows and geometries are numbered in 32 bits below.
         if [&side_a, &side_b]
             .iter()
@@ -1847,6 +1971,13 @@ impl<'a> Rewriter<'a> {
             keep(&side_a, &tests(a), threads),
             keep(&side_b, &tests(b), threads),
         );
+        note_slow(start, || {
+            format!(
+                "geometries kept after the constant tests: {a} {}, {b} {}",
+                geoms_a.len(),
+                geoms_b.len()
+            )
+        });
         // The smaller side probes, grown by the test's margin.
         let probe_a = geoms_a.len() <= geoms_b.len();
         let (probe, other) = if probe_a {
@@ -1893,8 +2024,17 @@ impl<'a> Rewriter<'a> {
             read_other,
             test: &test,
             cancelled: &cancelled,
+            started: start,
         };
-        let found = sweep_lazy(plan.margin, probe, other, threads, &accepts, &refine);
+        let found = sweep_lazy(
+            plan.margin,
+            probe,
+            other,
+            threads,
+            &accepts,
+            &refine,
+            MAX_CANDIDATES,
+        );
         self.stats.pairing += pairing.elapsed();
         let Some(found) = found else {
             self.stats.lookup += start.elapsed();
@@ -1940,6 +2080,7 @@ impl<'a> Rewriter<'a> {
         let mut variables = side_a.variables.clone();
         variables.extend(side_b.variables.iter().cloned());
         let table = self.ctx.table(&variables, IdRows { width, ids });
+        note_slow(start, || format!("a table of {total} rows"));
         self.stats.lookup += start.elapsed();
         let table = table?;
         if self.costed() {
@@ -3336,6 +3477,111 @@ pub fn knn(query: &Query) -> Option<Knn> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A join with more candidates than it may hold splits its probes and gives the pairs of
+    /// one that holds them all, without testing pairs as the sweep finds them (#340). Only
+    /// a cap below one probe's candidates falls back to that.
+    #[test]
+    fn a_join_over_its_candidate_cap_splits_its_probes() {
+        use geo::Intersects;
+        let wkt = |w: String| {
+            let l = Literal::new_typed_literal(
+                w,
+                oxigraph::model::NamedNode::new_unchecked(
+                    "http://www.opengis.net/ont/geosparql#wktLiteral",
+                ),
+            );
+            parse_wkt_literal(&Term::Literal(l)).expect("valid WKT")
+        };
+        // 40 short lines across a 30 x 30 grid of unit squares, 0.1 apart.
+        let mut geoms: Vec<Arc<Geom>> = Vec::new();
+        for k in 0..40 {
+            let (x, y) = (k as f64 * 0.7, (k * 7 % 29) as f64 + 0.5);
+            geoms.push(wkt(format!("LINESTRING({x} {y}, {} {})", x + 2.0, y + 0.3)));
+        }
+        for i in 0..30 {
+            for j in 0..30 {
+                let (x, y) = (i as f64 * 1.1, j as f64 * 1.1);
+                geoms.push(wkt(format!(
+                    "POLYGON(({x} {y}, {} {y}, {} {}, {x} {}, {x} {y}))",
+                    x + 1.0,
+                    x + 1.0,
+                    y + 1.0,
+                    y + 1.0
+                )));
+            }
+        }
+        let sides: Vec<SideGeometry> = geoms
+            .iter()
+            .enumerate()
+            .map(|(i, g)| {
+                let r = g.geometry.bounding_rect().expect("not empty");
+                SideGeometry {
+                    id: TermId(i as u64),
+                    crs: g.crs.clone(),
+                    bbox: [r.min().x, r.min().y, r.max().x, r.max().y],
+                }
+            })
+            .collect();
+        let lazy = |range: std::ops::Range<usize>| -> Vec<Lazy<'_>> {
+            range
+                .enumerate()
+                .map(|(at, i)| Lazy {
+                    at: at as u32,
+                    geometry: &sides[i],
+                    parsed: std::sync::OnceLock::new(),
+                })
+                .collect()
+        };
+        let load = |id: TermId| Some(geoms[id.0 as usize].clone());
+        let test = |a: &Geom, b: &Geom| a.geometry.intersects(&b.geometry);
+        let cancelled = || false;
+        let refine = Refine {
+            load_probe: &load,
+            read_other: &load,
+            test: &test,
+            cancelled: &cancelled,
+            started: Instant::now(),
+        };
+        let expected: Vec<(u32, u32)> = (0..40)
+            .flat_map(|p| (40..geoms.len()).map(move |o| (p, o)))
+            .filter(|&(p, o)| test(&geoms[p], &geoms[o]))
+            .map(|(p, o)| (p as u32, (o - 40) as u32))
+            .collect();
+        assert!(expected.len() > 100, "{} pairs", expected.len());
+        let fallback = std::sync::atomic::AtomicUsize::new(0);
+        let accepts = |p: &Lazy<'_>, o: &Lazy<'_>| {
+            fallback.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            match (p.geom(&load), o.geom(&load)) {
+                (Some(a), Some(b)) => test(a, b),
+                _ => false,
+            }
+        };
+        // Every line meets at most a dozen squares' boxes: a cap of 16 splits the 40 lines
+        // down to a few at a time, and a cap of 1 leaves single lines over it.
+        for (cap, falls_back) in [(usize::MAX, false), (16, false), (1, true)] {
+            for threads in [1, 4] {
+                fallback.store(0, std::sync::atomic::Ordering::Relaxed);
+                let (probe, other) = (lazy(0..40), lazy(40..geoms.len()));
+                let found = sweep_lazy(
+                    Margin::None,
+                    &probe,
+                    &other,
+                    threads,
+                    &accepts,
+                    &refine,
+                    cap,
+                );
+                assert_eq!(
+                    found.as_deref(),
+                    Some(&expected[..]),
+                    "cap {cap}, {threads} threads"
+                );
+                let used = fallback.load(std::sync::atomic::Ordering::Relaxed) > 0;
+                assert_eq!(used, falls_back, "cap {cap}, {threads} threads");
+            }
+        }
+    }
 
     #[test]
     fn a_line_reaches_a_box_only_near_its_segments() {

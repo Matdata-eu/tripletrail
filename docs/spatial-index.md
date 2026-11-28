@@ -107,8 +107,15 @@ So a join of 1.25 million tracks with 33 million landuse polygons reads only the
 a track, each once, and holds few of them at a time (#754). On a synthetic set of 8 million
 polygons and 308,000 lines (`cargo run --release -p tripletrail --example landuse_join`), the
 join answers in 23 to 26 s at 6 GB peak; before, it kept every polygon it tested and ran out of
-the machine's 15 GB. Beyond 64 million candidates, pairs are tested as the sweep finds them, as
-before. A constant test of the FILTER still parses its side's geometries first. This join
+the machine's 15 GB. Beyond 64 million candidates (1 GB), the probe side is split in two along
+x and each half is swept again against the polygons within its reach, until each part's
+candidates fit (#340). Before, the pairs were then tested as the sweep found them, which kept
+every polygon it read: on the synthetic set above with 2 million polygons and the cap lowered to
+300,000, the join took 4.4 s at 3.4 GB before and takes 4.4 s at 450 MB now. On OSM Europe
+(1.25 million tracks, 33 million landuse polygons) the heap reached 55 GB on a 64 GB machine
+and the join timed out. Only a single probe geometry with more candidates than the cap still
+tests them as they are found. A constant test of the FILTER still parses its side's geometries
+first. This join
 doesn't read the R-tree, and so doesn't wait for the index to be built or loaded.
 
 ### Exact tests
@@ -275,6 +282,18 @@ checks it too while it reads its sides' geometry boxes and while it sorts and sw
 a join whose side was given up on for the timeout ends there: it does not fall back to probing
 the index, which would evaluate both sides again and, on a large dataset, run for minutes past
 the timeout (#338).
+
+A join on term ids that has run for 5 s logs each of its steps to standard error as the step
+ends (#340), so a join cut off by its timeout still shows where its time went:
+
+```text
+tripletrail-spatial: slow join, at <seconds> s: sides read: ?w1 <n> rows (<n> geometries), ?w2 <n> rows (<n> geometries)
+tripletrail-spatial: slow join, at <seconds> s: <n> probes swept against <n> geometries: more than 67108864 candidates
+```
+
+The steps are reading the sides, the constant tests, each sweep (with its candidates, or
+"more than" the cap when the probes are split), the tests of the candidates and the table of
+rows.
 
 A join side may start from a `SERVICE`, such as a route from the in-process `pgr` service. The
 planner (`plan.rs`) starts the join from the service rows and looks up the triples connected to
