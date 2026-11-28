@@ -270,7 +270,11 @@ before the first spatial query, see `/$/status`).
 The rewrite runs before evaluation and can take a while (it evaluates join sides and tests
 candidate pairs), so an engine with a cancellation token (`Engine::with_cancellation_token`, the
 server's `--timeout`) checks it between candidate tests and stops: the query or update then
-fails as cancelled (HTTP 503) instead of planning on past its deadline.
+fails as cancelled (HTTP 503) instead of planning on past its deadline. A join on term ids
+checks it too while it reads its sides' geometry boxes and while it sorts and sweeps them, and
+a join whose side was given up on for the timeout ends there: it does not fall back to probing
+the index, which would evaluate both sides again and, on a large dataset, run for minutes past
+the timeout (#338).
 
 A join side may start from a `SERVICE`, such as a route from the in-process `pgr` service. The
 planner (`plan.rs`) starts the join from the service rows and looks up the triples connected to
