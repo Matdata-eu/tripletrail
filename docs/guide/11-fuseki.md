@@ -28,7 +28,8 @@ only the server changes. This chapter moves a Fuseki dataset over and shows what
    ```
 
 Large files load fastest this way, before the server starts. `--memory-limit 8G` sorts on disk
-when a load would not fit in memory.
+when a load would not fit in memory; give the load about 1 GB more than the limit, for the
+text it reads and parses at a time.
 
 ## The same requests
 

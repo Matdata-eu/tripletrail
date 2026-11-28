@@ -17,6 +17,22 @@ use tripletrail_server::schema_tools;
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// mimalloc's `purge_delay` option (the same in its v2 and v3 headers).
+#[cfg(feature = "mimalloc")]
+const MI_OPTION_PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
+
+/// Memory freed is given back to the system after 100 ms, not mimalloc v3's 1 s (#241): a
+/// bulk load frees and allocates its blocks and chunks faster than that, so a second's worth
+/// of them stayed counted against the process (a load at `--memory-limit 256M` peaked at
+/// 1,057 to 1,142 MB, against 877 to 885 MB with 100 ms). `MIMALLOC_PURGE_DELAY` still wins.
+#[cfg(feature = "mimalloc")]
+fn purge_freed_memory_sooner() {
+    if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
+        // SAFETY: sets an option mimalloc reads atomically; any value is valid.
+        unsafe { libmimalloc_sys::mi_option_set(MI_OPTION_PURGE_DELAY, 100) };
+    }
+}
 mod offline;
 
 /// The default base map of the maps: OpenStreetMap's standard tiles.
@@ -2970,6 +2986,8 @@ fn serve(args: ServeArgs) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    #[cfg(feature = "mimalloc")]
+    purge_freed_memory_sooner();
     // Queries are parsed, planned and evaluated recursively, and a thread's default stack
     // (2 MB) holds about 1,000 levels; a query deep enough aborts the process (#483). Every
     // thread that does not set a stack size of its own, and this command's main work, gets
@@ -4515,6 +4533,26 @@ mod tests {
         Cli, Command, grouped, load_progress_line, lookup_joins_from_env, parse_size, read_basemaps,
     };
     use clap::Parser;
+
+    /// The option set is mimalloc's purge delay: its default (v3: 1 s) before, 100 ms after
+    /// (#241). A mimalloc with other option numbers fails here rather than setting another.
+    #[cfg(feature = "mimalloc")]
+    #[test]
+    fn freed_memory_is_given_back_after_100_ms() {
+        use super::{MI_OPTION_PURGE_DELAY, purge_freed_memory_sooner};
+        if std::env::var_os("MIMALLOC_PURGE_DELAY").is_some() {
+            return;
+        }
+        // SAFETY: reads an option.
+        let get = || unsafe { libmimalloc_sys::mi_option_get(MI_OPTION_PURGE_DELAY) };
+        assert_eq!(
+            get(),
+            1000,
+            "mimalloc's purge_delay is option 15, 1000 ms by default"
+        );
+        purge_freed_memory_sooner();
+        assert_eq!(get(), 100);
+    }
 
     #[test]
     fn a_load_progress_line_says_the_step_the_triples_and_the_bytes_read() {
