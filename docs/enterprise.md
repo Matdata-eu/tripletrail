@@ -182,5 +182,7 @@ installs at start. Their tests run with
 - Releases are versioned (`vX.Y.Z`) and built from the same tag in both editions.
 - Each release of the enterprise image is published to the public
   `ghcr.io/matdata-eu/tripletrail-enterprise`, tagged with its version. Pulling it needs no
-  token; what a server may do with it depends on its licence. A licence that has expired turns
-  the enterprise features off as in the table above, while the open features keep working.
+  token; what a server may do with it depends on its licence. An expired licence keeps everything
+  working for a 30-day grace period, after which the enterprise features turn off and the open
+  features keep working (see [what happens when a licence
+  expires](#what-happens-when-a-licence-expires)).
