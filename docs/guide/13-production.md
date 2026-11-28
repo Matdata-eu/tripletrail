@@ -899,6 +899,9 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: other.example' \
 tripletrail serve --location data --dataset rail_v1 --allowed-host kg.example.org
 ```
 
+Pages of an exact name given this way may also change data, like the server's own. A `*` or
+`.example.org` entry only says which names to answer for: pages of those names may not.
+
 With authentication on ([chapter 12](12-access-control.md)), any name is answered: a page of
 another name has no credentials to use.
 

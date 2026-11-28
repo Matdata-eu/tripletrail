@@ -18,7 +18,8 @@ use tiny_http::{Method, Request};
 ///
 /// Allowed: a browser that says the request comes from the server's own pages
 /// (`Sec-Fetch-Site: same-origin`) or from the user (`none`), an `Origin` that is the
-/// server's own (its `Host` or `X-Forwarded-Host`, or a `--allowed-host`), an origin listed
+/// server's own (its `Host` or `X-Forwarded-Host`, or an exact `--allowed-host` name: not `*`
+/// or `.domain`), an origin listed
 /// with `--cors`, and with `--cors` for every origin, a body a form cannot send. Without
 /// `Origin` and `Sec-Fetch-Site`, the request is not from a browser page and passes.
 pub(crate) fn cross_site_change(
@@ -76,11 +77,15 @@ fn own_origin(state: &State, request: &Request, origin: &str) -> bool {
         .into_iter()
         .flatten()
         .any(|h| normal_authority(&scheme, h.trim()) == wanted)
-        || state
-            .options
-            .allowed_hosts
-            .iter()
-            .any(|allowed| host_matches(allowed, host_of(authority)))
+        || state.options.allowed_hosts.iter().any(|allowed| {
+            // Only an exact name: `*` and `.domain` say which names to answer for, not which
+            // sites' pages may change data. Any scheme and port of that name count.
+            let allowed = allowed.trim().trim_end_matches('.');
+            !allowed.is_empty()
+                && allowed != "*"
+                && !allowed.starts_with('.')
+                && host_of(authority).eq_ignore_ascii_case(allowed)
+        })
         || sign_in_origin(state, origin)
 }
 

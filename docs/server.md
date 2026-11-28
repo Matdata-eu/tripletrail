@@ -1511,7 +1511,8 @@ does).
   caller signs in with (a browser sends saved passwords and cookies along with a form posted
   from anywhere). A change is taken when the browser says it comes from the server's own
   pages (`Sec-Fetch-Site: same-origin`), when its `Origin` is the server's own (its `Host`,
-  `X-Forwarded-Host` or an `--allowed-host`) or one listed with `--cors`, and from clients
+  `X-Forwarded-Host` or an exact `--allowed-host` name, of any scheme and port; `*` and
+  `.domain` entries do not count) or one listed with `--cors`, and from clients
   that send neither header (curl, scripts, agents). With `--cors` for every origin, a script's
   change is taken but a form body (`application/x-www-form-urlencoded`, `multipart/form-data`,
   `text/plain`), which a browser sends with credentials without asking first, is not.

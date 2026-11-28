@@ -133,6 +133,34 @@ fn with_cors_for_every_origin_only_forms_are_refused() {
     assert_eq!(code(form), 403);
 }
 
+#[test]
+fn names_answered_for_are_not_sites_that_may_change_data() {
+    for allowed in ["*", ".example.org"] {
+        let base = start(Options {
+            update_token: Some("update-token".to_owned()),
+            allowed_hosts: vec![allowed.to_owned()],
+            ..Options::default()
+        });
+        assert_eq!(
+            form_update(&base, &[("Origin", "https://evil.example")]),
+            403
+        );
+        assert_eq!(
+            form_update(&base, &[("Origin", "https://app.example.org")]),
+            403
+        );
+    }
+    let base = start(Options {
+        update_token: Some("update-token".to_owned()),
+        allowed_hosts: vec!["kg.example.org".to_owned()],
+        ..Options::default()
+    });
+    assert_eq!(
+        form_update(&base, &[("Origin", "https://kg.example.org")]),
+        200
+    );
+}
+
 fn ask(base: &str, host: &str) -> u16 {
     code(
         ureq::get(&format!("{base}/kg/query"))
