@@ -12,9 +12,9 @@ The chart is also published as `oci://ghcr.io/matdata-eu/charts/tripletrail`. It
 signed with cosign once the repository is public; the `cosign verify` below is for then:
 
 ```sh
-helm install mg oci://ghcr.io/matdata-eu/charts/tripletrail --version 0.1.0 \
+helm install mg oci://ghcr.io/matdata-eu/charts/tripletrail --version 0.2.0 \
   --set adminToken.value="$(openssl rand -hex 32)"
-cosign verify ghcr.io/matdata-eu/charts/tripletrail:0.1.0 \
+cosign verify ghcr.io/matdata-eu/charts/tripletrail:0.2.0 \
   --certificate-identity-regexp '^https://github.com/Matdata-eu/tripletrail/.github/workflows/helm.yml@' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```

@@ -1,5 +1,32 @@
 [
   {
+    "version": "0.2.0",
+    "date": "2026-11-28",
+    "new": [
+      "Records page: browse a class's records in a grid, open a record as a form drawn from the shapes, and create, edit or delete it with the server's checks shown as you type.",
+      "Add data on the Datasets page takes any file: RDF loads, and CSV, JSON, XML and other files open the Import page with a lift drafted in the file's own vocabulary, or with Draft with AI.",
+      "Map tools: draw an area to filter every layer by, select by another layer's features, measure lengths and areas, read coordinates in any EPSG code, a time slider, PNG export and Cite this map.",
+      "Periods: tt:period and Allen's relations answer \"valid on a day\" in one call, over dates and date-times alike.",
+      "tripletrail serve --mcp serves each dataset to AI agents over the Model Context Protocol.",
+      "tripletrail schema lifts XML Schema, JSON Schema, OpenAPI, ASN.1 and PostgreSQL schemas to OWL, SHACL and SKOS.",
+      "Brand your server: name, logo, colour, banner, footer links, start page and example queries for the Query page.",
+      "Set a dataset's limits from its dialog on the Datasets page; tripletrail disk-usage shows where a store's bytes go."
+    ],
+    "improved": [
+      "The id executor is the default: most queries are answered straight from term ids, and more of one query runs on several cores.",
+      "A new store takes about a fifth of the space: WKT kept in binary form, IRIs sharing their namespace, and four quad indexes instead of eight when everything is in the default graph.",
+      "OGC API items are up to 3.6 times as fast at half the size, show facet labels, and give numberMatched; map tiles and answers go gzipped.",
+      "The map's facets roll up from parts to their parent, are labelled in your language, and are ready again 30 s after a load.",
+      "validate --stats counts distinct focus nodes, names every shape with a stable IRI and gives each result a finding key."
+    ],
+    "fixed": [
+      "Changes posted by a page of another site are refused, and a server without sign-in answers only for its own host names.",
+      "A spatial join stops at the query's timeout.",
+      "ORDER BY over a mix of numbers, strings and other literals no longer fails.",
+      "The top bar no longer hides tabs under the search box on wide screens."
+    ]
+  },
+  {
     "version": "0.1.0",
     "date": "2026-11-21",
     "new": [

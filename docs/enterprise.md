@@ -15,7 +15,7 @@ Matdata and for customers' operators.
 | Build | `cargo build -p tripletrail-server` | `cargo build -p tripletrail-server --features enterprise` |
 | Image | `ghcr.io/matdata-eu/tripletrail` | `docker build --build-arg EDITION=enterprise .`, published as `ghcr.io/matdata-eu/tripletrail-enterprise` |
 | Binary | `tripletrail` | `tripletrail` (the same name, so scripts do not change) |
-| `tripletrail --version` | `0.1.0` | `0.1.0 (enterprise)` |
+| `tripletrail --version` | `0.2.0` | `0.2.0 (enterprise)` |
 | `GET /$/server` | `"edition": "open"` | `"edition": "enterprise"` |
 
 The enterprise code lives in `crates/tripletrail-enterprise`, which is proprietary (see its

@@ -4536,7 +4536,7 @@ dependencies = [
 
 [[package]]
 name = "tripletrail"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -4571,7 +4571,7 @@ dependencies = [
 
 [[package]]
 name = "tripletrail-fx"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "calamine",
  "crabz2",
@@ -4597,7 +4597,7 @@ dependencies = [
 
 [[package]]
 name = "tripletrail-geo"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crs-definitions",
  "geo",
@@ -4616,7 +4616,7 @@ dependencies = [
 
 [[package]]
 name = "tripletrail-pgr"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "geo",
  "oxigraph",
@@ -4633,7 +4633,7 @@ dependencies = [
 
 [[package]]
 name = "tripletrail-rml"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "lzma-rs",
@@ -4655,11 +4655,11 @@ dependencies = [
 
 [[package]]
 name = "tripletrail-routing"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "tripletrail-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-graphql",
  "clap",
@@ -4695,7 +4695,7 @@ dependencies = [
 
 [[package]]
 name = "tripletrail-shacl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "oxigraph",
  "oxsdatatypes",
@@ -4709,7 +4709,7 @@ dependencies = [
 
 [[package]]
 name = "tripletrail-spatial"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "geo",
  "oxigraph",
@@ -4721,7 +4721,7 @@ dependencies = [
 
 [[package]]
 name = "tripletrail-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crc32fast",
  "geo",
@@ -4743,14 +4743,14 @@ dependencies = [
 
 [[package]]
 name = "tripletrail-testdir"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "tripletrail-testsuite"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "oxigraph",

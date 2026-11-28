@@ -524,8 +524,8 @@ go with it:
 
 ```dockerfile
 FROM debian:bookworm-slim
-COPY --from=ghcr.io/matdata-eu/tripletrail:0.1.0 /usr/local/bin/tripletrail /usr/local/bin/tripletrail
-COPY --from=ghcr.io/matdata-eu/tripletrail:0.1.0 /usr/share/doc/tripletrail /usr/share/doc/tripletrail
+COPY --from=ghcr.io/matdata-eu/tripletrail:0.2.0 /usr/local/bin/tripletrail /usr/local/bin/tripletrail
+COPY --from=ghcr.io/matdata-eu/tripletrail:0.2.0 /usr/share/doc/tripletrail /usr/share/doc/tripletrail
 ```
 
 Pin a version tag rather than `latest`, so a rebuild gets the same command. The image is
