@@ -287,8 +287,8 @@ A join on term ids that has run for 5 s logs each of its steps to standard error
 ends (#340), so a join cut off by its timeout still shows where its time went:
 
 ```text
-tripletrail-spatial: slow join, at 41.2 s: sides read: ?w1 1253224 rows (1253224 geometries), ?w2 33283400 rows (33283400 geometries)
-tripletrail-spatial: slow join, at 63.0 s: 1253224 probes swept against 33283400 geometries: more than 67108864 candidates
+tripletrail-spatial: slow join, at <seconds> s: sides read: ?w1 <n> rows (<n> geometries), ?w2 <n> rows (<n> geometries)
+tripletrail-spatial: slow join, at <seconds> s: <n> probes swept against <n> geometries: more than 67108864 candidates
 ```
 
 The steps are reading the sides, the constant tests, each sweep (with its candidates, or
