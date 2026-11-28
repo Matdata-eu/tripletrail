@@ -437,7 +437,7 @@ impl Snapshot {
             .enumerate()
             .collect();
         order.sort_by_key(|&(_, size)| size);
-        let Some(mut counts) = runs(&triples[order[0].0]) else {
+        let Some(counts) = runs(&triples[order[0].0]) else {
             return Some(None);
         };
         // The quads per centre value of each other triple: their mean over a few values.
@@ -472,7 +472,30 @@ impl Snapshot {
                 return None;
             }
         }
-        for &(k, size) in &order[1..] {
+        let Some(counts) =
+            self.multiply_runs(counts, triples, &order[1..], centre, graph, cancelled)
+        else {
+            return Some(None);
+        };
+        Some(Some(
+            counts.iter().fold(0u64, |s, (_, n)| s.saturating_add(*n)),
+        ))
+    }
+
+    /// `counts` (centre value, solutions so far), sorted by value, times each triple's
+    /// matches for the same values, the triples of `order` (index, estimated matches) taken
+    /// in turn: a triple with many quads per value left is walked forward from value to value
+    /// (#165), another read whole and merged. `None` once `cancelled` says so.
+    fn multiply_runs(
+        &self,
+        mut counts: Vec<(u64, u64)>,
+        triples: &[IdTriple],
+        order: &[(usize, usize)],
+        centre: usize,
+        graph: GraphSelector,
+        cancelled: &(dyn Fn() -> bool + Sync),
+    ) -> Option<Vec<(u64, u64)>> {
+        for &(k, size) in order {
             if counts.is_empty() {
                 break;
             }
@@ -484,7 +507,7 @@ impl Snapshot {
                 let mut kept = Vec::with_capacity(counts.len());
                 for (i, &(v, n)) in counts.iter().enumerate() {
                     if i % 1024 == 0 && cancelled() {
-                        return Some(None);
+                        return None;
                     }
                     let m = walk.count(v);
                     if m > 0 {
@@ -494,14 +517,10 @@ impl Snapshot {
                 counts = kept;
                 continue;
             }
-            let Some(other) = runs(&triples[k]) else {
-                return Some(None);
-            };
+            let other = self.centre_runs(&triples[k], centre, graph, cancelled)?;
             counts = merge_products(&counts, &other);
         }
-        Some(Some(
-            counts.iter().fold(0u64, |s, (_, n)| s.saturating_add(*n)),
-        ))
+        Some(counts)
     }
 
     /// A scan of the matches of `t` in the order of the centre value, to count the matches
@@ -750,23 +769,39 @@ impl Snapshot {
                 triples, graph, centre, key, holder, &sizes, max_groups, cancelled,
             );
         }
-        let mut product: Option<Vec<(u64, u64)>> = None;
-        for (k, t) in triples.iter().enumerate() {
-            if Some(k) == holder {
-                continue;
+        // From the smallest triple's counts per centre value, multiplied by the others' in
+        // order of size, as `count_star` does: a large triple is walked forward from value to
+        // value when that reads less of it than a whole scan (#298). The key's triple is left
+        // out of the product; when it is the smallest, its (centre, key) pairs, read once,
+        // give both the centre values and the groups.
+        let mut order: Vec<(usize, usize)> = sizes
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|&(k, _)| Some(k) != holder)
+            .collect();
+        order.sort_by_key(|&(_, size)| size);
+        let pairs = match holder {
+            Some(h) if order.first().is_none_or(|&(_, size)| sizes[h] <= size) => {
+                match self.centre_key_pairs(&triples[h], centre, key, graph, cancelled) {
+                    Some(pairs) => Some(pairs),
+                    // Past `max_ids` pairs: joined as usual.
+                    None => return cancelled().then_some(None),
+                }
             }
-            if product.as_ref().is_some_and(Vec::is_empty) {
-                break;
-            }
-            let Some(runs) = self.centre_runs(t, centre, graph, cancelled) else {
-                return Some(None);
-            };
-            product = Some(match product {
-                None => runs,
-                Some(counts) => merge_products(&counts, &runs),
-            });
-        }
-        let product = product.unwrap_or_default();
+            _ => None,
+        };
+        let (counts, rest) = match &pairs {
+            Some(pairs) => (distinct_runs(pairs), &order[..]),
+            None => match self.centre_runs(&triples[order[0].0], centre, graph, cancelled) {
+                Some(runs) => (runs, &order[1..]),
+                None => return Some(None),
+            },
+        };
+        let Some(product) = self.multiply_runs(counts, triples, rest, centre, graph, cancelled)
+        else {
+            return Some(None);
+        };
         let Some(h) = holder else {
             if product.len() > max_groups {
                 return None;
@@ -775,6 +810,9 @@ impl Snapshot {
                 product.into_iter().map(|(v, n)| (TermId(v), n)).collect(),
             ));
         };
+        if let Some(pairs) = pairs {
+            return pair_groups(&pairs, &product, max_groups).map(Some);
+        }
         // Each match of the key's triple adds the product of its centre value.
         let t = &triples[h];
         let (ci, ki) = (centre_at(t, centre), centre_at(t, key));
@@ -858,15 +896,7 @@ impl Snapshot {
             None
         };
         let mut product = match &pairs {
-            Some(pairs) => {
-                let mut runs: Vec<(u64, u64)> = Vec::new();
-                for &(v, _) in pairs {
-                    if runs.last().is_none_or(|(last, _)| *last != v) {
-                        runs.push((v, 1));
-                    }
-                }
-                runs
-            }
+            Some(pairs) => distinct_runs(pairs),
             None => match self.centre_runs(&triples[small], centre, graph, cancelled) {
                 Some(runs) => runs,
                 None => return Some(None),
@@ -934,28 +964,7 @@ impl Snapshot {
             ));
         };
         if let Some(pairs) = pairs {
-            let mut groups: FxHashMap<u64, u64> = FxHashMap::default();
-            let mut at = 0;
-            for (v, k) in pairs {
-                // Both are in the order of the centre value.
-                while at < product.len() && product[at].0 < v {
-                    at += 1;
-                }
-                if at == product.len() {
-                    break;
-                }
-                if product[at].0 == v {
-                    let g = groups.entry(k).or_insert(0);
-                    *g = g.saturating_add(product[at].1);
-                }
-            }
-            if groups.len() > max_groups {
-                return None;
-            }
-            let mut out: Vec<(TermId, u64)> =
-                groups.into_iter().map(|(v, n)| (TermId(v), n)).collect();
-            out.sort_unstable();
-            return Some(Some(out));
+            return pair_groups(&pairs, &product, max_groups).map(Some);
         }
         let t = &triples[h];
         let ki = centre_at(t, key);
@@ -2097,6 +2106,50 @@ fn merge_products(a: &[(u64, u64)], b: &[(u64, u64)]) -> Vec<(u64, u64)> {
         }
     }
     merged
+}
+
+/// The distinct centre values of `pairs` (sorted by them), each with one solution.
+fn distinct_runs(pairs: &[(u64, u64)]) -> Vec<(u64, u64)> {
+    let mut runs: Vec<(u64, u64)> = Vec::new();
+    for &(v, _) in pairs {
+        if runs.last().is_none_or(|(last, _)| *last != v) {
+            runs.push((v, 1));
+        }
+    }
+    runs
+}
+
+/// The solutions per key of `pairs` (centre value, key), each adding the solutions of its
+/// centre value in `product`; both sorted by the centre value. Groups in the order of their
+/// ids; `None` past `max_groups`.
+fn pair_groups(
+    pairs: &[(u64, u64)],
+    product: &[(u64, u64)],
+    max_groups: usize,
+) -> Option<Vec<(TermId, u64)>> {
+    let mut groups = SmallGroups::default();
+    let mut at = 0;
+    for &(v, k) in pairs {
+        while at < product.len() && product[at].0 < v {
+            at += 1;
+        }
+        if at == product.len() {
+            break;
+        }
+        if product[at].0 == v {
+            groups.add(k, product[at].1);
+            if groups.len() > max_groups {
+                return None;
+            }
+        }
+    }
+    let mut out: Vec<(TermId, u64)> = groups
+        .into_pairs()
+        .into_iter()
+        .map(|(v, n)| (TermId(v), n))
+        .collect();
+    out.sort_unstable();
+    Some(out)
 }
 
 /// The positions (`i < j`, of subject, predicate and object) of a triple that hold the same
