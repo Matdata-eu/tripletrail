@@ -67,6 +67,37 @@ fn facet_counts_match_the_evaluator() {
     }
 }
 
+/// Few tracks have a gauge, some of them several (as in RINF): the key's triple is the
+/// smallest, so its pairs give the centre values and the larger triples are walked from value
+/// to value (#298). The same answers as the evaluator.
+#[test]
+fn facets_of_a_few_gauged_tracks_match_the_evaluator() {
+    let mut d = String::from("@prefix ex: <http://example.com/> .\n");
+    for i in 0..4000 {
+        let country = if i % 3 == 0 { "ex:BE" } else { "ex:DE" };
+        d += &format!("ex:t{i} a ex:Track ; ex:country {country} .\n");
+        if i % 7 == 0 {
+            for k in 0..1 + i % 3 {
+                d += &format!("ex:t{i} ex:gauge ex:g{} .\n", (i + k) % 5);
+            }
+        }
+        d += &format!("ex:o{i} a ex:Other ; ex:country {country} .\n");
+    }
+    let e = Engine::new_tripletrail();
+    e.load(RdfFormat::Turtle, d.as_bytes()).unwrap();
+    for q in [
+        FACET,
+        "SELECT ?g (COUNT(*) AS ?n) WHERE { ?t a ex:Track ; ex:gauge ?g } GROUP BY ?g",
+        "SELECT ?g (COUNT(*) AS ?n) WHERE { ?t ex:gauge ?g } GROUP BY ?g",
+        "SELECT ?t (COUNT(*) AS ?n) WHERE { ?t a ex:Track ; ex:country ex:DE ; ex:gauge ?g } GROUP BY ?t",
+        "SELECT ?g (COUNT(?t) AS ?n) WHERE { ?t a ex:Other ; ex:country ex:DE ; ex:gauge ?g } GROUP BY ?g",
+    ] {
+        let ids = rows(&e, &format!("{IDS}{q}"));
+        assert!(!ids.is_empty() || q.contains("ex:Other"), "{q}");
+        assert_eq!(ids, rows(&e, &format!("{ORACLE}{q}")), "{q}");
+    }
+}
+
 /// Timings on a larger copy: `cargo test --release --test facet_counts -- --ignored --nocapture`.
 #[test]
 #[ignore]
