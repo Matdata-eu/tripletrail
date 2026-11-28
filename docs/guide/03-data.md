@@ -460,6 +460,31 @@ https://example.org/rail#SOL1,2022-12-11T00:00:00Z/2026-12-13T00:00:00Z
 https://example.org/rail#SOL2,2026-12-13T00:00:00Z/..
 ```
 
+Writing out each way a beginning or an end may be given gets long, and it misses the ways you
+did not think of. `tt:hasPeriod` reads them all: the period of an OWL-Time instant or interval,
+whether its sides are dates, date-times, years, date-time descriptions or Unix times, or of a
+DCAT period of time or a schema.org event (`dcat:startDate`, `schema:endDate`). It is a
+property, so it can end a path:
+
+<!-- test: query rail -->
+```sparql
+PREFIX ex: <https://example.org/rail#>
+PREFIX tt: <http://w3id.org/tripletrail/fn#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?section ?period WHERE {
+  ?section ex:validity/tt:hasPeriod ?p .
+  FILTER(tt:periodContains(?p, "2026-12-12"^^xsd:date) || tt:periodContains(?p, "2027-01-01"^^xsd:date))
+  BIND(STR(?p) AS ?period)
+} ORDER BY ?section
+```
+
+<!-- test: output -->
+```text
+section,period
+https://example.org/rail#SOL1,2022-12-11T00:00:00Z/2026-12-13T00:00:00Z
+https://example.org/rail#SOL2,2026-12-13T00:00:00Z/..
+```
+
 A period is written in UTC, `..` for an open side, as a literal of the datatype `tt:period`.
 `tt:periodStart`, `tt:periodEnd` and `tt:periodDuration` give its parts, and Allen's thirteen
 relations (`tt:periodBefore`, `tt:periodMeets`, `tt:periodOverlaps`, `tt:periodDuring` and the
@@ -479,6 +504,8 @@ that offset. See [the temporal functions](../function-matrix.md#d4-temporal-300)
   `/{dataset}/search/similar` gives the nearest with their descriptions.
 - `tt:period` reads dates, date-times, years and open ends as one value, and
   `tt:periodContains` tells whether it holds on a day.
+- `?x tt:hasPeriod ?p` reads an OWL-Time instant or interval, however it is written, as that
+  value.
 - `GET /{dataset}/data` exports everything.
 
 Next: [spatial queries](04-spatial.md).

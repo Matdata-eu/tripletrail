@@ -359,7 +359,29 @@ is none of these, or an empty period, gives no value (an error, as a bad cast do
 | `tt:periodIntersects(a, b)` | ✅ | An instant in common: SQL's `OVERLAPS`, PostgreSQL's `&&`. |
 | `tt:periodContains(a, b)` | ✅ | Every instant of `b` in `a`, as PostgreSQL's `@>`: "valid on a day" is `tt:periodContains(tt:period(?from, ?until), "2026-11-26"^^xsd:date)`. |
 | Set operations (`span`, `gap`, `intersection`), the ISWC 2025 `tfn:` functions | ⬜ | #304. |
-| OWL-Time instants and intervals read as one period | ⬜ | #301. |
+| `?x tt:hasPeriod ?p` (a property function) | ✅ | #301: the period of an OWL-Time instant or interval, a `dct:PeriodOfTime` or a schema.org event; see below. |
+
+`?x tt:hasPeriod ?p` reads the period of a node, as `geo:hasGeometry/geo:asWKT` reads its
+geometry, and may end a path (`?track era:validity/tt:hasPeriod ?p`). It reads:
+
+- an instant's writings: `time:inXSDDateTimeStamp`, `inXSDDateTime`, `inXSDDate`,
+  `inXSDgYearMonth`, `inXSDgYear`; a `time:inDateTime` description (`time:year`, `month`, `day`,
+  `hour`, `minute`, `second`, to its `time:unitType`, or else to its finest part; its
+  `time:timeZone` is not read, so it is read at the dataset's offset); a `time:inTimePosition`
+  with a `time:numericPosition` in Unix time (`time:hasTRS <http://dbpedia.org/resource/Unix_time>`,
+  seconds) or a `time:nominalPosition` written as one of the XSD forms. Several writings of one
+  instant give their intersection (`"2022-12-11"` and `"2022-12-11T00:00:00Z"` give the
+  stamp); when they have nothing in common, the most precise one.
+- an interval: from the start of its beginning's period (`time:hasBeginning`, `dcat:startDate`,
+  `schema:startDate`) to the end of its end's (`time:hasEnd`, `dcat:endDate`,
+  `schema:endDate`, schema.org as `http:` or `https:`), or its beginning plus
+  `time:hasXSDDuration` (on the calendar: 31 January plus `P1M` is 29 February). An end that is
+  a date-time is the end itself, as in `tt:period(start, end)`, so an interval to
+  `2027-01-01T00:00:00Z` meets one from there. A missing side is open; with several beginnings
+  or ends, the earliest beginning and the latest end. A beginning after the end gives no period.
+- `time:hasTime`: the period of each instant or interval it leads to, one row each.
+
+A node with none of these has no row. A contradictory instant is not reported yet (#313).
 
 SPARQL's own `=` and `ORDER BY` see a `tt:period` as a literal of a datatype they do not know:
 `"2020/2021"^^tt:period` is not `=` to its canonical form, and periods sort by their text.
@@ -387,6 +409,7 @@ so its arguments can come from earlier patterns and `BIND`s.
 | `?part apf:strSplit (?string "regex")` (`tt:strSplit`) | ✅ | Splits at a regular expression; empty trailing parts are dropped, as Java's `String.split` does. Up to 32,768 parts per string. Replaces `fn:tokenize`, which returns a sequence. |
 | `?iri apf:splitIRI (?ns ?local)` (also `apf:splitURI`, `tt:splitIRI`) | ✅ | As `afn:namespace` / `afn:localname`. |
 | `?x apf:concat (args...)`, `?x apf:assign ?y` | ✅ | |
+| `tt:hasPeriod` (`?x tt:hasPeriod ?p`) | ✅ (#301) | The period of an OWL-Time instant or interval, a DCAT period of time or a schema.org event, however it is written, as a `tt:period`: see [D.4](#d4-temporal-300). It may end a path (`?x ex:validity/tt:hasPeriod ?p`). |
 | `UNNEST(expr) AS ?x` (Stardog) | ⬜ | Needs parser support. |
 | `?s tt:search ("query" ?score ?literal limit)` | ✅ (#188) | Full-text search, ranked with BM25, over the literals of `rdfs:label`, `rdfs:comment`, `skos:prefLabel`, `skos:altLabel`, `dct:title`, `dct:description` and `dc:title` in every graph. `?s tt:search "query"` alone gives the matching resources. Everything after the query is optional: the score (`xsd:double`), the literal matched, and the number of best matches kept. Words are runs of letters and digits, lower-cased, with Latin accents taken off; `word*` matches every word it starts; a literal matches if it has any word of the query, and more and rarer words score higher. One row per (resource, literal). Unlike the functions above, it is answered from an index before the query runs. The query string must be written in the query; a variable for it, or a variable given twice, is an error. The search covers every graph, also in a query on the default graph (the protocol's dataset narrows it to its graphs); a caller limited to some graphs or rows searches only what it can read, ranked as a store of only that data would (#203). It is refused inside `GRAPH`, `SERVICE` and `FILTER (NOT) EXISTS`. With a constant subject, the limit counts that subject's matches. Only on the TripleTrail store. The index is built on the first search (0.8 s for the 560,000 labels of the rail KG), and the first search after a write patches in the labels added and removed (about 40 ms on the rail KG); a search then takes milliseconds. |
 | `(?s ?score ?literal) text:query (property "query" limit)` | ✅ (#188) | Jena's full-text property function, answered from the `tt:search` index. The property and the limit are optional, and the subject may be `?s` alone. A property must be one of the indexed ones: only its literals match, and the limit counts those. A limit of -1 is no limit. The query string is read as Lucene's (#830): words are OR'ed, `OR` and `||` say so, `+word`, `AND` and `&&` make words required, `-word`, `!word` and `NOT` exclude them, `"a phrase"` matches the words in order, and a trailing `*` matches the words a word starts. The `lang:` option keeps one language (and its subtags), and in a language with a Snowball stemmer (18 of them, Norwegian, Dutch, English, French and German among them) matches the other forms of its words, as Jena's multilingual index does and `highlight:` marks the matches in `?literal` with Jena's markers and fragments (`s:`, `e:`, `z:`, `f:`). Other Lucene syntax is refused with an error rather than read differently: `field:value`, `?`, `~`, `^`, groups, ranges, escapes, a `*` not at the end or in a phrase, and the `?graph` and `?prop` subject items. Intended deviations from Jena: without a property, every indexed property is searched, not only the default field of the Jena index (usually `rdfs:label`), so write `rdfs:label` for Jena's usual answer; scores are TripleTrail's BM25 and differ from Lucene's. |
