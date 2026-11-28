@@ -414,7 +414,9 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   A write that lands between a query's snapshot and its reading a column therefore never
   takes rows from its answer. A commit patches a column only if the column holds the
   generation just before it, or one whose commits since did not touch the predicate; else
-  the column is dropped and built again on next use.
+  the column is dropped and built again on next use. The result tables the rewrites register
+  after the snapshot is taken (a spatial join's pairs) are added to it before the count pass
+  and the id executor read it (#363).
 - **SPARQL Update.** `Store::update` runs a whole request as one transaction, with `WHERE`
   patterns evaluated by the caller's evaluator on the data as the earlier operations left it.
   Graphs exist as long as they hold quads: `CREATE GRAPH` records nothing, and `CLEAR`/`DROP` of
