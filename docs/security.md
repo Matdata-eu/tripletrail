@@ -45,7 +45,9 @@ vulnerability, see [SECURITY.md](../SECURITY.md).
     authentication.
   - The server binds to `127.0.0.1` by default. The Docker image binds `0.0.0.0` and so
     is open (#401 tracks refusing that).
-- **With authentication on:**
+- **With only tokens:** `--update-token` guards writes and `--admin-token` the `/$/` admin
+  calls. Queries stay open.
+- **With `--auth-config`:**
   - Every request needs an identity, except `/$/ping`, `/$/ready` and `/$/role/{name}`.
   - Unknown keys and wrong passwords get 401, never anonymous access.
   - After 10 failures in a minute, an address gets 429.
@@ -75,9 +77,11 @@ vulnerability, see [SECURITY.md](../SECURITY.md).
     needs `Sec-Fetch-Site: same-origin`, an `Origin` of the server itself or of `--cors`,
     or neither header (not a browser).
   - With `--cors` for every origin, form bodies are still refused.
-- **DNS rebinding:** without `--auth-config`, the server answers only its own host names
-  (IP addresses, `localhost`, `--allowed-host`). This stops a page from pointing its own
-  name at the server and reading the answers. `/mcp` also checks `Origin`.
+- **DNS rebinding:** without `--auth-config`, a server on loopback, or one given
+  `--allowed-host`, answers only its own host names (IP addresses, `localhost`,
+  `--allowed-host`). This stops a page from pointing its own name at the server and reading
+  the answers. A server that listens beyond loopback without `--allowed-host` answers every
+  name, and warns at start. `/mcp` also checks `Origin`.
 - **Reading answers:** CORS answers only the origins of `--cors`, and `--cors` alone answers
   all of them.
 - **The server's own pages:**
@@ -94,7 +98,8 @@ vulnerability, see [SECURITY.md](../SECURITY.md).
   - Facade-X sources are read with size limits (YAML aliases, spreadsheet cells and bytes).
     A query may lower these limits but not raise them.
 - **No files or URLs:**
-  - Facade-X on a server reads no files and no URLs (`location=` is refused).
+  - Facade-X on a server reads no files and no URLs (`location=` is refused). The one
+    exception is the Import page, whose queries read only the file just uploaded.
   - SPARQL `LOAD` is not supported.
 - **Bounded queries:** a query built from data, such as a `SERVICE ?endpoint` bound by a
   triple, still only reaches allowed endpoints.
