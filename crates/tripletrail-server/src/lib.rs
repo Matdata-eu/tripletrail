@@ -1610,6 +1610,88 @@ const MAX_SYNC_WAITERS: usize = 1024;
 /// The `Server` header of every answer.
 const SERVER: &str = concat!("TripleTrail/", env!("CARGO_PKG_VERSION"));
 
+/// The `Content-Security-Policy` of an HTML answer whose handler sets none: the describe,
+/// Linked Data and OGC pages and the like, built from data (#404). Script only from the server
+/// itself and never inline, so an escaping slip in data-driven HTML runs nothing; styles
+/// inline (the pages' own `<style>` and drawn bars); images from anywhere (pictures the data
+/// links to); the describe map's tiles from the `--map-tiles` host; MapLibre's workers from
+/// `blob:`.
+pub(crate) fn data_page_csp(options: &Options) -> String {
+    let tiles = options
+        .map_tiles
+        .as_deref()
+        .and_then(tile_origin)
+        .map(|o| format!(" {o}"))
+        .unwrap_or_default();
+    format!(
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+         img-src * data: blob:; connect-src 'self'{tiles}; worker-src 'self' blob:; \
+         object-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+    )
+}
+
+/// The origin of an XYZ tile URL template for a CSP source (`https://*.tile.example.org` for
+/// `https://{s}.tile.example.org/{z}/{x}/{y}.png`), or None when it has no usable host.
+fn tile_origin(template: &str) -> Option<String> {
+    let (scheme, rest) = template.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let host = rest.split(['/', '?', '#']).next()?;
+    let host: Vec<String> = host
+        .split('.')
+        .map(|label| {
+            if label.contains('{') {
+                "*".to_owned()
+            } else {
+                label.to_owned()
+            }
+        })
+        .collect();
+    let host = host.join(".");
+    // A wildcard only as the first label, and nothing a CSP would read as another source.
+    let ok = !host.is_empty()
+        && !host[1..].contains('*')
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '*' | '[' | ']'));
+    ok.then(|| format!("{scheme}://{host}"))
+}
+
+/// Headers every answer gets unless its handler set its own (#404): `nosniff` on all, and
+/// on HTML the data pages' CSP and `Referrer-Policy: same-origin`.
+fn security_headers(options: &Options, reply: &mut Reply) {
+    let has = |reply: &Reply, name: &str| {
+        reply
+            .headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case(name))
+    };
+    if !has(reply, "X-Content-Type-Options") {
+        reply
+            .headers
+            .push(("X-Content-Type-Options", "nosniff".to_owned()));
+    }
+    let html = reply.content_type.as_deref().is_some_and(|t| {
+        let t = t.trim_start().to_ascii_lowercase();
+        t.starts_with("text/html") || t.starts_with("application/xhtml+xml")
+    });
+    if !html {
+        return;
+    }
+    if !has(reply, "Content-Security-Policy") {
+        reply
+            .headers
+            .push(("Content-Security-Policy", data_page_csp(options)));
+    }
+    if !has(reply, "Referrer-Policy") {
+        reply
+            .headers
+            .push(("Referrer-Policy", "same-origin".to_owned()));
+    }
+}
+
 /// Sends `reply` (with `headers`), then records and logs the request.
 fn send_reply(
     state: &Arc<State>,
@@ -1619,6 +1701,8 @@ fn send_reply(
     #[cfg_attr(not(feature = "otel"), allow(unused_mut))] mut context: Context,
     started: Instant,
 ) {
+    let mut reply = reply;
+    security_headers(&state.options, &mut reply);
     let status = reply.status;
     // A result cut at max-rows with partial=true (#189).
     let cut = reply
