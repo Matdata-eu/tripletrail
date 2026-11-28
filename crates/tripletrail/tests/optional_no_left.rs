@@ -54,7 +54,7 @@ fn labels_of_no_values_are_not_read() {
         )
     };
     // The best of five runs, so that a pause of a loaded runner in one of them does not count
-    // (#390, as #387 did for dim_kg); the result cache answers none of them.
+    // (#390, as #387 did for the knowledge-graph test); the result cache answers none of them.
     let time = |q: &str| {
         let q = format!("#pragma tt.result-cache off\n{q}");
         let mut best = Duration::MAX;
