@@ -139,7 +139,7 @@ fn crossing_cuts(edges: &[GeoEdge], tree: &RTree<Indexed>, tol: f64) -> Vec<Vec<
     let mut cuts = vec![Vec::new(); edges.len()];
     let near = tol.max(EPSILON);
     for (i, a) in edges.iter().enumerate() {
-        for other in tree.locate_in_envelope_intersecting(&bbox(&a.line, tol)) {
+        for other in tree.locate_in_envelope_intersecting(bbox(&a.line, tol)) {
             let j = other.data;
             if j <= i {
                 continue;
@@ -177,7 +177,7 @@ fn touching_cuts(edges: &[GeoEdge], tree: &RTree<Indexed>, tol: f64) -> Vec<Vec<
     for (i, a) in edges.iter().enumerate() {
         for p in ends(&a.line) {
             let probe = AABB::from_corners([p.x - tol, p.y - tol], [p.x + tol, p.y + tol]);
-            for other in tree.locate_in_envelope_intersecting(&probe) {
+            for other in tree.locate_in_envelope_intersecting(probe) {
                 let j = other.data;
                 if j == i {
                     continue;
@@ -387,7 +387,7 @@ pub(crate) fn find_close_edges(
         };
         let probe = AABB::from_corners([p.x - tol, p.y - tol], [p.x + tol, p.y + tol]);
         let mut found: Vec<(f64, usize, Coord, f64, char)> = tree
-            .locate_in_envelope_intersecting(&probe)
+            .locate_in_envelope_intersecting(probe)
             .filter_map(|o| {
                 let (q, along, d, side) = locate(&edges[o.data].line, p);
                 (d <= tol).then_some((d, o.data, q, along, side))
@@ -632,7 +632,7 @@ pub(crate) fn analyze_graph(t: &Table, tol: f64) -> Result<Vec<Row>, PgrError> {
                     continue;
                 }
                 let probe = AABB::from_corners([p.x - tol, p.y - tol], [p.x + tol, p.y + tol]);
-                let close = tree.locate_in_envelope_intersecting(&probe).any(|o| {
+                let close = tree.locate_in_envelope_intersecting(probe).any(|o| {
                     let j = o.data;
                     j != i && own[j].0 != v && own[j].1 != v && locate(&edges[j].line, p).2 <= tol
                 });

@@ -2149,35 +2149,86 @@ fn write_dict_compact(
 /// Writes the saved index of the `keys` keys of the dictionary after the first `from`. It is
 /// filled in place in the mapped file, at random, so a large index takes no heap.
 fn write_index(path: &Path, dict: &Dictionary, from: usize, keys: usize) -> io::Result<Sum> {
+    let window = index_window(crate::index::memory_limit());
+    write_index_in(path, dict, from, keys, window)
+}
+
+/// Slots of a saved index built on the heap at once: half the memory limit (at least 32M
+/// slots, 256 MiB), or 512M slots (4 GiB) without one. A larger index is built a window at a
+/// time, each pass reading every key of the piece again.
+fn index_window(memory_limit: Option<usize>) -> usize {
+    memory_limit.map_or(512 << 20, |m| m / 2 / 8).max(32 << 20)
+}
+
+/// [`write_index`] with at most `window` slots on the heap at once. The slots are filled on
+/// the heap and written in order: filled in a mapped file, at random, for minutes, their pages
+/// were written back to disk again and again (#232).
+fn write_index_in(
+    path: &Path,
+    dict: &Dictionary,
+    from: usize,
+    keys: usize,
+    window: usize,
+) -> io::Result<Sum> {
     let slots = index_slots(keys);
-    let len = INDEX_HEADER + 8 * slots;
     let file = File::options()
         .read(true)
         .write(true)
         .create(true)
         .truncate(true)
         .open(path)?;
-    // Zeros: every slot starts empty. Written, not made with `set_len`: a sparse file has no
-    // blocks yet, and a write to its map on a full disk kills the process (SIGBUS) where
-    // writing the zeros fails with an error (#218).
-    allocate_zeros(&file, len)?;
-    // SAFETY: the file was just created by this checkpoint and nothing else maps it yet.
-    let mut map = unsafe { memmap2::MmapMut::map_mut(&file)? };
-    map[..8].copy_from_slice(INDEX_MAGIC);
-    for (i, v) in [keys as u64, slots as u64, index_check()]
-        .iter()
-        .enumerate()
-    {
-        map[8 + 8 * i..16 + 8 * i].copy_from_slice(&v.to_le_bytes());
+    let mut crc = crc32fast::Hasher::new();
+    let mut out = io::BufWriter::with_capacity(1 << 20, &file);
+    let mut header = Vec::with_capacity(INDEX_HEADER);
+    header.extend_from_slice(INDEX_MAGIC);
+    for v in [keys as u64, slots as u64, index_check()] {
+        header.extend_from_slice(&v.to_le_bytes());
     }
-    let body = &mut map[INDEX_HEADER..];
-    // SAFETY: a mapping starts on a page boundary, so the slots after the 32-byte header are
-    // 8-byte aligned, and `body` holds exactly `slots` of them.
-    let body = unsafe { std::slice::from_raw_parts_mut(body.as_mut_ptr().cast::<u64>(), slots) };
-    dict.fill_index(from, keys, body);
-    if cfg!(target_endian = "big") {
-        for s in body.iter_mut() {
-            *s = s.to_le();
+    debug_assert_eq!(header.len(), INDEX_HEADER);
+    out.write_all(&header)?;
+    crc.update(&header);
+    let window = window.clamp(1, slots.max(1));
+    let mut carry = Vec::new();
+    let mut buf: Vec<u64> = Vec::new();
+    // The window goes out through a small buffer of bytes, not a copy of it: the window is
+    // the only large allocation.
+    let mut bytes: Vec<u8> = Vec::with_capacity(1 << 20);
+    for lo in (0..slots).step_by(window) {
+        let len = window.min(slots - lo);
+        buf.clear();
+        buf.resize(len, 0);
+        carry = dict.fill_index_window(from, keys, lo, &mut buf, &carry);
+        for piece in buf.chunks(bytes.capacity() / 8) {
+            bytes.clear();
+            for s in piece {
+                bytes.extend_from_slice(&s.to_le_bytes());
+            }
+            out.write_all(&bytes)?;
+            crc.update(&bytes);
+        }
+    }
+    drop((buf, bytes));
+    out.flush()?;
+    drop(out);
+    if carry.is_empty() {
+        file.sync_all()?;
+        return Ok(((INDEX_HEADER + 8 * slots) as u64, crc.finalize()));
+    }
+    // Entries with no room left before the last slot go on from slot 0, as in a lookup: a
+    // few, placed in the file's map, which then gives the checksum.
+    // SAFETY: the file was just written by this checkpoint and nothing else maps it yet.
+    let mut map = unsafe { memmap2::MmapMut::map_mut(&file)? };
+    {
+        let body = &mut map[INDEX_HEADER..];
+        let slot = |body: &[u8], i: usize| {
+            u64::from_le_bytes(body[8 * i..8 * i + 8].try_into().expect("8 bytes"))
+        };
+        let mut i = 0;
+        for entry in carry {
+            while slot(body, i) != 0 {
+                i += 1;
+            }
+            body[8 * i..8 * i + 8].copy_from_slice(&entry.to_le_bytes());
         }
     }
     map.flush()?;
@@ -2185,20 +2236,6 @@ fn write_index(path: &Path, dict: &Dictionary, from: usize, keys: usize) -> io::
     drop(map);
     file.sync_all()?;
     Ok(sum)
-}
-
-/// Writes `len` zero bytes to the empty `file`, so that its blocks are allocated on disk.
-fn allocate_zeros(file: &File, len: usize) -> io::Result<()> {
-    const CHUNK: usize = 1 << 20;
-    let zeros = vec![0u8; CHUNK.min(len)];
-    let mut w = file;
-    let mut left = len;
-    while left > 0 {
-        let n = left.min(CHUNK);
-        w.write_all(&zeros[..n])?;
-        left -= n;
-    }
-    Ok(())
 }
 
 /// The saved index `file` of a dictionary piece of `keys` keys, if it is listed in the
@@ -3436,6 +3473,59 @@ mod tests {
     use super::*;
     use crate::id::{Kind, TermId};
     use crate::index::Pattern;
+
+    /// An index written a window at a time, even windows of a few slots whose entries run on
+    /// into the next one and, past the last slot, wrap around to the first, finds every key,
+    /// and its checksum is that of the file (#232).
+    #[test]
+    fn an_index_written_in_windows_finds_every_key() {
+        let dir = tripletrail_testdir::tempdir("index-windows");
+        let mut dict = Dictionary::new();
+        let key = |i: u32| format!("\u{1}http://example.org/{i}").into_bytes();
+        let n = 20_000u32;
+        for i in 0..n {
+            dict.get_or_insert(&key(i));
+        }
+        let (mut bytes, mut ends) = (Vec::new(), vec![0u64]);
+        for o in 1..=n {
+            bytes.extend_from_slice(dict.raw_key(o));
+            ends.push(bytes.len() as u64);
+        }
+        let mut whole = None;
+        for window in [usize::MAX, 4096, 977, 3] {
+            let path = dir.join(format!("idx-{window}"));
+            let sum = write_index_in(&path, &dict, 0, n as usize, window).unwrap();
+            let file = std::fs::read(&path).unwrap();
+            assert_eq!(sum, (file.len() as u64, crc32fast::hash(&file)), "{window}");
+            assert_eq!(&file[..8], INDEX_MAGIC);
+            let slots: Vec<u64> = file[INDEX_HEADER..]
+                .chunks_exact(8)
+                .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+                .collect();
+            assert_eq!(slots.len(), index_slots(n as usize));
+            assert_eq!(slots.iter().filter(|&&s| s != 0).count(), n as usize);
+            // The whole index on the heap at once is what the mapped file used to hold.
+            let mut expected = vec![0; index_slots(n as usize)];
+            dict.fill_index(0, n as usize, &mut expected);
+            if window == usize::MAX {
+                assert_eq!(slots, expected);
+                whole = Some(sum);
+            }
+            let saved = Dictionary::from_saved(
+                vec![(
+                    bytes.clone().into(),
+                    ends.clone().into(),
+                    Some(crate::dict::SavedIndex(slots.into())),
+                )],
+                dict.namespaces().clone(),
+            );
+            for i in 0..n {
+                assert_eq!(saved.get(&key(i)), Some(i + 1), "{window}: key {i}");
+            }
+            assert_eq!(saved.get(&key(n)), None);
+        }
+        assert!(whole.is_some());
+    }
 
     #[test]
     fn the_check_in_the_background_waits_while_the_store_is_written() {

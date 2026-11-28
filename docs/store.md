@@ -655,6 +655,23 @@ with the lookups side by side does that pay. The passes that read those keys in 
 checkpoint at the end of the load, a rebuild of the dictionary's table) turn readahead back on
 for their length: without it the checkpoint of the load above took 15 to 23 s instead of 10.
 
+The checkpoint at the end of such a load then wrote the dictionary's hash index (`dict.idx`,
+12 bytes a key) by filling a mapped file at random. That took minutes, and under memory pressure
+the system wrote its dirty pages back again and again: the 5B load ended in hours that only
+wrote, with the store's size unchanged (#232). The index is now filled on the heap and
+written in order, at most half of `--memory-limit` (4 GiB without one) at a time. A larger
+index is built in windows of slots, each pass reading the piece's keys again. On 400M synthetic
+triples (38.8 GB of N-Triples) with `--memory-limit 2560M` and the process's memory capped at
+10 GB, 4 cores (the 5B run's ratios):
+
+| | load | written in all |
+|---|---:|---:|
+| before (two runs) | 1,637 to 1,675 s | 85 to 99 GB |
+| now | 1,413 s | 22 GB |
+
+Before, the checkpoint wrote about 80 GB in five minutes, most of it while `dict.idx` (960 MB)
+was the only file still being written. The store is 13.1 GB either way.
+
 ### Streaming bulk load on all of RINF
 
 All of RINF (61 files, 6.9 GB of N-Triples, 41,145,174 triples), TripleTrail store, 4 cores, one run

@@ -668,7 +668,7 @@ pub fn conflate(
             [r.max().x + tx, r.max().y + ty],
         );
         let mut candidates: Vec<usize> = tree
-            .locate_in_envelope_intersecting(&query)
+            .locate_in_envelope_intersecting(query)
             .map(|b| b.0)
             .collect();
         candidates.sort_unstable();
