@@ -117,7 +117,7 @@ how that request runs (#238). Other engines read them as comments.
 |---|---|
 | `#pragma tt.optimizer off` (or `tt.join-order fixed`) | Join the patterns in the written order: no join reordering, and no planning of `EXISTS` patterns. |
 | `#pragma tt.spatial-rewrite off` | Evaluate GeoSPARQL filters and joins as written, without the spatial index. |
-| `#pragma tt.range-rewrite off` | Evaluate numeric range `FILTER`s without the range index. |
+| `#pragma tt.range-rewrite off` | Evaluate numeric, date and date-time range `FILTER`s without the range index. |
 | `#pragma tt.id-rewrites off` | Evaluate counts and rows without the shortcuts on term ids. These shortcuts order their own joins, so a `COUNT` keeps its order under `tt.optimizer off` unless this hint is given too. |
 | `#pragma tt.result-cache off` | The result cache neither answers nor keeps the query. |
 | `#pragma tt.executor ids` (or `spareval`) | Which executor answers the query, over `--executor`: `ids` answers a `SELECT` or `CONSTRUCT` whose pattern runs on term ids straight from the id tables; `spareval` hands it to the evaluator. `/{ds}/explain` says which one did under `executor`. |

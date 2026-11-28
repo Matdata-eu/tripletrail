@@ -116,3 +116,97 @@ fn explain_says_what_was_decided() {
         .unwrap();
     assert!(!graph.contains("range ?km"), "{graph}");
 }
+
+/// Dates and date-times, with and without timezones, and a few that are neither.
+fn temporal_data() -> String {
+    let mut ttl = String::from(
+        "@prefix ex: <http://example.org/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    );
+    for i in 0..3000 {
+        let day = 1 + i % 28;
+        let month = 1 + (i / 28) % 12;
+        let year = 2020 + i % 8;
+        let hour = (i * 7) % 24;
+        let literal = match i % 8 {
+            0 => format!("\"{year}-{month:02}-{day:02}\"^^xsd:date"),
+            1 => format!("\"{year}-{month:02}-{day:02}Z\"^^xsd:date"),
+            2 => format!("\"{year}-{month:02}-{day:02}+13:00\"^^xsd:date"),
+            3 => format!("\"{year}-{month:02}-{day:02}T{hour:02}:30:00\"^^xsd:dateTime"),
+            4 => format!("\"{year}-{month:02}-{day:02}T{hour:02}:30:00.25Z\"^^xsd:dateTime"),
+            5 => format!("\"{year}-{month:02}-{day:02}T{hour:02}:00:00-11:00\"^^xsd:dateTimeStamp"),
+            6 => format!("\"{year}-{month:02}-{day:02}\""),
+            _ => format!("{}", year * 10_000 + month * 100 + day),
+        };
+        ttl.push_str(&format!(
+            "ex:p{i} a ex:Period ; ex:line ex:line{} ; ex:from {literal} .\n",
+            i % 40
+        ));
+    }
+    // Inside the ranges below only once their timezones are applied.
+    ttl.push_str("ex:tz1 ex:from \"2024-03-01T20:00:00-11:00\"^^xsd:dateTime . ex:tz2 ex:from \"2024-03-03+14:00\"^^xsd:date .\n");
+    ttl.push_str("ex:bad ex:from \"2024-13-40\"^^xsd:date . ex:edge ex:from \"2024-12-31T24:00:00\"^^xsd:dateTime .\n");
+    ttl
+}
+
+/// #312: date and date-time ranges give the rows the FILTER alone gives, by both executors,
+/// before and after writes.
+#[test]
+fn date_and_date_time_ranges_give_the_same_rows() {
+    let data = temporal_data();
+    let engine = Engine::new_tripletrail();
+    engine.load(RdfFormat::Turtle, data.as_bytes()).unwrap();
+    let queries = [
+        "SELECT ?p ?d WHERE { ?p ex:from ?d . FILTER(?d >= \"2024-03-01\"^^xsd:date && ?d < \"2024-03-08\"^^xsd:date) }",
+        "SELECT ?p WHERE { ?p ex:from ?d . FILTER(?d > \"2024-03-01Z\"^^xsd:date && ?d <= \"2024-03-03-05:00\"^^xsd:date) }",
+        "SELECT ?p ?d WHERE { ?p ex:from ?d . FILTER(?d >= \"2025-06-01T00:00:00\"^^xsd:dateTime && ?d < \"2025-06-03T12:00:00Z\"^^xsd:dateTime) }",
+        "SELECT ?p WHERE { ?p ex:from ?d . FILTER(\"2025-01-05T00:00:00+14:00\"^^xsd:dateTime <= ?d && \"2025-01-06T00:00:00-14:00\"^^xsd:dateTime > ?d) }",
+        "SELECT ?p WHERE { ?p ex:from ?d . FILTER(?d >= \"2027-12-28\"^^xsd:date) }",
+        "SELECT ?p WHERE { ?p ex:from ?d . FILTER(?d < \"2020-01-02T00:00:00Z\"^^xsd:dateTimeStamp) }",
+        "SELECT ?p WHERE { ?p ex:from ?d . FILTER(?d >= \"2025-01-01T00:00:00\"^^xsd:dateTime && ?d <= \"2025-01-01T00:00:00\"^^xsd:dateTime) }",
+        "SELECT ?p WHERE { ?p ex:from ?d . FILTER(?d >= \"2024-12-31T23:00:00\"^^xsd:dateTime && ?d <= \"2025-01-01T01:00:00\"^^xsd:dateTime) }",
+        "SELECT ?p WHERE { ?p ex:from ?d . FILTER(?d >= \"2024-03-02T00:00:00Z\"^^xsd:dateTime && ?d < \"2024-03-02T08:00:00Z\"^^xsd:dateTime) }",
+        "SELECT ?p WHERE { ?p ex:from ?d . FILTER(?d >= \"2024-03-02Z\"^^xsd:date && ?d < \"2024-03-02-12:00\"^^xsd:date) }",
+        // A date bound and a date-time bound on one variable: no block, the FILTER alone.
+        "SELECT ?p WHERE { ?p ex:from ?d . FILTER(?d >= \"2024-01-01\"^^xsd:date && ?d < \"2024-02-01T00:00:00Z\"^^xsd:dateTime) }",
+        "SELECT ?p WHERE { ?p a ex:Period ; ex:line ex:line3 ; ex:from ?d . FILTER(?d >= \"2023-05-01\"^^xsd:date && ?d <= \"2023-05-20\"^^xsd:date) }",
+        "SELECT (COUNT(*) AS ?n) WHERE { ?p ex:from ?d . FILTER(?d >= \"2026-02-01\"^^xsd:date && ?d <= \"2026-02-10\"^^xsd:date) }",
+    ];
+    let check = |engine: &Engine, data: &str| {
+        for q in queries {
+            for executor in ["ids", "spareval"] {
+                let q = format!("#pragma tt.executor {executor}\n{P}{q}");
+                let off = format!("#pragma tt.range-rewrite off\n{q}");
+                let got = rows(engine, &q);
+                assert_eq!(got, rows(engine, &off), "{q}");
+                assert_eq!(got, reference(data, &q), "{q}");
+            }
+        }
+    };
+    check(&engine, &data);
+    let narrow = engine
+        .explain(&format!("{P}SELECT ?p WHERE {{ ?p ex:from ?d . FILTER(?d >= \"2024-03-01\"^^xsd:date && ?d < \"2024-03-03\"^^xsd:date) }}"))
+        .unwrap();
+    assert!(
+        narrow.contains("(dates, seconds from 1970)") && narrow.contains(": inject"),
+        "{narrow}"
+    );
+    // Writes patch the date and date-time columns: the next queries see them.
+    let write = "INSERT DATA { ex:n1 ex:from \"2024-03-02\"^^xsd:date . ex:n2 ex:from \"2025-06-02T08:00:00+02:00\"^^xsd:dateTime } ; DELETE WHERE { ex:p0 ex:from ?d } ; DELETE WHERE { ex:p3 ex:from ?d }";
+    engine.update(&format!("{P}{write}")).unwrap();
+    let reference_engine = Engine::new_tripletrail();
+    reference_engine
+        .load(RdfFormat::Turtle, data.as_bytes())
+        .unwrap();
+    reference_engine.update(&format!("{P}{write}")).unwrap();
+    for q in queries {
+        let q = format!("{P}{q}");
+        let off = format!("#pragma tt.range-rewrite off\n{q}");
+        assert_eq!(rows(&engine, &q), rows(&reference_engine, &off), "{q}");
+    }
+    let got = rows(&engine, &format!("{P}{}", queries[0]));
+    assert!(got.iter().any(|r| r.contains("/n1>")), "{got:?}");
+    for (q, edge) in [(8, "/tz1>"), (9, "/tz2>")] {
+        let got = rows(&engine, &format!("{P}{}", queries[q]));
+        assert!(got.iter().any(|r| r.contains(edge)), "{got:?}");
+    }
+}
