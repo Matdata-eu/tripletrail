@@ -40,7 +40,7 @@ pub struct Period {
 }
 
 impl Period {
-    fn new(start: Option<i64>, end: Option<i64>) -> Option<Self> {
+    pub(crate) fn new(start: Option<i64>, end: Option<i64>) -> Option<Self> {
         match (start, end) {
             (Some(s), Some(e)) if s >= e => None,
             _ => Some(Self { start, end }),
@@ -62,7 +62,7 @@ impl Period {
         format!("{}/{}", side(self.start), side(self.end))
     }
 
-    fn term(self) -> Term {
+    pub(crate) fn term(self) -> Term {
         Literal::new_typed_literal(self.lexical(), NamedNode::new_unchecked(PERIOD)).into()
     }
 }
@@ -111,7 +111,7 @@ fn days_in_month(y: i64, m: i64) -> i64 {
 
 /// An instant as an `xsd:dateTimeStamp` lexical form in UTC, with milliseconds when it has
 /// some.
-fn stamp(ms: i64) -> String {
+pub(crate) fn stamp(ms: i64) -> String {
     let days = ms.div_euclid(MS_PER_DAY);
     let in_day = ms.rem_euclid(MS_PER_DAY);
     let (y, m, d) = civil_from_days(days);

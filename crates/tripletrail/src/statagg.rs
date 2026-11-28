@@ -91,7 +91,7 @@ pub fn pack(args: &[Term]) -> Option<Term> {
     Some(Literal::new_typed_literal(text.join("\n"), NamedNode::new_unchecked(PACKED)).into())
 }
 
-fn unpack(term: &Term) -> Option<Vec<Term>> {
+pub(crate) fn unpack(term: &Term) -> Option<Vec<Term>> {
     let Term::Literal(l) = term else {
         return None;
     };
