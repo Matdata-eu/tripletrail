@@ -184,6 +184,7 @@ small sample railway network. The pages below are the reference.
 |---|---|
 | Step-by-step user guide: install, data, spatial, routing, validation, lifting, pipelines, Workbench, maps and APIs, Fuseki, access control, production | [docs/guide/](docs/guide/README.md) |
 | Running the server: endpoints, datasets, admin API, access control, backups, web UI, Workbench, pipelines, describe pages, OGC API, Linked Data, coming from Fuseki | [docs/server.md](docs/server.md) |
+| Security model: what is protected, from whom, and the operator's part | [docs/security.md](docs/security.md) |
 | Spatial functions, set-returning functions, vector tiles, linear referencing | [docs/spatial.md](docs/spatial.md) |
 | Routing: pgRouting functions and what goes beyond them | [docs/routing.md](docs/routing.md) |
 | SHACL validation, SHACL-AF rules, RDFS and OWL 2 RL entailment | [docs/validation-and-reasoning.md](docs/validation-and-reasoning.md) |

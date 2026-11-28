@@ -25,6 +25,9 @@ reverse proxy that does both. Use `--cors` only with the origins you trust. See
 [Running it in production](docs/server.md#running-it-in-production) and
 [Authentication](docs/server.md#authentication).
 
+The [security model](docs/security.md) says what TripleTrail protects, from whom, what
+defends each boundary, and what is the operator's part.
+
 ## Dependencies
 
 CI runs `cargo audit` on both lockfiles and `cargo deny check`. Known advisories that are
