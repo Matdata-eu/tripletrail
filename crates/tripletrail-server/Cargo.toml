@@ -48,7 +48,7 @@ libc = "0.2"
 [dev-dependencies]
 tripletrail-testdir.workspace = true
 serde_json.workspace = true
-ureq = "2"
+ureq = "3"
 rustls.workspace = true
 postgres.workspace = true
 # Signing test tokens for single sign-on (#198); already in the tree through rustls.
