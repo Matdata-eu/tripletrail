@@ -255,7 +255,9 @@ tripletrail serve --store oxigraph --location /data/tripletrail --dataset kg
   memory a bulk load (`--load`, or a Graph Store upload) may use to sort its quads. A larger
   load sorts them on disk, under the dataset's directory, and writes the indexes straight to
   files, so a dataset larger than memory can be loaded. Without it everything is sorted in
-  memory.
+  memory. A load needs about 650 MB on top of the limit (the blocks of text in flight, the
+  allocator's caches): size a machine or a cgroup at the limit plus 1 GB (#241, see
+  [store.md](store.md#what---memory-limit-bounds-during-a-load-241)).
 - `tripletrail load` writes a progress line to standard error every minute while a file loads
   (#232): the store's step (`reading`, `sorting`, `writing`, `entailing`), the triples read so
   far, and how much of the file has been read. `Store::load_progress()` gives the same step

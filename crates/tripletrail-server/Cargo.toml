@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 mimalloc = { version = "0.1.43", default-features = false, optional = true }
+libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["extended"], optional = true }
 tripletrail.workspace = true
 tripletrail-rml.workspace = true
 oxigraph.workspace = true
@@ -58,7 +59,7 @@ ring = "0.17"
 default = ["geoparquet", "git", "mimalloc", "otel", "postgres", "remote-service", "replication", "tls"]
 # mimalloc as the allocator of the `tripletrail` binary (#934): glibc's malloc contends when one
 # thread frees what another allocated, as an INSERT … WHERE does with its rows.
-mimalloc = ["dep:mimalloc"]
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 # Native TLS (`--tls-cert`, `--tls-key`), with rustls.
 tls = ["dep:rustls"]
 # GeoParquet: `load` of .parquet files, `export`, and SELECT results as GeoParquet.

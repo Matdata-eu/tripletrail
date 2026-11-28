@@ -672,6 +672,29 @@ triples (38.8 GB of N-Triples) with `--memory-limit 2560M` and the process's mem
 Before, the checkpoint wrote about 80 GB in five minutes, most of it while `dict.idx` (960 MB)
 was the only file still being written. The store is 13.1 GB either way.
 
+#### What `--memory-limit` bounds during a load (#241)
+
+The limit bounds what grows with the data: the quads waiting to be sorted (half the limit),
+the dictionary's keys on the heap (an eighth, then mapped files) and `dict.idx` while it is
+filled (half, in windows). On top of that a load needs up to about 650 MB that does not grow
+with the limit or the data: the text of the blocks in flight (64 MB each, about four at once,
+one read, one parsed on every core, two waiting for the dictionary) with their parsed terms,
+and the allocator's per-thread caches. **Size a machine or a cgroup at the limit plus 1 GB.**
+
+The `tripletrail` binary's allocator (mimalloc) gave memory a load had freed back to the
+system after 1 s, and a load frees and allocates its blocks and chunks faster than that.
+It now does so after 100 ms (`MIMALLOC_PURGE_DELAY` overrides it). On 48.9M synthetic triples
+(6.7 GB of N-Triples), 4 cores, best of three (peak anonymous memory and load time):
+
+| | `--memory-limit 256M` | `--memory-limit 2560M` | 256M, memory capped at 1 GB |
+|---|---:|---:|---:|
+| before | 1,057 to 1,142 MB, 50.2 s | 3,169 to 3,403 MB, 48.2 s | killed after 40 s |
+| now | 877 to 885 MB, 51.6 s | 2,883 to 2,933 MB, 50.1 s | 66.0 s |
+
+At 2560M the peak is 1.13x the limit, at 256M 3.4x: there the fixed part above is most of it.
+Smaller blocks under a small limit took that part down further (769 MB with a 32nd of the
+limit a block), but cost 10 to 15% of the load time, so the blocks stay 64 MB.
+
 ### Streaming bulk load on all of RINF
 
 All of RINF (61 files, 6.9 GB of N-Triples, 41,145,174 triples), TripleTrail store, 4 cores, one run
