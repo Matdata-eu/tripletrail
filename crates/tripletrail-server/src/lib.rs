@@ -4658,3 +4658,18 @@ fn set_nodelay(listener: &std::net::TcpListener) {
 
 #[cfg(not(unix))]
 fn set_nodelay(_listener: &std::net::TcpListener) {}
+
+/// An HTTP client's settings as ureq 2's defaults were (#339): no proxy from the environment,
+/// 30 s to connect, at most 5 redirects. The caller adds its own and builds the agent.
+#[cfg(any(
+    feature = "git",
+    feature = "otel",
+    feature = "replication",
+    feature = "enterprise"
+))]
+pub(crate) fn http_config() -> ureq3::config::ConfigBuilder<ureq3::typestate::AgentScope> {
+    ureq3::Agent::config_builder()
+        .proxy(None)
+        .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .max_redirects(5)
+}

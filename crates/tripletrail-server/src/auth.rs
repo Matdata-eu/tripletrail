@@ -1787,26 +1787,30 @@ fn parse_auth(root: &serde_json::Value) -> Result<Config, String> {
 /// Posts a form (a sign-in's code, to the provider's token endpoint) and gives the answer.
 #[cfg(feature = "enterprise")]
 fn post_form(url: &str, form: &[(&str, &str)]) -> Result<String, String> {
-    let answer = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .redirects(0)
+    let agent: ureq3::Agent = crate::http_config()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .max_redirects(0)
+        .http_status_as_error(false)
         .build()
+        .into();
+    let mut answer = agent
         .post(url)
-        .set("Accept", "application/json")
-        .send_form(form);
-    match answer {
-        Ok(r) => r.into_string().map_err(|e| e.to_string()),
+        .header("Accept", "application/json")
+        .send_form(form.iter().copied())
+        .map_err(|e| e.to_string())?;
+    let code = answer.status().as_u16();
+    let text = answer.body_mut().read_to_string();
+    if code >= 400 {
         // The provider says why (`{"error": "invalid_grant", ...}`).
-        Err(ureq::Error::Status(code, r)) => Err(format!(
+        return Err(format!(
             "{code} {}",
-            r.into_string()
-                .unwrap_or_default()
+            text.unwrap_or_default()
                 .chars()
                 .take(300)
                 .collect::<String>()
-        )),
-        Err(e) => Err(e.to_string()),
+        ));
     }
+    text.map_err(|e| e.to_string())
 }
 
 /// Keeps the single sign-on of `old` (its fetched keys, sign-ins under way and sessions) when
@@ -1835,15 +1839,18 @@ pub(crate) fn session_cookie(header: &dyn Fn(&str) -> Option<String>) -> Option<
 /// Fetches an OIDC discovery document or JWKS (#198).
 #[cfg(feature = "enterprise")]
 fn fetch_document(url: &str) -> Result<String, String> {
-    ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .redirects(0)
+    let agent: ureq3::Agent = crate::http_config()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .max_redirects(0)
         .build()
+        .into();
+    agent
         .get(url)
-        .set("Accept", "application/json")
+        .header("Accept", "application/json")
         .call()
         .map_err(|e| e.to_string())?
-        .into_string()
+        .body_mut()
+        .read_to_string()
         .map_err(|e| e.to_string())
 }
 
