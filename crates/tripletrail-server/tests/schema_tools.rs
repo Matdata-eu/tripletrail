@@ -487,3 +487,241 @@ impl Drop for Server {
         let _ = self.0.wait();
     }
 }
+
+/// A schema of stations with tracks, in a namespace: an attribute, simple elements, an
+/// enumeration and a repeated element of a named type.
+const LIFT_XSD: &str = r#"<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:st="http://example.org/st"
+    targetNamespace="http://example.org/st" elementFormDefault="qualified">
+  <xs:element name="stations">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="station" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="name" type="xs:string"/>
+              <xs:element name="kind" type="st:kind"/>
+              <xs:element name="track" type="st:trackType" minOccurs="0" maxOccurs="unbounded"/>
+            </xs:sequence>
+            <xs:attribute name="code" type="xs:string" use="required"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:complexType name="trackType">
+    <xs:sequence>
+      <xs:element name="number" type="xs:positiveInteger"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:simpleType name="kind">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="main"/>
+      <xs:enumeration value="halt"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>
+"#;
+
+const LIFT_XML: &str = r#"<stations xmlns="http://example.org/st">
+  <station code="A1"><name>Alpha</name><kind>main</kind><track><number>1</number></track><track><number>2</number></track></station>
+  <station code="B2"><name>Beta</name><kind>halt</kind></station>
+</stations>
+"#;
+
+/// What `xsd2rdf --source-provenance` writes for `LIFT_XSD` (read from its source; the real
+/// tool's run is the test after this one): node shapes per element and type, property shapes
+/// with `xsd2rdf:xmlName`, and the enumeration as SKOS concepts.
+const LIFT_SHAPES: &str = r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix ex: <https://data.example.org/stations/> .
+@prefix ns: <https://data.example.org/stations/shapes/NodeShape/> .
+@prefix ps: <https://data.example.org/stations/shapes/PropertyShape/> .
+ns:stations a sh:NodeShape ; sh:nodeKind sh:IRI ; sh:targetClass ex:Stations ; sh:property ps:stations\/station .
+ps:stations\/station a sh:PropertyShape ; sh:path ex:hasStation ; sh:nodeKind sh:IRI ; sh:class ex:Station ;
+  sh:node ns:stations\/station ; sh:minCount 1 .
+ns:stations\/station a sh:NodeShape ; sh:nodeKind sh:IRI ; sh:targetClass ex:Station ;
+  sh:property ps:station\/code , ps:station\/name , ps:station\/kind , ps:station\/track .
+ps:station\/code a sh:PropertyShape ; sh:path ex:code ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 .
+ps:station\/name a sh:PropertyShape ; sh:path ex:name ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 .
+ps:station\/kind a sh:PropertyShape ; sh:path ex:kind ; sh:nodeKind sh:IRI ; sh:class skos:Concept ; sh:minCount 1 ;
+  sh:sparql [ a sh:SPARQLConstraint ; sh:select """PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+    SELECT $this WHERE { $this $PATH ?concept . FILTER NOT EXISTS { ?concept skos:inScheme <https://data.example.org/stations/concepts/Kind> . } }""" ] .
+ps:station\/track a sh:PropertyShape ; sh:path ex:track ; sh:nodeKind sh:IRI ; sh:node ns:trackType .
+ns:trackType a sh:NodeShape ; sh:nodeKind sh:IRI ; sh:targetClass ex:TrackType ; sh:property ps:trackType\/number .
+ps:trackType\/number a sh:PropertyShape ; sh:path ex:number ; sh:datatype xsd:positiveInteger ; sh:minCount 1 .
+"#;
+
+const LIFT_PROVENANCE: &str = r#"@prefix dct: <http://purl.org/dc/terms/> .
+@prefix x: <https://w3id.org/xsd2rdf#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ns: <https://data.example.org/stations/shapes/NodeShape/> .
+@prefix ps: <https://data.example.org/stations/shapes/PropertyShape/> .
+ns:stations dct:source "st.xsd#xmlns(st=http://example.org/st)xscd(/schemaElement::st:stations)"^^xsd:anyURI .
+ns:stations\/station dct:source "st.xsd#xmlns(st=http://example.org/st)xscd(/schemaElement::st:stations/type::0/model::sequence/schemaElement::st:station)"^^xsd:anyURI .
+ps:stations\/station x:xmlName "station" ; x:xmlNamespace "http://example.org/st"^^xsd:anyURI ; x:xmlNodeKind "element" .
+ps:station\/code x:xmlName "code" ; x:xmlNodeKind "attribute" .
+ps:station\/name x:xmlName "name" ; x:xmlNamespace "http://example.org/st"^^xsd:anyURI ; x:xmlNodeKind "element" .
+ps:station\/kind x:xmlName "kind" ; x:xmlNamespace "http://example.org/st"^^xsd:anyURI ; x:xmlNodeKind "element" .
+ps:station\/track x:xmlName "track" ; x:xmlNamespace "http://example.org/st"^^xsd:anyURI ; x:xmlNodeKind "element" .
+ps:trackType\/number x:xmlName "number" ; x:xmlNamespace "http://example.org/st"^^xsd:anyURI ; x:xmlNodeKind "element" .
+"#;
+
+const LIFT_SKOS: &str = r#"@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+<https://data.example.org/stations/concepts/Kind> a skos:ConceptScheme .
+<https://data.example.org/stations/concepts/Kind/main> a skos:Concept ; skos:notation "main"^^xsd:token ;
+  skos:inScheme <https://data.example.org/stations/concepts/Kind> .
+<https://data.example.org/stations/concepts/Kind/halt> a skos:Concept ; skos:notation "halt"^^xsd:token ;
+  skos:inScheme <https://data.example.org/stations/concepts/Kind> .
+"#;
+
+/// Lifts `LIFT_XML` with the query `schema lift` makes of the schema folder, and checks the
+/// data against the folder's shapes, with its concept schemes to look up.
+fn lift_and_validate(schema: &Path) -> (String, bool, String) {
+    let dir = schema.parent().unwrap();
+    let query = dir.join("lift.rq");
+    let (ok, _, err) = tripletrail(
+        &[
+            "schema",
+            "lift",
+            schema.to_str().unwrap(),
+            "--namespace",
+            NS,
+            "--output",
+            query.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(ok, "{err}");
+    std::fs::write(dir.join("stations.xml"), LIFT_XML).unwrap();
+    let data = dir.join("stations.nt");
+    let location = format!("location={}", dir.join("stations.xml").display());
+    let (ok, _, err) = tripletrail(
+        &[
+            "lift",
+            query.to_str().unwrap(),
+            "-v",
+            &location,
+            "--output",
+            data.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(ok, "{err}");
+    let (conforms, report, _) = tripletrail(
+        &[
+            "validate",
+            "--data",
+            data.to_str().unwrap(),
+            "--shapes",
+            schema.join("shapes.ttl").to_str().unwrap(),
+            "--lookup",
+            schema.join("skos.ttl").to_str().unwrap(),
+        ],
+        &[],
+    );
+    (std::fs::read_to_string(&data).unwrap(), conforms, report)
+}
+
+/// #277: the lift made from the shapes gives data the shapes accept, with no hand edits.
+#[test]
+fn the_lift_made_from_the_shapes_gives_data_they_accept() {
+    let dir = tripletrail_testdir::tempdir("schema-lift");
+    let schema = dir.join("schema");
+    std::fs::create_dir_all(&schema).unwrap();
+    for (name, text) in [
+        ("shapes.ttl", LIFT_SHAPES),
+        ("provenance.ttl", LIFT_PROVENANCE),
+        ("skos.ttl", LIFT_SKOS),
+    ] {
+        std::fs::write(schema.join(name), text).unwrap();
+    }
+    let (data, conforms, report) = lift_and_validate(&schema);
+    assert!(conforms, "{report}\n{data}");
+    let count = |q: &str| {
+        let e = Engine::new_tripletrail();
+        e.load(RdfFormat::NTriples, data.as_bytes()).unwrap();
+        match e
+            .query(&format!(
+                "PREFIX ex: <{NS}> SELECT (COUNT(*) AS ?n) {{ {q} }}"
+            ))
+            .unwrap()
+        {
+            QueryResults::Solutions(mut s) => {
+                s.next().unwrap().unwrap().get("n").unwrap().to_string()
+            }
+            _ => unreachable!(),
+        }
+    };
+    let n = |k: u32| format!("\"{k}\"^^<http://www.w3.org/2001/XMLSchema#integer>");
+    assert_eq!(count("?s a ex:Stations ; ex:hasStation ?x"), n(2));
+    assert_eq!(count("?s a ex:Station ; ex:code ?c ; ex:name ?m"), n(2));
+    assert_eq!(
+        count(
+            "?s ex:code \"A1\" ; ex:kind <https://data.example.org/stations/concepts/Kind/main> ; ex:track ?t . ?t a ex:TrackType ; ex:number ?k"
+        ),
+        n(2)
+    );
+    assert_eq!(
+        count("?t ex:number \"2\"^^<http://www.w3.org/2001/XMLSchema#positiveInteger>"),
+        n(1)
+    );
+    // The same file gives the same IRIs: they hash each element's place in the document.
+    let sorted = |d: &str| {
+        let mut lines: Vec<_> = d.lines().map(str::to_owned).collect();
+        lines.sort();
+        lines
+    };
+    let query = std::fs::read_to_string(dir.join("lift.rq")).unwrap();
+    assert_eq!(sorted(&lift_and_validate(&schema).0), sorted(&data));
+    assert_eq!(std::fs::read_to_string(dir.join("lift.rq")).unwrap(), query);
+    // Shapes without their provenance say where to get it.
+    std::fs::write(schema.join("provenance.ttl"), "").unwrap();
+    let (ok, _, err) = tripletrail(
+        &[
+            "schema",
+            "lift",
+            schema.to_str().unwrap(),
+            "--namespace",
+            NS,
+        ],
+        &[],
+    );
+    assert!(!ok && err.contains("tripletrail schema xsd"), "{err}");
+}
+
+/// The same with the real `xsd2rdf` (CI installs it): its shapes, provenance and concept
+/// schemes give a lift whose data they accept.
+#[test]
+fn the_lift_made_from_xsd2rdf_shapes_gives_data_they_accept() {
+    if !installed("xsd2rdf") {
+        assert!(
+            std::env::var_os("TRIPLETRAIL_SCHEMA_TOOLS_REQUIRED").is_none(),
+            "xsd2rdf is not installed"
+        );
+        eprintln!("skipped: xsd2rdf is not installed");
+        return;
+    }
+    let dir = tripletrail_testdir::tempdir("schema-lift-real");
+    let xsd = dir.join("stations.xsd");
+    std::fs::write(&xsd, LIFT_XSD).unwrap();
+    let schema = dir.join("schema");
+    let (ok, _, err) = tripletrail(
+        &[
+            "schema",
+            "xsd",
+            xsd.to_str().unwrap(),
+            "--namespace",
+            NS,
+            "--out",
+            schema.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(ok, "{err}");
+    let (data, conforms, report) = lift_and_validate(&schema);
+    assert!(conforms, "{report}\n{data}");
+    assert!(data.contains("\"Alpha\""), "{data}");
+}
