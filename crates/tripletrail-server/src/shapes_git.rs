@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tripletrail::geo::sync::RwLockUnpoisoned;
 use tripletrail::shapes::{self, SetFile};
+use ureq3 as ureq;
 
 /// One pull at a time, server-wide.
 static PULLS: Mutex<()> = Mutex::new(());
@@ -673,10 +674,11 @@ struct Ureq {
 impl Ureq {
     fn new(user: Option<&str>, token: Option<&str>) -> Self {
         Self {
-            agent: ureq::AgentBuilder::new()
-                .timeout_connect(Duration::from_secs(20))
-                .timeout_read(Duration::from_secs(120))
-                .build(),
+            agent: crate::http_config()
+                .timeout_connect(Some(Duration::from_secs(20)))
+                .timeout_per_read(Some(Duration::from_secs(120)))
+                .build()
+                .into(),
             authorization: token.map(|t| {
                 let user = user.unwrap_or("x-access-token");
                 format!("Basic {}", base64(format!("{user}:{t}").as_bytes()))
@@ -690,17 +692,18 @@ impl Ureq {
         headers: impl IntoIterator<Item = impl AsRef<str>>,
         post: Option<gix::protocol::transport::client::blocking_io::http::PostBodyDataKind>,
     ) -> Response {
-        let mut request = self
-            .agent
-            .request(if post.is_some() { "POST" } else { "GET" }, url);
+        let mut request = ureq::http::Request::builder()
+            .method(if post.is_some() { "POST" } else { "GET" })
+            .uri(url);
         for line in headers {
             if let Some((name, value)) = line.as_ref().split_once(':') {
-                request = request.set(name.trim(), value.trim());
+                request = request.header(name.trim(), value.trim());
             }
         }
         if let Some(auth) = &self.authorization {
-            request = request.set("Authorization", auth);
+            request = request.header("Authorization", auth);
         }
+        let agent = self.agent.clone();
         let (body_tx, body_rx) = sync_channel::<io::Result<Vec<u8>>>(8);
         let (head_tx, head_rx) = sync_channel(1);
         let (answer_tx, answer_rx) = sync_channel(8);
@@ -708,13 +711,19 @@ impl Ureq {
             let sent = match post {
                 None => {
                     drop(body_rx);
-                    request.call()
+                    request
+                        .body(())
+                        .map_err(ureq::Error::from)
+                        .and_then(|r| agent.run(r))
                 }
                 Some(_) => {
                     let mut body = Vec::new();
                     let read = Channel::new(body_rx).read_to_end(&mut body);
                     match read {
-                        Ok(_) => request.send_bytes(&body),
+                        Ok(_) => request
+                            .body(body)
+                            .map_err(ureq::Error::from)
+                            .and_then(|r| agent.run(r)),
                         Err(e) => {
                             let _ = head_tx.send(Err(e));
                             return;
@@ -724,14 +733,14 @@ impl Ureq {
             };
             let response = match sent {
                 Ok(r) => r,
-                Err(ureq::Error::Status(401, _)) => {
+                Err(ureq::Error::StatusCode(401)) => {
                     let _ = head_tx.send(Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
                         "the repository needs credentials (HTTP 401): check tokenFile",
                     )));
                     return;
                 }
-                Err(ureq::Error::Status(code, _)) => {
+                Err(ureq::Error::StatusCode(code)) => {
                     let _ = head_tx.send(Err(io::Error::other(format!("HTTP status {code}"))));
                     return;
                 }
@@ -741,8 +750,8 @@ impl Ureq {
                 }
             };
             let mut head = Vec::new();
-            for name in response.headers_names() {
-                if let Some(value) = response.header(&name) {
+            for name in response.headers().keys() {
+                if let Some(value) = response.headers().get(name).and_then(|v| v.to_str().ok()) {
                     head.extend_from_slice(format!("{name}: {value}\n").as_bytes());
                 }
             }
@@ -750,7 +759,7 @@ impl Ureq {
                 return;
             }
             drop(head_tx);
-            let mut reader = response.into_reader();
+            let mut reader = response.into_body().into_reader();
             let mut chunk = vec![0u8; 64 * 1024];
             loop {
                 match reader.read(&mut chunk) {

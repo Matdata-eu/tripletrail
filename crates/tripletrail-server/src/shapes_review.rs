@@ -21,6 +21,7 @@ use tripletrail::oxigraph::model::{
     Graph, NamedNode, NamedOrBlankNode, NamedOrBlankNodeRef, TermRef,
 };
 use tripletrail::shapes::{Reader, SetFile};
+use ureq3 as ureq;
 
 fn sh(local: &str) -> NamedNode {
     NamedNode::new_unchecked(format!("http://www.w3.org/ns/shacl#{local}"))
@@ -1232,46 +1233,52 @@ impl Forge {
         body: Option<&Value>,
         timeout: Duration,
     ) -> Result<Value, HttpError> {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(timeout)
-            .redirects(0)
-            .build();
-        let mut request = agent
-            .request(method, &format!("{}{path}", self.api))
-            .set("User-Agent", "TripleTrail")
-            .set("Accept", "application/json");
+        let agent: ureq::Agent = crate::http_config()
+            .timeout_global(Some(timeout))
+            .max_redirects(0)
+            // The forge's reason for an error status is read below.
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let what = format!("{} {method} {path}", self.kind.name());
+        let mut request = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{}{path}", self.api))
+            .header("User-Agent", "TripleTrail")
+            .header("Accept", "application/json");
         request = match self.kind {
             Kind::GitHub => request
-                .set("Authorization", &format!("Bearer {token}"))
-                .set("X-GitHub-Api-Version", "2022-11-28"),
-            Kind::GitLab => request.set("PRIVATE-TOKEN", token),
+                .header("Authorization", format!("Bearer {token}"))
+                .header("X-GitHub-Api-Version", "2022-11-28"),
+            Kind::GitLab => request.header("PRIVATE-TOKEN", token),
         };
+        let bad = |e: ureq::http::Error| HttpError(502, format!("{what}: {e}"));
         let answer = match body {
-            Some(b) => request
-                .set("Content-Type", "application/json")
-                .send_string(&b.to_string()),
-            None => request.call(),
+            Some(b) => agent.run(
+                request
+                    .header("Content-Type", "application/json")
+                    .body(b.to_string())
+                    .map_err(bad)?,
+            ),
+            None => agent.run(request.body(()).map_err(bad)?),
         };
-        let what = format!("{} {method} {path}", self.kind.name());
-        match answer {
-            Ok(r) => {
-                let text = r.into_string().map_err(|e| HttpError(502, e.to_string()))?;
-                serde_json::from_str(&text)
-                    .map_err(|e| HttpError(502, format!("{what}: not JSON: {e}")))
-            }
-            Err(ureq::Error::Status(code, r)) => Err(HttpError(
+        let mut r = answer.map_err(|e| HttpError(502, format!("{what}: {e}")))?;
+        let code = r.status().as_u16();
+        let text = r.body_mut().read_to_string();
+        if code >= 400 {
+            return Err(HttpError(
                 502,
                 format!(
                     "{what}: {code} {}",
-                    r.into_string()
-                        .unwrap_or_default()
+                    text.unwrap_or_default()
                         .chars()
                         .take(300)
                         .collect::<String>()
                 ),
-            )),
-            Err(e) => Err(HttpError(502, format!("{what}: {e}"))),
+            ));
         }
+        let text = text.map_err(|e| HttpError(502, e.to_string()))?;
+        serde_json::from_str(&text).map_err(|e| HttpError(502, format!("{what}: not JSON: {e}")))
     }
 
     /// Comments on the pull (merge) request `number`.

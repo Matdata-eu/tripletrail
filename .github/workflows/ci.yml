@@ -46,6 +46,10 @@ env:
   # fetched, never copied into the repository), bumped the same way.
   GEOSPARQL_BENCHMARK_COMMIT: 879e0746e74c1327f74e57366104bcf1a6d63fb1
 
+# The jobs only read the repository.
+permissions:
+  contents: read
+
 jobs:
   # One job builds and tests everything (workspace, every feature, Python binding): one queue
   # slot and one cache restore per run. As three jobs, each waited for a free runner and spent

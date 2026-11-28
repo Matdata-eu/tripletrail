@@ -856,6 +856,19 @@ fn geo_evaluator() -> SparqlEvaluator {
 /// The default of [`Engine::set_default_executor_ids`], for the whole process.
 static EXECUTOR_IDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+thread_local! {
+    /// The snapshot [`Engine::query_on`] has queries of its store read, on this thread.
+    static PINNED: std::cell::RefCell<Option<Snapshot>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The snapshot a query of `store` reads: a new one, or the one [`Engine::query_on`] gives.
+fn query_snapshot(store: &tripletrail_store::Store) -> Snapshot {
+    PINNED
+        .with(|p| p.borrow().clone())
+        .filter(|s| s.store_id() == store.store_id())
+        .unwrap_or_else(|| store.snapshot())
+}
+
 /// Whether the id executor runs this query: its `#pragma tt.executor`, else the default.
 pub(crate) fn executor_ids() -> bool {
     Hints::current()
@@ -1638,6 +1651,26 @@ impl Engine {
         })
     }
 
+    /// [`Engine::query`] on `snapshot`, a snapshot of this engine's tripletrail store taken
+    /// earlier, without the result cache: what a query whose snapshot was taken before a
+    /// write and read after it answers (#328), for tests. Only the parts of the evaluation
+    /// that read the query's snapshot (not the spatial index, say) answer for it.
+    #[doc(hidden)]
+    pub fn query_on(
+        &self,
+        snapshot: Snapshot,
+        query: &str,
+    ) -> Result<QueryResults<'static>, Error> {
+        struct Unpin(Option<Snapshot>);
+        impl Drop for Unpin {
+            fn drop(&mut self) {
+                PINNED.with(|p| *p.borrow_mut() = self.0.take());
+            }
+        }
+        let _unpin = Unpin(PINNED.with(|p| p.borrow_mut().replace(snapshot)));
+        self.query(query)
+    }
+
     pub fn query(&self, query: &str) -> Result<QueryResults<'static>, Error> {
         self.query_with_options(query, QueryOptions::default())
     }
@@ -1784,6 +1817,8 @@ impl Engine {
     fn cache_key(&self, query: &spargebra::Query, options: &QueryOptions) -> Option<(String, u64)> {
         if self.results.budget() == 0
             || Hints::current().skips_cache()
+            // Cached by the store's generation, not that of an older snapshot.
+            || PINNED.with(|p| p.borrow().is_some())
             || !matches!(
                 query,
                 spargebra::Query::Select { .. } | spargebra::Query::Ask { .. }
@@ -2712,6 +2747,12 @@ impl Engine {
         {
             return Ok(results);
         }
+        // The view the query is evaluated on, taken before the rewrites that read what is
+        // derived from it: the range columns must not be newer than it (#328).
+        let at = match &self.store {
+            Dataset::TripleTrail(store) => Some(query_snapshot(store)),
+            Dataset::Oxigraph(_) => None,
+        };
         if rewrite && self.spatial_rewrite_on() {
             if dataset.is_none()
                 && shortcuts
@@ -2723,21 +2764,21 @@ impl Engine {
             let (rewritten, stats) = rewrite_query(query, self);
             query = rewritten;
             if dataset.is_none() && shortcuts {
-                query = range::rewrite(query, self).0;
+                query = range::rewrite(query, self, at.as_ref()).0;
             }
             *self.spatial.last.lock_unpoisoned() = stats;
             self.check_cancelled()?;
         }
         // Joins written as filters (#185), before the count shortcuts read the pattern.
         // Substituted variables are bound already: they are not renamed.
-        if shortcuts && let Dataset::TripleTrail(store) = &self.store {
-            query = equality::rewrite_query(query, &resources(&store.snapshot()));
+        if shortcuts && let Some(at) = &at {
+            query = equality::rewrite_query(query, &resources(at));
         }
         // The view the rewrites read is the one the query is evaluated on: the terms they make
         // up are known only to it (#11).
         let mut base = None;
-        if shortcuts && let Dataset::TripleTrail(store) = &self.store {
-            let snapshot = store.snapshot();
+        if shortcuts && let Some(at) = &at {
+            let snapshot = at.clone();
             base = Some(snapshot.clone());
             // The union of all graphs as the default graph: every graph, without the copies
             // of a triple held by several (#808), so each triple is read once.
@@ -2754,7 +2795,7 @@ impl Engine {
                 if executor_ids() && !Hints::current().id_rewrites_off {
                     // With the tables the count pass just registered (groups read back, #185).
                     let tabled = snapshot.clone().with_pending_tables();
-                    let columns = |p: &NamedNode| self.spatial.ranges.column(self, p);
+                    let columns = |p: &NamedNode| self.spatial.ranges.column(self, p, Some(at));
                     let eval = idtree::Eval {
                         snapshot: &tabled,
                         cancelled: &|| self.is_cancelled(),
@@ -2779,8 +2820,8 @@ impl Engine {
                 }
             }
         }
-        if let Dataset::TripleTrail(store) = &self.store {
-            let snapshot = base.get_or_insert_with(|| store.snapshot());
+        if let Some(at) = at {
+            let snapshot = base.get_or_insert(at);
             query = zero_length::rewrite(query, snapshot, dataset);
         }
         let mut prepared = self.evaluator().for_query(plan::plan_query(query));
@@ -2916,6 +2957,11 @@ impl Engine {
         // Asked once: a named graph committed while the query is prepared must not make its
         // rewrites read the default graph and its evaluation the union (#808).
         let reads_union = self.reads_named_graphs_as_default();
+        // As run_query_scoped: the view taken before the rewrites (#328).
+        let at = match &self.store {
+            Dataset::TripleTrail(store) => Some(query_snapshot(store)),
+            Dataset::Oxigraph(_) => None,
+        };
         let narrowed = match readable {
             // Explain counts rows without the services' scope: no SERVICE at all here.
             Some(_) if query.to_string().contains("SERVICE ") => {
@@ -2936,21 +2982,21 @@ impl Engine {
             if reads_union && !has_own_dataset(&rewritten) {
                 query = rewritten;
             } else {
-                (query, ranges) = range::rewrite(rewritten, self);
+                (query, ranges) = range::rewrite(rewritten, self, at.as_ref());
             }
         }
         // While the ids executor is on: whether it answers the query or hands it on.
         let mut executor = None;
         let union = !has_own_dataset(&query);
-        if let Dataset::TripleTrail(store) = &self.store {
-            query = equality::rewrite_query(query, &resources(&store.snapshot()));
+        if let Some(at) = &at {
+            query = equality::rewrite_query(query, &resources(at));
         }
         // As run_query_scoped: evaluated on the view the rewrites read.
         let mut base = None;
         if narrowed.is_none()
-            && let Dataset::TripleTrail(store) = &self.store
+            && let Some(at) = &at
         {
-            let snapshot = store.snapshot();
+            let snapshot = at.clone();
             base = Some(snapshot.clone());
             // As run_query_scoped: the union reads every graph without the copies (#808).
             let on = if union && reads_union {
@@ -2963,7 +3009,7 @@ impl Engine {
                 // Which executor answers it (#11), as run_query_scoped decides.
                 if executor_ids() && !Hints::current().id_rewrites_off {
                     let tabled = snapshot.clone().with_pending_tables();
-                    let columns = |p: &NamedNode| self.spatial.ranges.column(self, p);
+                    let columns = |p: &NamedNode| self.spatial.ranges.column(self, p, Some(at));
                     let eval = idtree::Eval {
                         snapshot: &tabled,
                         cancelled: &|| self.is_cancelled(),
@@ -2987,8 +3033,8 @@ impl Engine {
             Some(d) => Some(d.clone()),
             None => (union && reads_union).then(union_dataset),
         };
-        if let Dataset::TripleTrail(store) = &self.store {
-            let snapshot = base.get_or_insert_with(|| store.snapshot());
+        if let Some(at) = at {
+            let snapshot = base.get_or_insert(at);
             query = zero_length::rewrite(query, snapshot, dataset.as_ref());
         }
         let mut prepared = self.evaluator().for_query(plan::plan_query(query));
@@ -3474,6 +3520,7 @@ impl Engine {
         self.refresh(
             &predicates,
             Some(changes.iter()),
+            changes.generation(),
             geometries.iter().map(|(a, p, o)| (*a, p.as_ref(), o)),
         );
     }
@@ -3648,11 +3695,13 @@ impl Engine {
     /// is patched with the geometry literals (and other `geo:asWKT` objects) added (`true`) or
     /// removed (`false`), given with their predicate, rather than dropped. With `changes`, the
     /// quads the write added and removed (each once), the numeric range columns are patched
-    /// too; without, those of the predicates are dropped.
+    /// too; without, those of the predicates are dropped. `generation`: the store generation
+    /// the write's commit made, if known (the range columns are tied to it, #328).
     fn refresh<'a>(
         &self,
         predicates: &HashSet<&str>,
         changes: Option<impl IntoIterator<Item = (bool, Quad)>>,
+        generation: Option<u64>,
         geometries: impl IntoIterator<Item = (bool, NamedNodeRef<'a>, &'a Term)>,
     ) {
         if predicates.is_empty() {
@@ -3660,7 +3709,13 @@ impl Engine {
         }
         self.spatial.counts.lock_unpoisoned().invalidate(predicates);
         match changes {
-            Some(changes) => self.spatial.ranges.apply(changes),
+            Some(changes) => {
+                let committed = match &self.store {
+                    Dataset::TripleTrail(store) => Some((store, generation)),
+                    Dataset::Oxigraph(_) => None,
+                };
+                self.spatial.ranges.apply(changes, committed);
+            }
             None => self.spatial.ranges.invalidate(predicates.iter().copied()),
         }
         {
@@ -4358,20 +4413,50 @@ impl Engine {
 
     /// Adds a quad, keeping the spatial index and the networks it doesn't affect.
     pub fn insert(&self, quad: &Quad) -> Result<(), Error> {
-        let changed = self.store.insert_reporting(quad)?;
-        self.refresh_quad(true, quad, changed);
+        let (changed, generation) = self.write_quad(true, quad)?;
+        self.refresh_quad(true, quad, changed, generation);
         Ok(())
     }
 
     /// Removes a quad, keeping the spatial index and the networks it doesn't affect.
     pub fn remove(&self, quad: &Quad) -> Result<(), Error> {
-        let changed = self.store.remove_reporting(quad)?;
-        self.refresh_quad(false, quad, changed);
+        let (changed, generation) = self.write_quad(false, quad)?;
+        self.refresh_quad(false, quad, changed, generation);
         Ok(())
     }
 
+    /// Adds or removes one quad: whether the store says it changed (`None`: it doesn't), and
+    /// the generation its commit made (on the tripletrail store, when it changed).
+    fn write_quad(&self, added: bool, quad: &Quad) -> Result<(Option<bool>, Option<u64>), Error> {
+        let Dataset::TripleTrail(store) = &self.store else {
+            let changed = if added {
+                self.store.insert_reporting(quad)?
+            } else {
+                self.store.remove_reporting(quad)?
+            };
+            return Ok((changed, None));
+        };
+        let (changed, changes) = store
+            .transaction_with_changes(|t| {
+                Ok::<_, tripletrail_store::StoreError>(if added {
+                    t.insert(quad)
+                } else {
+                    t.remove(quad)
+                })
+            })
+            .map_err(DatasetError::from)?;
+        Ok((Some(changed), changes.generation()))
+    }
+
     /// `changed`: whether the store says the quad was added or removed (`None`: it doesn't).
-    fn refresh_quad(&self, added: bool, quad: &Quad, changed: Option<bool>) {
+    /// `generation`: the one its commit made, if known.
+    fn refresh_quad(
+        &self,
+        added: bool,
+        quad: &Quad,
+        changed: Option<bool>,
+        generation: Option<u64>,
+    ) {
         not_counted();
         if self.rdfs_entailment().is_some() {
             // The write changed the entailment too, which the store does not report.
@@ -4384,7 +4469,7 @@ impl Engine {
             &quad.object,
         ));
         let changes = changed.map(|c| c.then(|| (added, quad.clone())));
-        self.refresh(&predicates, changes, geometry);
+        self.refresh(&predicates, changes, generation, geometry);
     }
 
     /// Bulk-loads quads. Networks whose edge query reads none of the loaded predicates are
@@ -4409,6 +4494,7 @@ impl Engine {
         self.refresh(
             &predicates,
             None::<[(bool, Quad); 0]>,
+            None,
             geometries.iter().map(|(p, o)| (true, p.as_ref(), o)),
         );
         Ok(())

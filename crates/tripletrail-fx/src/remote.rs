@@ -207,6 +207,20 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// Sends `request` with `timeout` for the whole of it.
+#[cfg(feature = "remote")]
+fn run<S: ureq::AsSendBody>(
+    agent: &ureq::Agent,
+    request: ureq::http::Request<S>,
+    timeout: std::time::Duration,
+) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    let request = agent
+        .configure_request(request)
+        .timeout_global(Some(timeout))
+        .build();
+    agent.run(request)
+}
+
 /// Reads `location` over HTTP, under `config` and the `http.*` options.
 #[cfg(feature = "remote")]
 pub(crate) fn fetch(
@@ -251,12 +265,18 @@ pub(crate) fn fetch(
     }
     let follow = options.flag("http.redirect", true)?;
     let mut url = with_query(location, options);
-    let agent = ureq::AgentBuilder::new()
-        .timeout(config.timeout)
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(config.timeout))
+        // ureq 2's connect timeout, kept with ureq 3 (which has none by default).
+        .timeout_connect(Some(std::time::Duration::from_secs(30)))
         // Redirects are followed here, each checked against the allowlist.
-        .redirects(0)
+        .max_redirects(0)
+        .http_status_as_error(false)
+        // No proxy from the environment, as before ureq 3.
+        .proxy(None)
         .user_agent(concat!("tripletrail/", env!("CARGO_PKG_VERSION")))
-        .build();
+        .build()
+        .into();
     let started = std::time::Instant::now();
     // Headers and credentials go only to the first URL's origin, as curl and browsers do: a
     // redirect to another host, even an allowed one, must not carry them.
@@ -269,35 +289,43 @@ pub(crate) fn fetch(
             .timeout
             .checked_sub(started.elapsed())
             .ok_or_else(|| fail(&url, &"timed out"))?;
-        let mut request = agent.request(&method, &url).timeout(left);
+        let mut request = ureq::http::Request::builder()
+            .method(method.as_str())
+            .uri(url.as_str());
         let same_origin =
             origin.is_some() && Endpoint::parse(&url).map(|e| (e.scheme, e.host, e.port)) == origin;
         for (name, value) in options.0.iter().filter(|_| same_origin) {
             if let Some(header) = name.strip_prefix("http.header.") {
-                request = request.set(header, value);
+                request = request.header(header, value.as_str());
             }
         }
         if same_origin && let Some(user) = options.get("http.auth.user") {
             let password = options.get("http.auth.password").unwrap_or_default();
-            request = request.set(
+            request = request.header(
                 "Authorization",
-                &format!("Basic {}", base64(format!("{user}:{password}").as_bytes())),
+                format!("Basic {}", base64(format!("{user}:{password}").as_bytes())),
             );
         }
         let response = match &payload {
-            Some(body) => request.send_string(body),
-            None => request.call(),
-        };
-        let response = match response {
-            Ok(r) => r,
-            Err(ureq::Error::Status(code, _)) => {
-                return Err(fail(&url, &format!("HTTP status {code}")));
-            }
-            Err(e) => return Err(fail(&url, &e)),
-        };
-        let status = response.status();
+            Some(body) => request
+                .body(body.clone())
+                .map_err(|e| fail(&url, &e))
+                .and_then(|r| run(&agent, r, left).map_err(|e| fail(&url, &e))),
+            None => request
+                .body(())
+                .map_err(|e| fail(&url, &e))
+                .and_then(|r| run(&agent, r, left).map_err(|e| fail(&url, &e))),
+        }?;
+        let status = response.status().as_u16();
+        if status >= 400 {
+            return Err(fail(&url, &format!("HTTP status {status}")));
+        }
         if (300..400).contains(&status) {
-            let Some(next) = response.header("Location") else {
+            let Some(next) = response
+                .headers()
+                .get("Location")
+                .and_then(|v| v.to_str().ok())
+            else {
                 return Err(fail(
                     &url,
                     &format!("HTTP status {status} without a Location"),
@@ -322,7 +350,9 @@ pub(crate) fn fetch(
             continue;
         }
         let media_type = response
-            .header("Content-Type")
+            .headers()
+            .get("Content-Type")
+            .and_then(|v| v.to_str().ok())
             .map(|m| {
                 m.split(';')
                     .next()
@@ -334,6 +364,7 @@ pub(crate) fn fetch(
         let mut bytes = Vec::new();
         let limit = config.max_bytes;
         response
+            .into_body()
             .into_reader()
             .take(limit as u64 + 1)
             .read_to_end(&mut bytes)

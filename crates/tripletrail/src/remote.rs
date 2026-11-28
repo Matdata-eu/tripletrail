@@ -50,6 +50,8 @@ impl Default for RemoteConfig {
 
 /// Answers kept in the cache at most.
 const CACHE_ENTRIES: usize = 256;
+/// ureq 2's connect timeout, kept with ureq 3 (which has none by default).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 type Answer = (
     Arc<[Variable]>,
@@ -73,12 +75,18 @@ pub struct RemoteError(pub String);
 
 impl RemoteService {
     pub fn new(config: RemoteConfig) -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(config.timeout)
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(config.timeout))
+            .timeout_connect(Some(CONNECT_TIMEOUT))
             // A redirect could lead off the allowlist (to a host inside the network).
-            .redirects(0)
+            .max_redirects(0)
+            // An error status is read below, for the endpoint's reason.
+            .http_status_as_error(false)
+            // No proxy from the environment, as before ureq 3.
+            .proxy(None)
             .user_agent(concat!("tripletrail/", env!("CARGO_PKG_VERSION")))
-            .build();
+            .build()
+            .into();
         Self {
             config: Arc::new(config),
             agent,
@@ -142,23 +150,28 @@ impl RemoteService {
         let response = self
             .agent
             .post(endpoint)
-            .set("Content-Type", "application/sparql-query")
-            .set(
+            .header("Content-Type", "application/sparql-query")
+            .header(
                 "Accept",
                 "application/sparql-results+json, application/sparql-results+xml;q=0.9, \
                  text/tab-separated-values;q=0.8",
             )
-            .send_string(query)
-            .map_err(|e| match e {
-                ureq::Error::Status(code, r) => {
-                    let mut text = String::new();
-                    let _ = r.into_reader().take(500).read_to_string(&mut text);
-                    fail(format!("HTTP {code}: {}", text.trim()))
-                }
-                other => fail(other.to_string()),
-            })?;
+            .send(query)
+            .map_err(|e| fail(e.to_string()))?;
+        let code = response.status().as_u16();
+        if code >= 400 {
+            let mut text = String::new();
+            let _ = response
+                .into_body()
+                .into_reader()
+                .take(500)
+                .read_to_string(&mut text);
+            return Err(fail(format!("HTTP {code}: {}", text.trim())));
+        }
         let media = response
-            .header("Content-Type")
+            .headers()
+            .get("Content-Type")
+            .and_then(|v| v.to_str().ok())
             .unwrap_or("application/sparql-results+xml")
             .split(';')
             .next()
@@ -170,6 +183,7 @@ impl RemoteService {
         let mut body = Vec::new();
         let limit = self.config.max_bytes;
         response
+            .into_body()
             .into_reader()
             .take(limit as u64 + 1)
             .read_to_end(&mut body)

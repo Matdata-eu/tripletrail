@@ -481,7 +481,8 @@ percent-encoded, so a customised set can override it by IRI) with:
   first, `tts:listsFacets ( key … )`), computed facets (`tts:select`, never
   generated: a SPARQL group pattern, full IRIs, that binds `?value` for the feature `$this` in
   place of the facet's path; it is joined where the feature is bound, its other variables
-  renamed apart, and only the map reads it: it is no property or filter of the OGC API) and
+  renamed apart, and the map reads it; the OGC API's items carry it by default (#356), but it is
+  no property shape: not under `properties=*`, nor a filter there) and
   `sh:group` for describe pages. A class
   without a geometry is `tts:hiddenFrom` the map and OGC API Features. Two kinds of classes
   with a geometry are hidden from the map only (#139), as it would draw their features twice:
@@ -3295,9 +3296,9 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   it is part of (#316); of those the most detailed (most coordinates, then most digits), as
   data often holds a rounded and an exact copy; `geometries=all` gives a `GeometryCollection`
   of them all instead. Longitudes and latitudes have at most 7 decimals (about a centimetre,
-  as RINF Atlas's PostGIS writes them), Web Mercator's metres 2; the properties are the values of the shape's property
-  shapes under their `tts:key`, numbers and booleans typed, IRIs as strings, several values as
-  an array. The feature id is its IRI; `…/items/{id}` takes it percent-encoded. A dataset with
+  as RINF Atlas's PostGIS writes them), Web Mercator's metres 2. The properties are values
+  under their `tts:key`, numbers and booleans typed, several values as an array (see
+  **Properties** below). The feature id is its IRI; `…/items/{id}` takes it percent-encoded. A dataset with
   one base IRI (`--base-iri`) gives the features under it their IRI's local part as id
   (`https://data.example.org/s1` is `s1`, at `…/items/s1`); the whole IRI still finds them, and
   a feature outside the base, or whose local part is an IRI itself, keeps its IRI.
@@ -3311,13 +3312,23 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   are refused with `400`. Features come in the order
   the store finds them (no sort, so the first page of a large class is fast), which stays the
   same while the dataset does not change: a write between two pages can shift them.
+- **Properties** (#356). By default a feature carries the collection's facets, the
+  properties a map shows and filters by (computed facets too), in the shapes' order, with each
+  IRI value as its label: the `rdfs:label` or `skos:prefLabel` in the reader's language (`lang`,
+  else the request's `Accept-Language`, else English, as the map's facets), without what
+  `tts:labelStrip` matches; an IRI without a label stays its IRI. `properties=*` (OGC API
+  Features Part 6) gives every property shape's values instead, IRIs as IRIs, and
+  `properties=a,b` those keys (of the property shapes or the facets), also IRIs as IRIs; an
+  unknown key is refused with `400`. A collection without facets (shapes without
+  `tts:facet`) gives every property by default, as `properties=*`. One feature,
+  `…/items/{id}`, takes the same.
 - **Property filters.** A property with an `tts:facet` in the shapes (generated shapes give
   one to properties with a few values or a range) filters the items by its key:
   `…/items?tracks=2&open=true` keeps the features with those values, compared as text (an
   IRI by its full form). Several filters must all hold. The OpenAPI definition lists them per
   collection; a property without a facet is refused as an unknown parameter. A key that is
   also a parameter of the items (`limit`, `offset`, `bbox`, `bbox-crs`, `crs`, `datetime`,
-  `geometries`, `filter`, `filter-lang`, `filter-crs`, `area`, `rel`, `dist`, `f`, `timeout`) is never a filter:
+  `geometries`, `filter`, `filter-lang`, `filter-crs`, `area`, `rel`, `dist`, `properties`, `lang`, `f`, `timeout`) is never a filter:
   give the property another `tts:key`.
 - **CQL2** (Part 3). `filter` takes a CQL2 expression over the collection's queryables,
   `…/collections/{id}/queryables` (a JSON Schema): every property of the collection, typed

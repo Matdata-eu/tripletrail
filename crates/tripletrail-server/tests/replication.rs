@@ -627,7 +627,9 @@ fn more_writers_than_threads_still_reach_their_replica() {
 #[test]
 fn writes_stop_waiting_for_a_replica_that_is_down_until_one_catches_up() {
     let dir = temp_dir("sync-down");
-    let timeout = Duration::from_millis(600);
+    // Long enough that a write which waits it out is told apart from a slow write on a busy
+    // runner (#290): a write that does not wait answers well within it.
+    let timeout = Duration::from_secs(2);
     let leader = sync_leader(&dir, 4, timeout);
     let (follower, handle) = sync_follower(&dir.join("first"), &leader);
     let (held, _) = sync_write(&leader, 0);
@@ -647,10 +649,13 @@ fn writes_stop_waiting_for_a_replica_that_is_down_until_one_catches_up() {
     assert_eq!(held, "0");
     assert!(took >= timeout, "{took:?}");
     assert_eq!(sync_status(&leader)["sync"]["waiting"], false);
+    // The state says the leader stopped waiting; the time only says no write waited the
+    // whole timeout out again, with no bound a loaded runner can cross.
     for i in 3..6 {
         let (held, took) = sync_write(&leader, i);
         assert_eq!(held, "0", "write {i}");
-        assert!(took < timeout / 2, "write {i}: {took:?}");
+        assert!(took < timeout, "write {i} waited out the timeout: {took:?}");
+        assert_eq!(sync_status(&leader)["sync"]["waiting"], false, "write {i}");
     }
 
     // A replica catches up: it holds the last write that answered, so writes wait again.

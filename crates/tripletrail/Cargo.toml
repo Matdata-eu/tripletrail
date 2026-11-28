@@ -36,7 +36,7 @@ serde_json = { workspace = true, optional = true }
 geo = { workspace = true, optional = true }
 rayon = { version = "1.12", optional = true }
 # SERVICE calls to remote SPARQL endpoints (feature `remote-service`).
-ureq = { version = "2", optional = true }
+ureq = { version = "3", optional = true }
 # Snowball stemmers of full-text search with `lang:` (#830), MIT.
 rust-stemmers = "1.2"
 

@@ -478,7 +478,9 @@ curl -s 'http://localhost:7878/ds/ogc/collections?f=json' | grep -o '"id":"[A-Za
 "id":"Station"
 ```
 
-Its items are GeoJSON features, with the class's properties. `bbox` keeps those in an area,
+Its items are GeoJSON features, with the class's facets: the properties the map shows and
+filters by, an IRI as its label in the reader's language (`lang=nl`, or the browser's
+`Accept-Language`). `bbox` keeps those in an area,
 and `filter` takes a [CQL2](https://docs.ogc.org/is/21-065r2/21-065r2.html) expression over
 the properties:
 
@@ -532,6 +534,24 @@ curl -s -G http://localhost:7878/ds/ogc/collections/Section/items -d f=json \
 "line":"50A"
 "line":"161"
 "line":"161"
+```
+
+A section's `from` and `to` stations are no facets, so they are not among its properties.
+`properties=*` gives every property, IRIs as IRIs, and `properties=line,to` just those:
+
+<!-- test: run -->
+```sh
+for p in '' '*' 'line,to'; do
+  curl -s -G http://localhost:7878/ds/ogc/collections/Section/items -d f=json -d limit=1 \
+    ${p:+--data-urlencode "properties=$p"} | grep -o '"properties":{[^}]*}'
+done
+```
+
+<!-- test: output -->
+```text
+"properties":{"electrified":true,"lengthKm":2,"line":"0","maxSpeed":50}
+"properties":{"electrified":true,"from":"https://example.org/rail#BXS","lengthKm":2,"line":"0","maxSpeed":50,"to":"https://example.org/rail#BXC"}
+"properties":{"line":"0","to":"https://example.org/rail#BXC"}
 ```
 
 `IN` keeps the features with one of a list of values. A list of strings matches a value by its
