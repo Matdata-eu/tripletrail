@@ -731,3 +731,4 @@ The OPTIONAL queries don't use the merge join and move within the noise of this 
 - The spatial index reads parsed geometries from the store, but the network builder still
   reads edges through SPARQL and strings. Building networks from term ids comes next.
 
+
