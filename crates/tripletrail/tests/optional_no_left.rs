@@ -53,10 +53,18 @@ fn labels_of_no_values_are_not_read() {
              GROUP BY ?v ?n ORDER BY DESC(?n) STR(?v)"
         )
     };
+    // The best of five runs, so that a pause of a loaded runner in one of them does not count
+    // (#390, as #387 did for the knowledge-graph test); the result cache answers none of them.
     let time = |q: &str| {
-        let start = Instant::now();
-        let n = rows(&e, q);
-        (start.elapsed(), n)
+        let q = format!("#pragma tt.result-cache off\n{q}");
+        let mut best = Duration::MAX;
+        let mut n = Vec::new();
+        for _ in 0..5 {
+            let start = Instant::now();
+            n = rows(&e, &q);
+            best = best.min(start.elapsed());
+        }
+        (best, n)
     };
     // Every label once, to time the others against.
     let (all, _) = time(
