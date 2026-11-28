@@ -1924,6 +1924,61 @@ fn rows_of(
     Ok(out)
 }
 
+/// The most IRI values of a property whose labels a filter looks through (#368).
+const MAX_LABELLED: usize = 10_000;
+
+/// The IRI values of `path` on `collection`'s features shown as `label` (the label in the
+/// reader's language, without what `tts:labelStrip` matches, as the items show them, #356).
+/// None when the property has more than [`MAX_LABELLED`] IRI values: then only the value
+/// itself filters.
+#[allow(clippy::too_many_arguments)]
+fn labelled(
+    entry: &Entry,
+    collection: &Collection,
+    path: &str,
+    label: &str,
+    lang: &str,
+    timeout: Option<Duration>,
+    view: &View,
+    version: Option<DataVersion>,
+) -> Result<Vec<String>, HttpError> {
+    // An IRI given as the value finds itself; no label is read for it.
+    if NamedNode::new(label).is_ok() {
+        return Ok(Vec::new());
+    }
+    let query = format!(
+        "SELECT DISTINCT ?v WHERE {{ ?f a <{}> . ?f {path} ?v . FILTER(isIRI(?v)) }} LIMIT {}",
+        collection.class.as_str(),
+        MAX_LABELLED + 1
+    );
+    let iris: Vec<String> = run(entry, &query, timeout, view)?
+        .into_iter()
+        .filter_map(|row| match row.into_iter().next().flatten() {
+            Some(Term::NamedNode(n)) => Some(n.into_string()),
+            _ => None,
+        })
+        .collect();
+    if iris.is_empty() || iris.len() > MAX_LABELLED {
+        return Ok(Vec::new());
+    }
+    let labels = crate::tiles::labels_of(
+        entry,
+        iris,
+        lang,
+        collection.label_strip.as_ref(),
+        timeout,
+        view,
+        version,
+    )?;
+    let mut found: Vec<String> = labels
+        .into_iter()
+        .filter(|(_, l)| l == label)
+        .map(|(iri, _)| iri)
+        .collect();
+    found.sort_unstable();
+    Ok(found)
+}
+
 /// `…/items`: a page of features, in the store's order.
 #[allow(clippy::too_many_arguments)]
 /// The filters of the layer an `area=layer:{id}` names, which the items take besides their
@@ -1989,7 +2044,20 @@ fn items(
             continue;
         };
         let text = serde_json::to_string(value).expect("a string");
-        filter.push_str(&format!(" ?f {path} ?q{i} . FILTER(STR(?q{i}) = {text})"));
+        // An IRI value is shown as its label (#356): that label finds it too (#368).
+        let named: Vec<String> =
+            labelled(entry, collection, path, value, lang, timeout, view, version)?
+                .iter()
+                .map(|iri| format!("<{iri}>"))
+                .collect();
+        let named = if named.is_empty() {
+            String::new()
+        } else {
+            format!(" || ?q{i} IN ({})", named.join(", "))
+        };
+        filter.push_str(&format!(
+            " ?f {path} ?q{i} . FILTER(STR(?q{i}) = {text}{named})"
+        ));
     }
     if let Some(datetime) = params.get("datetime") {
         filter.push_str(&time_filter(&collection.time, datetime)?);

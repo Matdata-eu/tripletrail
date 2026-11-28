@@ -83,6 +83,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- An OGC API items filter on a facet whose values are IRIs matches the label the items show for them (#368): `country=Belgium` keeps the features whose `country` is shown as "Belgium" (in the reader's language, without what `tts:labelStrip` matches), where only the IRI found them, for properties with up to 10,000 IRI values.
 - A spatial join that reaches the query's timeout stops (#338). A join whose timeout passed while it read its sides fell back to probing the index, which evaluated both sides again: on OSM Europe at 1B triples `osm_track_landuse` ran on far past its 600 s timeout with a 55 GB heap, and the queries after it in the benchmark (`osm_track_track_5m`: 7.8 s before, 164 s) shared the machine with it. The join on term ids now also checks the timeout while it reads the geometry boxes and sweeps them.
 
 - The Query page reads a `\U` escape for a backslash or a quote in an N-Triples answer (CONSTRUCT, DESCRIBE) as that character; it used to fail to parse the line.

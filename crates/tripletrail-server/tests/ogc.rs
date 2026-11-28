@@ -3584,6 +3584,15 @@ fn items_carry_the_facets_as_labels_unless_asked_for_properties() {
     );
     let (_, _, all) = get(&format!("{items}/{id}?f=json&properties=*"));
     assert_eq!(all["properties"]["name"], "Köln Hbf", "{all}");
+    // A value as the items show it filters (#368): the label, in the reader's language, as
+    // well as the IRI; a value without a label by its IRI.
+    let matched = |query: &str| get(&format!("{items}?f=json{query}")).2["numberMatched"].clone();
+    assert_eq!(matched("&country=Germany"), 1);
+    assert_eq!(matched("&country=http%3A%2F%2Fexample.com%2FDEU"), 1);
+    assert_eq!(matched("&country=Deutschland&lang=de"), 1);
+    assert_eq!(matched("&country=Deutschland"), 0);
+    assert_eq!(matched("&country=http%3A%2F%2Fexample.com%2FNLD"), 1);
+    assert_eq!(matched("&country=Atlantis"), 0);
     // Shapes without a facet: the features keep all their properties, not none.
     let plain = own
         .replace("tts:facet tts:Facet-Values ", "")
