@@ -874,12 +874,12 @@ impl Server {
         &self.state.options
     }
 
-    /// Whether users sign in with passwords (HTTP Basic, #825).
     /// Whether callers are identified (`--auth-config`): without it, reads are open.
     pub fn has_auth(&self) -> bool {
         self.state.auth.is_some()
     }
 
+    /// Whether users sign in with passwords (HTTP Basic, #825).
     pub fn has_password_users(&self) -> bool {
         self.state.auth.as_ref().is_some_and(auth::Auth::has_users)
     }
@@ -2090,6 +2090,17 @@ fn route(
     #[cfg(feature = "enterprise")]
     if let ["$", "sso", rest @ ..] = segments.as_slice() {
         return sso::route(state, request, rest, &params);
+    }
+    // The open edition has no browser sign-in: nothing to choose, rather than a 404 that every
+    // page of the web UI, which asks, would log (#369).
+    #[cfg(not(feature = "enterprise"))]
+    if let ["$", "sso"] = segments.as_slice()
+        && matches!(method, Method::Get | Method::Head)
+    {
+        return Ok(json_reply(
+            200,
+            &serde_json::json!({ "signIn": [], "signedIn": null }),
+        ));
     }
     browser::cross_site_change(state, request, &method)?;
     if let Some(auth) = &state.auth

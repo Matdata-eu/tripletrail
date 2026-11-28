@@ -2073,3 +2073,29 @@ fn search_similar_reads_a_resource_vector_in_a_named_graph() {
     let by_iri = iris(&[("iri", "http://example.com/crossing"), ("k", "1")]);
     assert_eq!(by_iri, by_vector);
 }
+
+/// Without browser sign-in, `/$/sso` lists no choices instead of a 404 that every page of the
+/// web UI would log (#369); the steps of a sign-in are still not found.
+#[test]
+fn sso_without_browser_sign_in_lists_no_choices() {
+    let base = start(&["ds"], None);
+    let overview: serde_json::Value =
+        serde_json::from_str(&body(ureq::get(&format!("{base}/$/sso")).call().unwrap())).unwrap();
+    assert_eq!(
+        overview,
+        serde_json::json!({ "signIn": [], "signedIn": null })
+    );
+    assert_eq!(
+        status(ureq::get(&format!("{base}/$/sso/login")).call()),
+        404
+    );
+    assert_eq!(
+        status(ureq::get(&format!("{base}/$/sso/callback")).call()),
+        404
+    );
+    assert_eq!(
+        status(ureq::post(&format!("{base}/$/sso/logout")).call()),
+        404
+    );
+    assert_eq!(status(ureq::post(&format!("{base}/$/sso")).call()), 404);
+}
