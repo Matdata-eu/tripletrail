@@ -232,13 +232,14 @@
 
   // ---------- single sign-on (#198, TripleTrail Enterprise) ----------
   // A browser signs in with the organisation's identity provider; the session is an
-  // HttpOnly cookie the page never sees. Without browser sign-in /$/sso is a 404.
+  // HttpOnly cookie the page never sees. Without browser sign-in /$/sso lists no choices.
   let sso = null;
   async function loadSso() {
     try {
       const r = await fetch("/$/sso", { headers: { Accept: "application/json" } });
       sso = r.ok ? await r.json() : null;
     } catch (e) { sso = null; }
+    if (sso && !sso.signedIn && !(sso.signIn || []).length) sso = null;
     const box = $("#sso-box");
     box.hidden = !sso;
     if (!sso) return;

@@ -2074,6 +2074,17 @@ fn route(
     if let ["$", "sso", rest @ ..] = segments.as_slice() {
         return sso::route(state, request, rest, &params);
     }
+    // The open edition has no browser sign-in: nothing to choose, rather than a 404 that every
+    // page of the web UI, which asks, would log (#369).
+    #[cfg(not(feature = "enterprise"))]
+    if let ["$", "sso"] = segments.as_slice()
+        && matches!(method, Method::Get | Method::Head)
+    {
+        return Ok(json_reply(
+            200,
+            &serde_json::json!({ "signIn": [], "signedIn": null }),
+        ));
+    }
     if let Some(auth) = &state.auth
         && !matches!(
             segments.as_slice(),

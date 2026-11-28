@@ -83,6 +83,8 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- The web UI no longer logs a failed request for `/$/sso` on every page of the open edition, or of a server without browser sign-in (#369). `GET /$/sso` now answers `{"signIn": [], "signedIn": null}` there instead of `404`; the sign-in box stays hidden. A browser test checks that the main pages load without a console error.
+- The OGC API's HTML items page says which features of how many it shows, "Features 3–4 of 5" from the `numberMatched` of the JSON page, instead of "2 features on this page" (#371). It keeps the page's own count when the total is not known.
 - An OGC API items filter on a facet whose values are IRIs matches the label the items show for them (#368): `country=Belgium` keeps the features whose `country` is shown as "Belgium" (in the reader's language, without what `tts:labelStrip` matches), where only the IRI found them, for properties with up to 10,000 IRI values.
 - The OGC API's OpenAPI definition lists every parameter the items and one feature take (#367): `properties` (an array of the collection's keys, or `*`), `lang`, `timeout` and `f` on both, and `area`, `rel` and `dist` on the items, with a `400` response, so clients such as QGIS, GDAL and generated clients can offer them. A feature's path listed only its id before.
 - The OGC API's HTML pages wrap long IRIs (#372): a feature whose heading is a long IRI (RINF's `http://data.europa.eu/949/functionalInfrastructure/operationalPoints/…`) made its page scroll sideways, on a phone and even at 1440 px with a 100-character IRI. Headings, the navigation line, table cells, definitions and code now break anywhere when they must.

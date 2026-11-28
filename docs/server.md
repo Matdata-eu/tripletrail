@@ -1700,7 +1700,7 @@ A token or key sent in `Authorization` wins over the cookie.
 
 | Endpoint | |
 |---|---|
-| `GET /$/sso` | The sign-in choices (`signIn`: `name`, `issuer`, `login`) and who is signed in (`signedIn`: `agent`, `groups`, `groupClaims` (the claim each group came from), `issuer`, `ends`, or `null`). |
+| `GET /$/sso` | The sign-in choices (`signIn`: `name`, `issuer`, `login`) and who is signed in (`signedIn`: `agent`, `groups`, `groupClaims` (the claim each group came from), `issuer`, `ends`, or `null`). Without browser sign-in, and in the open edition, `{"signIn": [], "signedIn": null}`; the other paths are then `404`. |
 | `GET /$/sso/login?issuer=N&return=PATH` | Starts a sign-in with issuer `N` (by default the first with a `browser`), coming back to `PATH`. |
 | `GET /$/sso/callback` | Where the provider sends the browser back. |
 | `POST /$/sso/logout` | Ends the session (from the server's own pages) and clears the cookie: `204`. It does not sign out at the provider. |
@@ -3423,7 +3423,9 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
   `Accept` names HTML before any JSON type (a browser), so `http://localhost:7878/kg/ogc` can
   be browsed. A page is made from the JSON document of the same resource and links back to
   it (`f=json`). Items and features show a table of their properties and an SVG sketch of
-  their geometries, each one a link to its feature. The JSON documents link their page as
+  their geometries, each one a link to its feature. A page of items says which features of
+  how many it shows ("Features 3–4 of 5", when the count is known) and links the previous
+  and the next page (#371). The JSON documents link their page as
   `rel=alternate`. `f=json` (or `geojson` for items and features) always gives JSON.
 
 ### Vector tiles
