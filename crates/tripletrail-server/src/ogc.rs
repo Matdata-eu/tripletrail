@@ -1306,6 +1306,83 @@ type CollectionCache = HashMap<(u64, Reader), (DataVersion, Collections)>;
 /// The collections per (dataset, reader), with the data version they were made for.
 static COLLECTIONS: Mutex<Option<CollectionCache>> = Mutex::new(None);
 
+/// The bytes the OGC API's and the map's collections, extents and counts of the dataset `id`
+/// hold (#392); collections shared between the caches counted once.
+pub(crate) fn cache_bytes(id: u64) -> usize {
+    let mut seen: HashSet<*const Vec<Collection>> = HashSet::new();
+    let mut bytes = 0;
+    let mut add = |c: &Collections| {
+        if seen.insert(Arc::as_ptr(c)) {
+            bytes += c.iter().map(collection_bytes).sum::<usize>();
+        }
+    };
+    if let Some(cache) = COLLECTIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        cache
+            .iter()
+            .filter(|(k, _)| k.0 == id)
+            .for_each(|(_, (_, c))| add(c));
+    }
+    if let Some(cache) = VISIBLE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        cache
+            .iter()
+            .filter(|(k, _)| k.0 == id)
+            .for_each(|(_, (_, c))| add(c));
+    }
+    // A count or an extent: its key, a collection's id and the numbers.
+    const KEPT: usize = 96;
+    if let Some(cache) = COUNTS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        bytes += cache
+            .keys()
+            .filter(|k| k.0 == id)
+            .map(|k| KEPT + k.1.capacity())
+            .sum::<usize>();
+    }
+    if let Some(cache) = EXTENTS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        for (_, (_, extents)) in cache.iter().filter(|(k, _)| k.0 == id) {
+            bytes += extents
+                .by_collection
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .keys()
+                .map(|k| KEPT + size_of::<Extent>() + k.capacity())
+                .sum::<usize>();
+        }
+    }
+    bytes
+}
+
+/// Roughly the heap bytes of a collection: its texts, property paths, facets and the JSON
+/// Schemas of its properties.
+fn collection_bytes(c: &Collection) -> usize {
+    let text = |s: &String| s.capacity();
+    size_of::<Collection>()
+        + text(&c.id)
+        + text(&c.title)
+        + c.description.as_ref().map_or(0, text)
+        + c.properties
+            .iter()
+            .map(|(k, p)| 2 * size_of::<String>() + k.capacity() + p.capacity())
+            .sum::<usize>()
+        + c.filters
+            .iter()
+            .map(|f| size_of::<String>() + f.capacity())
+            .sum::<usize>()
+        + c.facets
+            .iter()
+            .map(|f| size_of::<Facet>() + f.key.capacity() + f.title.capacity() + f.path.capacity())
+            .sum::<usize>()
+        + c.schemas
+            .iter()
+            .map(|(k, v)| {
+                size_of::<(String, Value)>() + k.capacity() + crate::memory::json_bytes(v)
+            })
+            .sum::<usize>()
+}
+
 /// The collections being made again in the background, by (dataset, reader).
 static REBUILDING: Mutex<Option<HashSet<(u64, Reader)>>> = Mutex::new(None);
 

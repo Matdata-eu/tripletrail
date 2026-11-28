@@ -395,9 +395,13 @@ tripletrail_dataset_memory_bytes{dataset="rail_v1",part="rangeIndexes"}
 tripletrail_dataset_memory_bytes{dataset="rail_v1",part="resultCache"}
 tripletrail_dataset_memory_bytes{dataset="rail_v1",part="routingNetworks"}
 tripletrail_dataset_memory_bytes{dataset="rail_v1",part="unionCopies"}
+tripletrail_dataset_memory_bytes{dataset="rail_v1",part="stringRanks"}
+tripletrail_dataset_memory_bytes{dataset="rail_v1",part="mapCaches"}
 ```
 
-  `/$/stats/rail_v1` has the same parts under `memory`.
+  `/$/stats/rail_v1` has the same parts under `memory`. `stringRanks` is the order of the
+  dataset's IRIs and strings that `MIN`, `MAX` and `ORDER BY` read, and `mapCaches` what the
+  map and the OGC API keep of it: collections, tiles, facet counts and their labels.
 
 - `tripletrail_budget_trips_total` counts, per dataset, the queries that ran into a budget:
   stopped by its query memory (`memory`; the 503 above is one), refused for more rows than `max-rows` (`rows`), or

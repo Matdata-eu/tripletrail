@@ -2448,7 +2448,11 @@ version.
   `memoryBytes` and `sizeOnDisk`. `memory` splits `memoryBytes` by part: `dictionary`,
   `quads`, `geometries`, `spatialIndex`, `textIndex`, `vectorIndexes` (the copies of
   vectors that `tt:nearest` keeps), `rangeIndexes`, `resultCache`,
-  `routingNetworks` and `unionCopies`. `/$/metrics` has `tripletrail_dataset_requests_running`,
+  `routingNetworks`, `unionCopies`, `stringRanks` (the order of the IRIs and strings that
+  `MIN`, `MAX` and `ORDER BY` read) and `mapCaches` (the map's and the OGC API's collections,
+  tiles, facet counts and labels of the dataset, #392). A memory quota counts all of them;
+  over it, the indexes and caches the engine can build again are dropped, the map's caches
+  stay. `/$/metrics` has `tripletrail_dataset_requests_running`,
   `tripletrail_dataset_requests_queued`, `tripletrail_dataset_requests_rejected_total`,
   `tripletrail_dataset_writes_rejected_quota_total`, and `tripletrail_dataset_memory_bytes` with
   the same parts as a `part` label.

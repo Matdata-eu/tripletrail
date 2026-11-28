@@ -553,7 +553,7 @@ pub(crate) fn render(state: &State) -> Reply {
         "Roughly the heap bytes a dataset holds, by part (what its memory quota counts; tripletrail stores).",
     );
     for e in &entries {
-        if let Some(m) = e.engine.memory_use() {
+        if let Some(m) = crate::memory::of(e) {
             for (part, bytes) in m.parts() {
                 out.sample(
                     "tripletrail_dataset_memory_bytes",

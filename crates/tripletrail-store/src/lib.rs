@@ -500,6 +500,8 @@ pub struct MemoryUse {
     /// The copies of triples in several graphs found for the union default graph (see
     /// [`Snapshot::union_copies`]).
     pub union_copies: usize,
+    /// The string ranks built (see [`Snapshot::string_ranks`], #392).
+    pub string_ranks: usize,
 }
 
 impl Default for Store {
@@ -1012,6 +1014,11 @@ impl Store {
                     .as_ref()
                     .and_then(|(_, f)| f.as_ref())
                     .map_or(0, |f| f.quads_heap_size()),
+                Err(_) => 0,
+            },
+            // Not waited for either: a build holds the lock.
+            string_ranks: match self.inner.ranks.try_lock() {
+                Ok(r) => r.as_ref().map_or(0, |r| r.heap_size()),
                 Err(_) => 0,
             },
         }

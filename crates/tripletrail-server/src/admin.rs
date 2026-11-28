@@ -484,7 +484,7 @@ fn stats_json(state: &State, registry: &Registry, entry: &Entry) -> Value {
         .map(|a| a.since)
         .max();
     let gate = entry.gate.counts();
-    let memory = entry.engine.memory_use();
+    let memory = crate::memory::of(entry);
     json!({
         "Requests": n(&s.requests),
         "RequestsGood": n(&s.good),

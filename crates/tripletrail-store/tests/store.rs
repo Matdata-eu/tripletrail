@@ -4016,3 +4016,18 @@ fn row_filters_hide_triple_terms_of_hidden_triples() {
             .any(|t| t.subject == id(&ex("b")).0 && !t.nested)
     );
 }
+
+/// The string ranks count in the store's memory once built (#392).
+#[test]
+fn string_ranks_count_in_memory_use() {
+    let store = Store::new();
+    let mut ttl = String::new();
+    for i in 0..100 {
+        ttl.push_str(&format!("<http://e/s{i}> <http://e/p> \"label {i}\" .\n"));
+    }
+    store.bulk_load(RdfFormat::Turtle, ttl.as_bytes()).unwrap();
+    assert_eq!(store.memory_use().string_ranks, 0);
+    assert!(store.snapshot().warm_string_ranks(1 << 20).is_some());
+    // An IRI or a string a rank each, and the order of each kind.
+    assert!(store.memory_use().string_ranks >= 200 * 4);
+}
