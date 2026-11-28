@@ -1080,19 +1080,21 @@ impl Dictionary {
 
     /// Fills `slots` (all 0, [`index_slots`] of `keys`) with the saved index of the `keys`
     /// keys after the first `from`, which [`Dictionary::replace_saved`] can then take as the
-    /// index of the piece holding them.
+    /// index of the piece holding them. Checkpoints write it a window at a time
+    /// ([`Dictionary::fill_index_window`]); this is the whole of it, for tests.
+    #[cfg(test)]
     pub(crate) fn fill_index(&self, from: usize, keys: usize, slots: &mut [u64]) {
         debug_assert_eq!(slots.len(), index_slots(keys));
         let carry = self.fill_index_window(from, keys, 0, slots, &[]);
         debug_assert!(carry.is_empty(), "the whole index wraps around");
     }
 
-    /// Fills the slots `lo..lo + window.len()` (all 0) of the saved index [`fill_index`]
-    /// makes, out of [`index_slots`] of `keys`: first with `carry`, the entries an earlier
-    /// window had no room left for, then with each key whose first slot is in the window, in
-    /// order. Returns the entries this window has no room for, which go on in the next window
-    /// (after the last, from slot 0). A window that is the whole index wraps around itself, as
-    /// [`fill_index`] does.
+    /// Fills the slots `lo..lo + window.len()` (all 0) of the saved index of the `keys` keys
+    /// after the first `from`, out of its [`index_slots`]: first with `carry`, the entries an
+    /// earlier window had no room left for, then with each key whose first slot is in the
+    /// window, in order. Returns the entries this window has no room for, which go on in the
+    /// next window (after the last, from slot 0). A window that is the whole index wraps
+    /// around itself.
     ///
     /// Any order of insertion makes a valid index: each entry sits after its first slot with
     /// no empty slot between, which is all a lookup needs. A window at a time lets
@@ -1100,8 +1102,6 @@ impl Dictionary {
     /// and write it in order, instead of in a mapped file whose pages, written at random for
     /// minutes, the system writes back again and again (60 times the index's size in a load
     /// of 400M triples under a memory cap, #232).
-    ///
-    /// [`fill_index`]: Dictionary::fill_index
     pub(crate) fn fill_index_window(
         &self,
         from: usize,
