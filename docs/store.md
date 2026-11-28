@@ -406,8 +406,9 @@ there: `Engine::new_oxigraph()` or `TRIPLETRAIL_STORE=oxigraph`, `tripletrail se
   transaction added and removed. The engine uses them to keep routing networks that don't read
   the changed predicates and to patch the spatial index instead of rebuilding it.
   `Changes::generation` is the `Store::generation` the commit made.
-- **Value columns and snapshots.** The engine's numeric value columns (the range rewrite, #71,
-  and the first values of `ORDER BY ?v LIMIT k`, #297) are per predicate, built from a
+- **Value columns and snapshots.** The engine's value columns (the range rewrite on numbers,
+  #71, and on dates and date-times, #312, and the first values of `ORDER BY ?v LIMIT k`, #297)
+  are per predicate and kind of value, built from a
   snapshot and kept with its generation (#328). A query takes its snapshot first and reads a
   column only for that generation, or for one whose commits in between left the predicate
   alone (`Store::touched_between`). Otherwise the column is built from the query's snapshot.

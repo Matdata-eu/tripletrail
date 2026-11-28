@@ -1,4 +1,4 @@
-//! Range scans on numeric literals (issue #71).
+//! Range scans on numeric literals (issue #71), and on dates and date-times (#312).
 //!
 //! A numeric `FILTER(?km >= a && ?km <= b)` on a variable bound by a triple `?lr ex:km ?km` is
 //! evaluated row by row: every value of `ex:km` the rest of the pattern reaches is decoded and
@@ -19,6 +19,12 @@
 //! (`?lr ex:line <h84>`, 3.5 k rows) is faster without a block of 1.6 k values to join with.
 //! The pass therefore compares how many triples the range holds with the estimates of the
 //! pattern's other triple patterns that have a constant subject or object.
+//!
+//! Dates and date-times are columns of their own, ordered by instant: XPath compares an
+//! `xsd:date` only with dates and an `xsd:dateTime` (or `xsd:dateTimeStamp`) only with
+//! date-times, so a date constant's block holds dates alone. A value without a timezone is
+//! placed as if it were UTC, and every temporal block is widened by 14 hours on each side, the
+//! most two timezones can move an instant apart: the FILTER decides the values near the bounds.
 
 use crate::Engine;
 use oxigraph::model::{GraphNameRef, Literal, NamedNode, Quad, Term};
@@ -52,6 +58,17 @@ const NUMERIC: [&str; 16] = [
     "unsignedShort",
     "unsignedByte",
 ];
+/// The values a column orders: numbers, dates, or date-times (with date-time stamps).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Space {
+    Number,
+    Date,
+    DateTime,
+}
+
+/// 14 hours, in seconds: the widest that two timezones move one instant.
+const TIMEZONES: f64 = 14.0 * 3600.0;
+
 /// Most distinct values put in one block.
 const MAX_VALUES: usize = 100_000;
 /// The block is used when the range holds at most this share of what the best other triple
@@ -64,9 +81,11 @@ const ALONE_RATIO: f64 = 0.1;
 /// rather than patch it (each patch shifts the arrays after it).
 const PATCH_RATIO: usize = 8;
 
-/// The numeric objects of one predicate in the default graph, ordered by value.
+/// The numeric (or date, or date-time) objects of one predicate in the default graph, ordered
+/// by value.
 #[derive(Clone)]
 pub(crate) struct NumericColumn {
+    space: Space,
     values: Vec<f64>,
     literals: Vec<Literal>,
     /// `before[i]`: triples whose object is one of `literals[..i]`.
@@ -78,13 +97,18 @@ pub(crate) struct NumericColumn {
 impl NumericColumn {
     /// From `at` (a snapshot of the tripletrail store), or from the engine's current data.
     /// `None` if reading the store fails: an incomplete column would drop rows.
-    fn build(engine: &Engine, predicate: &NamedNode, at: Option<&Snapshot>) -> Option<Self> {
+    fn build(
+        engine: &Engine,
+        predicate: &NamedNode,
+        space: Space,
+        at: Option<&Snapshot>,
+    ) -> Option<Self> {
         let mut counts: HashMap<Literal, u64> = HashMap::new();
         let mut total = 0;
         let mut count = |object: Term| {
             total += 1;
             if let Term::Literal(l) = object
-                && numeric_value(&l).is_some()
+                && value(space, &l).is_some()
             {
                 *counts.entry(l).or_default() += 1;
             }
@@ -102,7 +126,7 @@ impl NumericColumn {
         }
         let mut entries: Vec<(f64, Literal, u64)> = counts
             .into_iter()
-            .filter_map(|(l, n)| Some((numeric_value(&l)?, l, n)))
+            .filter_map(|(l, n)| Some((value(space, &l)?, l, n)))
             .filter(|(v, _, _)| !v.is_nan())
             .collect();
         entries.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -118,6 +142,7 @@ impl NumericColumn {
             literals.push(l);
         }
         Some(Self {
+            space,
             values,
             literals,
             before,
@@ -136,7 +161,7 @@ impl NumericColumn {
         let Term::Literal(l) = object else {
             return Some(());
         };
-        let Some(v) = numeric_value(l).filter(|v| !v.is_nan()) else {
+        let Some(v) = value(self.space, l).filter(|v| !v.is_nan()) else {
             return Some(());
         };
         // The literal among the run of equal values, or where it goes.
@@ -259,7 +284,7 @@ fn widen(bound: f64, direction: f64) -> f64 {
 pub(crate) struct RangeIndexes {
     /// With the generation of the store whose data the column holds; `None` on Oxigraph's
     /// store, whose columns follow its current data.
-    columns: Mutex<HashMap<NamedNode, Held>>,
+    columns: Mutex<HashMap<(NamedNode, Space), Held>>,
     /// Counts the invalidations.
     generation: AtomicU64,
 }
@@ -284,12 +309,23 @@ fn untouched(store: &Store, predicate: &NamedNode, from: u64, to: u64) -> bool {
 }
 
 impl RangeIndexes {
-    /// The column of `predicate` for a query reading `at` (the tripletrail store), or the
-    /// current data (Oxigraph's store, `at: None`).
+    /// The numeric column of `predicate` for a query reading `at` (the tripletrail store), or
+    /// the current data (Oxigraph's store, `at: None`).
     pub(crate) fn column(
         &self,
         engine: &Engine,
         predicate: &NamedNode,
+        at: Option<&Snapshot>,
+    ) -> Option<Arc<NumericColumn>> {
+        self.column_of(engine, predicate, Space::Number, at)
+    }
+
+    /// The column of `predicate`'s values in `space`, as [`Self::column`].
+    fn column_of(
+        &self,
+        engine: &Engine,
+        predicate: &NamedNode,
+        space: Space,
         at: Option<&Snapshot>,
     ) -> Option<Arc<NumericColumn>> {
         let store = match &engine.store {
@@ -297,13 +333,14 @@ impl RangeIndexes {
             Dataset::Oxigraph(_) => None,
         };
         let (Some(store), Some(at)) = (store, at) else {
-            return self.current_column(engine, predicate);
+            return self.current_column(engine, predicate, space);
         };
         // A transaction's view has no generation: built for it alone.
         let Some(wanted) = at.generation() else {
-            return NumericColumn::build(engine, predicate, Some(at)).map(Arc::new);
+            return NumericColumn::build(engine, predicate, space, Some(at)).map(Arc::new);
         };
-        if let Some((generation, c)) = self.columns.lock_unpoisoned().get_mut(predicate)
+        let key = (predicate.clone(), space);
+        if let Some((generation, c)) = self.columns.lock_unpoisoned().get_mut(&key)
             && let Some(held) = *generation
             && (held == wanted || untouched(store, predicate, held, wanted))
         {
@@ -311,30 +348,36 @@ impl RangeIndexes {
             *generation = Some(held.max(wanted));
             return Some(Arc::clone(c));
         }
-        let built = Arc::new(NumericColumn::build(engine, predicate, Some(at))?);
+        let built = Arc::new(NumericColumn::build(engine, predicate, space, Some(at))?);
         let mut columns = self.columns.lock_unpoisoned();
         // Kept unless a newer one came in meanwhile (an older query's column is its own).
         if columns
-            .get(predicate)
+            .get(&key)
             .is_none_or(|(g, _)| g.is_none_or(|g| g < wanted))
         {
-            columns.insert(predicate.clone(), (Some(wanted), Arc::clone(&built)));
+            columns.insert(key, (Some(wanted), Arc::clone(&built)));
         }
         Some(built)
     }
 
     /// The column of the current data, for Oxigraph's store.
-    fn current_column(&self, engine: &Engine, predicate: &NamedNode) -> Option<Arc<NumericColumn>> {
-        if let Some((_, c)) = self.columns.lock_unpoisoned().get(predicate) {
+    fn current_column(
+        &self,
+        engine: &Engine,
+        predicate: &NamedNode,
+        space: Space,
+    ) -> Option<Arc<NumericColumn>> {
+        let key = (predicate.clone(), space);
+        if let Some((_, c)) = self.columns.lock_unpoisoned().get(&key) {
             return Some(Arc::clone(c));
         }
         // Built outside the lock, so other predicates' lookups do not wait. A write between
         // the build and the insert would leave a stale column: the generation guards that.
         let generation = self.generation.load(Ordering::Acquire);
-        let built = Arc::new(NumericColumn::build(engine, predicate, None)?);
+        let built = Arc::new(NumericColumn::build(engine, predicate, space, None)?);
         let mut columns = self.columns.lock_unpoisoned();
         if self.generation.load(Ordering::Acquire) == generation {
-            columns.insert(predicate.clone(), (None, Arc::clone(&built)));
+            columns.insert(key, (None, Arc::clone(&built)));
         }
         Some(built)
     }
@@ -357,9 +400,11 @@ impl RangeIndexes {
         if columns.is_empty() {
             return;
         }
+        let held: std::collections::HashSet<NamedNode> =
+            columns.keys().map(|(p, _)| p.clone()).collect();
         let mut by_predicate: HashMap<NamedNode, Vec<(bool, Term)>> = HashMap::new();
         for (added, q) in changes {
-            if q.graph_name.is_default_graph() && columns.contains_key(&q.predicate) {
+            if q.graph_name.is_default_graph() && held.contains(&q.predicate) {
                 by_predicate
                     .entry(q.predicate)
                     .or_default()
@@ -367,7 +412,7 @@ impl RangeIndexes {
             }
         }
         if let Some((store, generation)) = committed {
-            columns.retain(|predicate, (held, column)| {
+            columns.retain(|(predicate, _), (held, column)| {
                 let changes = by_predicate.get(predicate);
                 let (Some(held_at), Some(g)) = (*held, generation) else {
                     // Untouched columns of the tripletrail store keep their generation: a
@@ -386,23 +431,19 @@ impl RangeIndexes {
             });
             return;
         }
-        for (predicate, changes) in by_predicate {
-            let Some((_, column)) = columns.get_mut(&predicate) else {
-                continue;
-            };
-            if !patch(column, &changes) {
-                columns.remove(&predicate);
-            }
-        }
+        columns.retain(|(predicate, _), (_, column)| {
+            by_predicate
+                .get(predicate)
+                .is_none_or(|changes| patch(column, changes))
+        });
     }
 
     /// Drops the indexes of these predicates (after a write whose quads aren't known).
     pub(crate) fn invalidate<'a>(&self, predicates: impl IntoIterator<Item = &'a str>) {
         let mut columns = self.columns.lock_unpoisoned();
         self.generation.fetch_add(1, Ordering::AcqRel);
-        for p in predicates {
-            columns.remove(&NamedNode::new_unchecked(p));
-        }
+        let predicates: std::collections::HashSet<&str> = predicates.into_iter().collect();
+        columns.retain(|(p, _), _| !predicates.contains(p.as_str()));
     }
 
     /// Roughly the heap bytes of the built columns (#225): a numeric literal's lexical form
@@ -443,22 +484,69 @@ fn numeric_value(l: &Literal) -> Option<f64> {
     }
 }
 
-/// A numeric constant of an expression.
-fn constant(e: &Expression) -> Option<f64> {
-    match e {
-        Expression::Literal(l) => numeric_value(l).filter(|v| !v.is_nan()),
-        _ => None,
-    }
+/// A literal's value in `space`: a number, or for dates and date-times the seconds from
+/// 1970-01-01T00:00:00Z of the instant (of the start of the day for a date), read as
+/// SPARQL's evaluator reads it; a value without a timezone is placed as if in UTC.
+fn value(space: Space, l: &Literal) -> Option<f64> {
+    use oxsdatatypes::{Date, DateTime, DayTimeDuration, Double};
+    let dt = l.datatype().as_str().strip_prefix(XSD)?;
+    let at = match (space, dt) {
+        (Space::Number, _) => return numeric_value(l),
+        (Space::Date, "date") => DateTime::try_from(l.value().parse::<Date>().ok()?).ok()?,
+        (Space::DateTime, "dateTime" | "dateTimeStamp") => l.value().parse::<DateTime>().ok()?,
+        _ => return None,
+    };
+    // Days from 1970-01-01 of the proleptic Gregorian date (Howard Hinnant's days_from_civil).
+    let (y, m, d) = (
+        at.year() - i64::from(at.month() <= 2),
+        i64::from(at.month()),
+        i64::from(at.day()),
+    );
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    let seconds = f64::from(Double::from(at.second()));
+    let offset = at.timezone_offset().map_or(0.0, |o| {
+        f64::from(Double::from(DayTimeDuration::from(o).as_seconds()))
+    });
+    Some(
+        days as f64 * 86_400.0
+            + f64::from(at.hour()) * 3600.0
+            + f64::from(at.minute()) * 60.0
+            + seconds
+            - offset,
+    )
 }
 
-/// Bounds on variables from the conjuncts of a FILTER: `(low, high)` per variable.
-fn bounds(e: &Expression, out: &mut HashMap<Variable, (f64, f64)>) {
-    let mut add = |v: &Variable, low: f64, high: f64| {
+/// A numeric, date or date-time constant of an expression, with its space.
+fn constant(e: &Expression) -> Option<(Space, f64)> {
+    let Expression::Literal(l) = e else {
+        return None;
+    };
+    [Space::Number, Space::Date, Space::DateTime]
+        .into_iter()
+        .find_map(|s| Some((s, value(s, l).filter(|v| !v.is_nan())?)))
+}
+
+/// What the conjuncts of a FILTER bound a variable to: `(space, low, high)`, or `None` when
+/// they compare it with constants of different spaces.
+type Bound = Option<(Space, f64, f64)>;
+
+/// Bounds on variables from the conjuncts of a FILTER, per variable.
+fn bounds(e: &Expression, out: &mut HashMap<Variable, Bound>) {
+    let mut add = |v: &Variable, (space, c): (Space, f64), above: bool| {
+        let (low, high) = if above {
+            (c, f64::INFINITY)
+        } else {
+            (f64::NEG_INFINITY, c)
+        };
         let b = out
             .entry(v.clone())
-            .or_insert((f64::NEG_INFINITY, f64::INFINITY));
-        b.0 = b.0.max(low);
-        b.1 = b.1.min(high);
+            .or_insert(Some((space, f64::NEG_INFINITY, f64::INFINITY)));
+        *b = b
+            .filter(|b| b.0 == space)
+            .map(|b| (space, b.1.max(low), b.2.min(high)));
     };
     match e {
         Expression::And(a, b) => {
@@ -468,12 +556,12 @@ fn bounds(e: &Expression, out: &mut HashMap<Variable, (f64, f64)>) {
         Expression::Greater(a, b) | Expression::GreaterOrEqual(a, b) => match (&**a, &**b) {
             (Expression::Variable(v), c) => {
                 if let Some(c) = constant(c) {
-                    add(v, c, f64::INFINITY)
+                    add(v, c, true)
                 }
             }
             (c, Expression::Variable(v)) => {
                 if let Some(c) = constant(c) {
-                    add(v, f64::NEG_INFINITY, c)
+                    add(v, c, false)
                 }
             }
             _ => {}
@@ -481,12 +569,12 @@ fn bounds(e: &Expression, out: &mut HashMap<Variable, (f64, f64)>) {
         Expression::Less(a, b) | Expression::LessOrEqual(a, b) => match (&**a, &**b) {
             (Expression::Variable(v), c) => {
                 if let Some(c) = constant(c) {
-                    add(v, f64::NEG_INFINITY, c)
+                    add(v, c, false)
                 }
             }
             (c, Expression::Variable(v)) => {
                 if let Some(c) = constant(c) {
-                    add(v, c, f64::INFINITY)
+                    add(v, c, true)
                 }
             }
             _ => {}
@@ -623,10 +711,18 @@ impl Pass<'_> {
             return inner;
         }
         let mut best: Option<Candidate> = None;
-        for (var, (low, high)) in &ranges {
+        for (var, bound) in &ranges {
+            let Some((space, low, high)) = *bound else {
+                continue;
+            };
             if low > high || (low.is_infinite() && high.is_infinite()) {
                 continue;
             }
+            // Instants without a timezone, or with another, move by up to 14 hours.
+            let (low, high) = match space {
+                Space::Number => (low, high),
+                Space::Date | Space::DateTime => (low - TIMEZONES, high + TIMEZONES),
+            };
             let Some(predicate) = triples
                 .iter()
                 .find_map(|t| match (&t.predicate, &t.object) {
@@ -642,22 +738,22 @@ impl Pass<'_> {
             else {
                 continue;
             };
-            let Some(column) = self
-                .engine
-                .spatial
-                .ranges
-                .column(self.engine, &predicate, self.at)
+            let Some(column) =
+                self.engine
+                    .spatial
+                    .ranges
+                    .column_of(self.engine, &predicate, space, self.at)
             else {
                 continue;
             };
-            let range = column.range(*low, *high);
+            let range = column.range(low, high);
             let rows = column.before[range.end] - column.before[range.start];
             if best.as_ref().is_none_or(|b| rows < b.rows) {
                 best = Some(Candidate {
                     var: var.clone(),
                     predicate,
-                    low: *low,
-                    high: *high,
+                    low,
+                    high,
                     range,
                     rows,
                     column,
@@ -691,7 +787,12 @@ impl Pass<'_> {
             )
         };
         self.decisions.push(format!(
-            "range {var} in [{low}, {high}] on {predicate}: {values} values in {rows} triples, {why}: {}",
+            "range {var} in [{low}, {high}]{} on {predicate}: {values} values in {rows} triples, {why}: {}",
+            match column.space {
+                Space::Number => "",
+                Space::Date => " (dates, seconds from 1970)",
+                Space::DateTime => " (date-times, seconds from 1970)",
+            },
             if inject { "inject" } else { "filter" }
         ));
         if !inject {
@@ -910,9 +1011,15 @@ mod tests {
         for w in writes {
             engine.update(&format!("{p}{w}")).unwrap();
             // Patched, not dropped to be built again.
-            assert!(ranges.columns.lock_unpoisoned().contains_key(&km), "{w}");
+            assert!(
+                ranges
+                    .columns
+                    .lock_unpoisoned()
+                    .contains_key(&(km.clone(), Space::Number)),
+                "{w}"
+            );
             let patched = ranges.column(&engine, &km, Some(&now(&engine))).unwrap();
-            let rebuilt = NumericColumn::build(&engine, &km, None).unwrap();
+            let rebuilt = NumericColumn::build(&engine, &km, Space::Number, None).unwrap();
             assert_eq!(entries(&patched), entries(&rebuilt), "{w}");
         }
         let quad = Quad::new(
@@ -927,9 +1034,14 @@ mod tests {
             } else {
                 engine.remove(&quad).unwrap();
             }
-            assert!(ranges.columns.lock_unpoisoned().contains_key(&km));
+            assert!(
+                ranges
+                    .columns
+                    .lock_unpoisoned()
+                    .contains_key(&(km.clone(), Space::Number))
+            );
             let patched = ranges.column(&engine, &km, Some(&now(&engine))).unwrap();
-            let rebuilt = NumericColumn::build(&engine, &km, None).unwrap();
+            let rebuilt = NumericColumn::build(&engine, &km, Space::Number, None).unwrap();
             assert_eq!(entries(&patched), entries(&rebuilt), "added {added}");
         }
         // A query that held the column before the writes still sees its version.
@@ -941,6 +1053,11 @@ mod tests {
                 "<http://example.org/f> <http://example.org/km> 9 .".as_bytes(),
             )
             .unwrap();
-        assert!(!ranges.columns.lock_unpoisoned().contains_key(&km));
+        assert!(
+            !ranges
+                .columns
+                .lock_unpoisoned()
+                .contains_key(&(km.clone(), Space::Number))
+        );
     }
 }
