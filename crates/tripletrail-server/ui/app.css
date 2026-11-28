@@ -68,8 +68,13 @@ h3 { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
 .site-footer a { color: var(--muted); }
 :root:has(.site-footer) { --footer-h: 30px; }
 [data-theme=dark] .logo-dark { display: block; }
-.tabs { display: flex; gap: 2px; height: 100%; min-width: 0; }
-.tabs a { display: flex; align-items: center; white-space: nowrap; padding: 0 12px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+/* Tabs that do not fit scroll sideways, at every width, rather than run under the search box or
+   widen the page (#365). The box takes the free room, so the fade at its end covers a tab only
+   when the tabs overflow. */
+.tabs { display: flex; flex: 1 1 auto; gap: 2px; height: 100%; min-width: 0; overflow-x: auto; scrollbar-width: none;
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs a { display: flex; align-items: center; white-space: nowrap; padding: 0 12px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; }
 .tabs a:hover { color: var(--text); }
 .tabs a[aria-current=page] { color: var(--text); border-bottom-color: #fff; font-weight: 500; }
 /* the top bar's search box (#142) */
@@ -101,10 +106,6 @@ h3 { font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
   .top-search:focus-within { position: absolute; right: 16px; width: min(480px, calc(100% - 32px)); z-index: 30; cursor: auto; }
   .top-search:focus-within input { position: static; width: 100px; padding: 0 6px; opacity: 1; }
   .top-search:focus-within + .top-right { margin-left: auto; }
-  /* Tabs that do not fit scroll sideways rather than widen the page. */
-  .tabs { overflow-x: auto; scrollbar-width: none; mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
-  .tabs::-webkit-scrollbar { display: none; }
-  .tabs a { margin-bottom: 0; }
 }
 @media (max-width: 760px) {
   .top-search:focus-within { left: 8px; right: 8px; width: auto; }
