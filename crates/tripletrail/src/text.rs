@@ -201,8 +201,10 @@ pub fn properties_with(extra: &[NamedNode]) -> Arc<[NamedNode]> {
 }
 
 /// The (subject, object) pairs of the source's indexed properties in the graphs it reads,
-/// sorted, each once whatever its property and graph.
-fn indexed_pairs(source: &Source) -> Vec<(TermId, TermId)> {
+/// sorted, each once whatever its property and graph, with [`NOT_TEXT`] as their number. They
+/// are made in the index's own form, so that the build fills their numbers in place and never
+/// holds a second list of them (#394).
+fn indexed_pairs(source: &Source) -> Vec<((TermId, TermId), u32)> {
     let snapshot = &source.snapshot;
     let mut pairs = Vec::new();
     for p in source.properties.iter() {
@@ -213,12 +215,22 @@ fn indexed_pairs(source: &Source) -> Vec<(TermId, TermId)> {
             snapshot
                 .quad_ids_for_pattern(None, Some(pid), None, GraphSelector::All)
                 .filter(|q| source.reads(q[3]))
-                .map(|[s, _, o, _]| (s, o)),
+                .map(|[s, _, o, _]| ((s, o), NOT_TEXT)),
         );
     }
     pairs.sort_unstable();
-    pairs.dedup();
+    pairs.dedup_by_key(|p| p.0);
+    pairs.shrink_to_fit();
     pairs
+}
+
+/// Pushes onto a posting list that grows by a quarter, not double, when full: the lists are
+/// most of the index, and a doubled list is half empty on average (#394).
+fn push_tight(list: &mut Vec<(u32, u32)>, entry: (u32, u32)) {
+    if list.len() == list.capacity() {
+        list.reserve_exact(list.len() / 4 + 4);
+    }
+    list.push(entry);
 }
 
 /// A literal's words with their counts, sorted.
@@ -260,30 +272,65 @@ impl TextIndex {
             properties: Arc::clone(&source.properties),
             ..Self::default()
         };
-        let pairs = indexed_pairs(source);
-        index.pairs.reserve_exact(pairs.len());
-        let mut words_of: HashMap<TermId, Option<WordCounts>> = HashMap::new();
-        let mut postings: HashMap<Box<str>, Vec<(u32, u32)>> = HashMap::new();
-        for (k, (subject, literal)) in pairs.into_iter().enumerate() {
-            if k % 4096 == 0 {
+        // Each literal is read and split into words once, for all the subjects that have it:
+        // the pairs are taken by literal, numbered, and put back in order. Words are numbered
+        // as they come, so each is stored once until the postings are made (#394).
+        let mut pairs = indexed_pairs(source);
+        pairs.sort_unstable_by_key(|&((s, o), _)| (o, s));
+        let mut word_ids: HashMap<Box<str>, u32> = HashMap::new();
+        let mut lists: Vec<Vec<(u32, u32)>> = Vec::new();
+        let mut ids = Vec::new();
+        let mut next_stop = 0;
+        let mut k = 0;
+        while k < pairs.len() {
+            if k >= next_stop {
                 stop()?;
+                next_stop = k + 4096;
             }
-            let counts = words_of
-                .entry(literal)
-                .or_insert_with(|| word_counts(snapshot, literal));
-            let Some(counts) = counts else {
-                index.pairs.push(((subject, literal), NOT_TEXT));
-                continue;
-            };
-            let n = index.next_number()?;
-            for (w, c) in counts.iter() {
-                postings.entry(w.clone()).or_default().push((n, *c));
+            let literal = pairs[k].0.1;
+            let end = k + pairs[k..].iter().take_while(|p| p.0.1 == literal).count();
+            if let Some(counts) = word_counts(snapshot, literal) {
+                ids.clear();
+                for (w, _) in &counts {
+                    let id = match word_ids.get(w) {
+                        Some(&id) => id,
+                        None => {
+                            let id = u32::try_from(lists.len()).map_err(|_| {
+                                Error::Request("full-text index: more than 4 billion words".into())
+                            })?;
+                            word_ids.insert(w.clone(), id);
+                            lists.push(Vec::new());
+                            id
+                        }
+                    };
+                    ids.push(id);
+                }
+                for pair in &mut pairs[k..end] {
+                    let n = index.next_number()?;
+                    for (&id, (_, c)) in ids.iter().zip(&counts) {
+                        push_tight(&mut lists[id as usize], (n, *c));
+                    }
+                    index.push(pair.0.0, literal, &counts);
+                    pair.1 = n;
+                }
             }
-            index.push(subject, literal, counts);
-            index.pairs.push(((subject, literal), n));
+            k = end;
         }
-        index.posting_entries = postings.values().map(Vec::len).sum();
-        index.word_bytes = postings.keys().map(|w| w.len()).sum();
+        pairs.sort_unstable();
+        index.pairs = pairs;
+        index.docs.shrink_to_fit();
+        let mut postings: Vec<_> = word_ids
+            .into_iter()
+            .map(|(w, id)| {
+                let mut list = std::mem::take(&mut lists[id as usize]);
+                list.shrink_to_fit();
+                (w, list)
+            })
+            .collect();
+        drop(lists);
+        postings.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        index.posting_entries = postings.iter().map(|(_, l)| l.len()).sum();
+        index.word_bytes = postings.iter().map(|(w, _)| w.len()).sum();
         index.postings = postings.into_iter().collect();
         Ok(index)
     }
@@ -316,7 +363,7 @@ impl TextIndex {
         let mut kept = Vec::with_capacity(now.len());
         let (mut added, mut removed) = (Vec::new(), Vec::new());
         let mut old = std::mem::take(&mut self.pairs).into_iter().peekable();
-        for pair in now {
+        for (pair, _) in now {
             while let Some(o) = old.next_if(|o| o.0 < pair) {
                 removed.push(o);
             }
