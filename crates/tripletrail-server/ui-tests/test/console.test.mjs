@@ -36,11 +36,15 @@ before(async () => {
     server.stderr.on("data", look);
     server.on("exit", (code) => reject(new Error(`tripletrail exited (${code}): ${seen}`)));
   });
-  for (let i = 0; i < 200; i++) {
+  // Pages are opened once the server is ready (#420): on a loaded runner a debug build can take
+  // longer than a few seconds, and the pages are then checked as a user finds them.
+  let ready = false;
+  for (let i = 0; i < 1200 && !ready; i++) {
     const r = await fetch(base + "/$/ready").catch(() => null);
-    if (r && r.ok && (await r.json()).ready) break;
-    await new Promise((r) => setTimeout(r, 50));
+    ready = !!(r && r.ok && (await r.json()).ready);
+    if (!ready) await new Promise((r) => setTimeout(r, 100));
   }
+  assert.ok(ready, "the server was not ready after 120 s");
   browser = await chromium.launch();
 });
 
@@ -51,6 +55,33 @@ after(async () => {
 
 // The routes of the web UI that load without a dataset chosen, and the dataset's own pages.
 const pages = ["/$/ui/", "/$/ui/datasets", "/$/ui/server", "/$/ui/query", "/$/ui/search", "/$/ui/explore"];
+
+// A server still starting is shown as such, without a failed request in the console (#420):
+// the page reads /$/ready?report, which answers 200 whether ready or not.
+test("a server not ready yet shows it without a console error", async (t) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await context.addInitScript(() => localStorage.setItem("tripletrail-tour", "9999"));
+  await context.route("**/*", (route) => {
+    const url = new URL(route.request().url());
+    if (!route.request().url().startsWith(base)) return route.abort();
+    if (url.pathname === "/$/ready") {
+      // The answer of a server whose spatial indexes are still being built.
+      const body = { ready: false, starting: false, stopping: false, damaged: [], copying: [], datasets: { network: { spatial_index: false } } };
+      return route.fulfill({ status: url.searchParams.has("report") ? 200 : 503, contentType: "application/json", body: JSON.stringify(body) });
+    }
+    return route.continue();
+  });
+  const page = await context.newPage();
+  t.after(() => context.close());
+  const errors = [];
+  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+  page.on("response", (r) => { if (r.status() >= 400) errors.push(`${r.status()} ${new URL(r.url()).pathname}`); });
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(base + "/$/ui/server", { waitUntil: "networkidle" });
+  assert.equal(await page.textContent("#status-text"), "building indexes");
+  assert.match(await page.textContent("#server-kv"), /no \(building spatial indexes\)/);
+  assert.deepEqual(errors.filter((e) => !/ERR_FAILED|net::/.test(e)), [], "console errors");
+});
 
 // A clean page load logs no error in the console (#369): the open edition has no browser
 // sign-in, and asking for it must not show up as a failed request.

@@ -722,7 +722,7 @@ pub(crate) fn route(
     let get = matches!(method, Method::Get | Method::Head);
     match rest {
         ["ping"] => Ok(Reply::bytes(200, "text/plain", b"ok\n".to_vec())),
-        ["ready"] => Ok(ready(state)),
+        ["ready"] => Ok(ready(state, params.has("report"))),
         ["role", name] if get => Ok(role(state, name)),
         ["status"] => Ok(status(state)),
         #[cfg(feature = "replication")]
@@ -1031,7 +1031,10 @@ fn role(state: &State, name: &str) -> Reply {
     Reply::bytes(status, "text/plain", role.to_vec())
 }
 
-fn ready(state: &State) -> Reply {
+/// `/$/ready`: 200 when every dataset is open and indexed, 503 before. With `report` it answers
+/// 200 either way, with the same body, for a page that shows the state: a browser logs a 503
+/// as a failed request (#420).
+fn ready(state: &State, report: bool) -> Reply {
     let registry = state.registry.read_unpoisoned();
     let starting = state.starting.load(Ordering::Relaxed);
     let stopping = state.stopping.load(Ordering::Relaxed);
@@ -1089,7 +1092,7 @@ fn ready(state: &State) -> Reply {
             })
             .collect::<serde_json::Map<_, _>>(),
     });
-    json_reply(if ready { 200 } else { 503 }, &body)
+    json_reply(if ready || report { 200 } else { 503 }, &body)
 }
 
 /// `/$/status`: whether each dataset's spatial index is built (always 200).
