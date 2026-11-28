@@ -135,9 +135,14 @@ writes; the tool itself is not run.
 | `sh:node`, `sh:and`, `sh:or` and `sh:xone` of a node shape | their property shapes are the node shape's too (base types, groups, choices) |
 
 An entity's IRI is `NAMESPACE`, the local name of its class, `/` and the MD5 of the element's
-place below the root (`/stations/1:station/3:track`), so a file always gives the same IRIs.
-Each value is a branch of its own in a `UNION`, so repeated elements do not multiply. A type
-that contains itself is followed to its first repeat. The query reads `?_location`: run it
+Facade-X container, which is the file's location followed by the element's place in it
+(`file:///data/stations.xml/stations/1:station/3:track`): a file read from the same place
+always gives the same IRIs, and two files never share one. Each value is a branch of its own
+in a `UNION`, so repeated elements do not multiply. A type that contains itself is followed
+to its first repeat, and the walk stops 12 elements deep; each element not followed is named
+in a `# Not followed:` comment at the top of the query, to add by hand. A schema that gives
+more than 2,000 branches is refused: pick a smaller top-level element with `--root`. An XML
+name and namespace that make no IRI are refused with the shape's name. The query reads `?_location`: run it
 with `tripletrail lift QUERY -v location=FILE`. Not yet: entity IRIs from `xs:key`, the items
 of an `xs:list` (`xsd2rdf:xmlList`), JSON Schema and the other tools' shapes.
 

@@ -465,8 +465,9 @@ tripletrail validate --data stations.nt --shapes schema/shapes.ttl --lookup sche
 ```
 
 Each `<station>` becomes an entity of the schema's class `Station`, with an IRI made of the
-namespace, the class and a hash of where the element is in the file, so that the same file
-always gives the same IRIs. Its attributes and simple elements become its properties, typed as
+namespace, the class and a hash of the file's location and where the element is in it: the
+same file, read from the same place, always gives the same IRIs, and two files never share
+one. Its attributes and simple elements become its properties, typed as
 the schema types them (`xs:positiveInteger` stays `xsd:positiveInteger`), an element of a type
 of its own becomes a linked entity, and a value of an enumeration becomes its SKOS concept
 from `skos.ttl`. The data conforms to the shapes it came from, so the last command reports no

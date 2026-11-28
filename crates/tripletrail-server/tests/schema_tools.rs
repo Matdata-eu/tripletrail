@@ -668,6 +668,28 @@ fn the_lift_made_from_the_shapes_gives_data_they_accept() {
         count("?t ex:number \"2\"^^<http://www.w3.org/2001/XMLSchema#positiveInteger>"),
         n(1)
     );
+    // Another file of the schema gives other IRIs: they hash the file's location too.
+    let other = dir.join("other.xml");
+    std::fs::write(&other, LIFT_XML).unwrap();
+    let (ok, other_data, err) = tripletrail(
+        &[
+            "lift",
+            dir.join("lift.rq").to_str().unwrap(),
+            "-v",
+            &format!("location={}", other.display()),
+        ],
+        &[],
+    );
+    assert!(ok, "{err}");
+    let subjects = |d: &str| -> std::collections::BTreeSet<String> {
+        d.lines()
+            .filter_map(|l| l.split(' ').next())
+            .map(str::to_owned)
+            .collect()
+    };
+    let (a, b) = (subjects(&data), subjects(&other_data));
+    assert_eq!(a.len(), b.len());
+    assert!(a.is_disjoint(&b), "{a:?}");
     // The same file gives the same IRIs: they hash each element's place in the document.
     let sorted = |d: &str| {
         let mut lines: Vec<_> = d.lines().map(str::to_owned).collect();

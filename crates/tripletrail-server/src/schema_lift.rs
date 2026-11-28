@@ -14,7 +14,9 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use tripletrail::oxigraph::io::{RdfFormat, RdfParser};
-use tripletrail::oxigraph::model::{Graph, NamedNodeRef, NamedOrBlankNodeRef, Term, TermRef};
+use tripletrail::oxigraph::model::{
+    Graph, NamedNode, NamedNodeRef, NamedOrBlankNodeRef, Term, TermRef,
+};
 
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const SH: &str = "http://www.w3.org/ns/shacl#";
@@ -24,6 +26,10 @@ const DCT_SOURCE: &str = "http://purl.org/dc/terms/source";
 const XYZ: &str = "http://sparql.xyz/facade-x/data/";
 /// How deep the walk goes: a type that contains itself stops at its first repeat anyway.
 const MAX_DEPTH: usize = 12;
+/// Most `UNION` branches in one query: a type used in many places is walked once per place,
+/// and each branch repeats the pattern from the root, so a large schema can give a query no
+/// engine plans well.
+const MAX_BRANCHES: usize = 2_000;
 
 /// The artefacts of `tripletrail schema xsd --out DIR`, as Turtle.
 pub struct Schema<'a> {
@@ -76,11 +82,12 @@ pub fn xml_construct(
     let mut q = Query {
         ns: namespace.to_owned(),
         branches: Vec::new(),
+        skipped: Vec::new(),
     };
     let start = Position {
         pattern: format!(
             "?n0 a <http://sparql.xyz/facade-x/ns/Root> , <{}> .",
-            xml_iri(&element.0, element.1.as_deref())
+            xml_iri(&element.0, element.1.as_deref(), &shape)?
         ),
         var: "?n0".into(),
         depth: 0,
@@ -91,7 +98,7 @@ pub fn xml_construct(
         &start,
         &m.classes(None, &shape),
         &mut vec![shape.clone()],
-    );
+    )?;
     Ok(q.text())
 }
 
@@ -276,13 +283,17 @@ fn top_element(scd: &str) -> Option<(String, Option<String>)> {
     Some((local.to_owned(), ns))
 }
 
-/// The IRI Facade-X gives an element's type or an attribute's key.
-fn xml_iri(local: &str, ns: Option<&str>) -> String {
-    match ns {
+/// The IRI Facade-X gives an element's type or an attribute's key; an error naming `shape`
+/// when the name and namespace make no IRI.
+fn xml_iri(local: &str, ns: Option<&str>, shape: &Term) -> Result<String, String> {
+    let iri = match ns {
         None | Some("") => format!("{XYZ}{local}"),
         Some(ns) if ns.ends_with('/') || ns.ends_with('#') => format!("{ns}{local}"),
         Some(ns) => format!("{ns}#{local}"),
-    }
+    };
+    NamedNode::new(&iri)
+        .map(NamedNode::into_string)
+        .map_err(|e| format!("{shape}: the XML name {local:?} in {ns:?} is not an IRI: {e}"))
 }
 
 fn local_name(iri: &str) -> &str {
@@ -304,6 +315,8 @@ struct Branch {
 struct Query {
     ns: String,
     branches: Vec<Branch>,
+    /// The elements not followed, said in the query.
+    skipped: Vec<String>,
 }
 
 impl Query {
@@ -311,11 +324,13 @@ impl Query {
         format!("?b{}_{name}", self.branches.len())
     }
 
-    /// The IRI of the entity a container stands for.
+    /// The IRI of the entity a container stands for: the MD5 of the container's IRI, which is
+    /// the file's location followed by the element's place in it, so that two files never
+    /// share an entity and one file read from the same place always gives the same ones.
     fn entity(&self, var: &str, class: Option<&str>, into: &str) -> String {
         let class = class.map_or("entity", local_name);
         format!(
-            "BIND(IRI(CONCAT({}, MD5(STRAFTER(STR({var}), STR(?n0))))) AS {into})",
+            "BIND(IRI(CONCAT({}, MD5(STR({var})))) AS {into})",
             literal(&format!("{}{class}/", self.ns))
         )
     }
@@ -327,7 +342,12 @@ impl Query {
         at: &Position,
         classes: &[String],
         path: &mut Vec<Term>,
-    ) {
+    ) -> Result<(), String> {
+        if self.branches.len() > MAX_BRANCHES {
+            return Err(format!(
+                "the schema gives a query of more than {MAX_BRANCHES} branches: pick a smaller top-level element with --root"
+            ));
+        }
         let e = self.fresh("e");
         let me = self.entity(&at.var, classes.first().map(String::as_str), &e);
         if !classes.is_empty() {
@@ -353,16 +373,23 @@ impl Query {
             let slot = self.fresh("s");
             let pick = match (kind.as_deref(), &name) {
                 (Some("attribute"), Some(n)) => {
-                    format!("{} <{}> {raw} .", at.var, xml_iri(n, ns.as_deref()))
+                    format!("{} <{}> {raw} .", at.var, xml_iri(n, ns.as_deref(), &p)?)
                 }
                 (Some("element"), Some(n)) => {
                     let el = format!(
                         "{} {slot} {child} . {child} a <{}> .",
                         at.var,
-                        xml_iri(n, ns.as_deref())
+                        xml_iri(n, ns.as_deref(), &p)?
                     );
                     if let Some(inner) = m.object(&p, &format!("{SH}node")) {
                         if path.contains(&inner) || at.depth >= MAX_DEPTH {
+                            let why = if path.contains(&inner) {
+                                "its type contains itself"
+                            } else {
+                                "deeper than the walk goes"
+                            };
+                            self.skipped
+                                .push(format!("{n} at depth {}, {pred}: {why}", at.depth + 1));
                             continue;
                         }
                         let inner_classes = m.classes(Some(&p), &inner);
@@ -380,13 +407,13 @@ impl Query {
                                 at.pattern,
                                 at.var,
                                 at.depth + 1,
-                                xml_iri(n, ns.as_deref())
+                                xml_iri(n, ns.as_deref(), &p)?
                             ),
                             var,
                             depth: at.depth + 1,
                         };
                         path.push(inner.clone());
-                        self.walk(m, &inner, &next, &inner_classes, path);
+                        self.walk(m, &inner, &next, &inner_classes, path)?;
                         path.pop();
                         continue;
                     }
@@ -422,14 +449,18 @@ impl Query {
                 template: format!("{e} {pred} {v} ."),
             });
         }
+        Ok(())
     }
 
     fn text(&self) -> String {
         let mut q = String::from(
             "# Generated by `tripletrail schema lift` from the schema's shapes and provenance.\n\
-             # Run it with `tripletrail lift THIS.rq -v location=FILE.xml`.\n\
-             PREFIX fx: <http://sparql.xyz/facade-x/ns/>\nCONSTRUCT {\n",
+             # Run it with `tripletrail lift THIS.rq -v location=FILE.xml`.\n",
         );
+        for s in &self.skipped {
+            let _ = writeln!(q, "# Not followed: {s}.");
+        }
+        q.push_str("PREFIX fx: <http://sparql.xyz/facade-x/ns/>\nCONSTRUCT {\n");
         for b in &self.branches {
             let _ = writeln!(q, "  {}", b.template);
         }
@@ -482,14 +513,66 @@ mod tests {
             ),
             None
         );
+        let s: Term = NamedNode::new_unchecked("http://example.org/shape").into();
+        let iri = |l, ns| xml_iri(l, ns, &s);
         assert_eq!(
-            xml_iri("a", Some("http://example.org/st")),
+            iri("a", Some("http://example.org/st")).unwrap(),
             "http://example.org/st#a"
         );
         assert_eq!(
-            xml_iri("a", Some("http://example.org/st/")),
+            iri("a", Some("http://example.org/st/")).unwrap(),
             "http://example.org/st/a"
         );
-        assert_eq!(xml_iri("a", None), "http://sparql.xyz/facade-x/data/a");
+        assert_eq!(iri("a", None).unwrap(), "http://sparql.xyz/facade-x/data/a");
+        let bad = iri("a", Some("http://example.org/a b>")).unwrap_err();
+        assert!(bad.contains("<http://example.org/shape>"), "{bad}");
+    }
+
+    /// A schema of nested types: `levels` levels of node shapes `T0` .. `Tn`, each with
+    /// `fan` child elements of the next type; the last one also contains itself.
+    fn nested(levels: usize, fan: usize) -> (String, String) {
+        let (sh, x) = ("http://www.w3.org/ns/shacl#", "https://w3id.org/xsd2rdf#");
+        let mut shapes = String::new();
+        let mut prov =
+            format!("<http://e.org/T0> <{DCT_SOURCE}> \"a.xsd#xscd(/schemaElement::root)\" .\n");
+        for l in 0..levels {
+            let next = if l + 1 == levels { l } else { l + 1 };
+            shapes += &format!(
+                "<http://e.org/T{l}> a <{sh}NodeShape> ; <{sh}targetClass> <http://e.org/C{l}> .\n"
+            );
+            for f in 0..fan {
+                shapes += &format!(
+                    "<http://e.org/T{l}> <{sh}property> <http://e.org/P{l}_{f}> .\n\
+                     <http://e.org/P{l}_{f}> <{sh}path> <http://e.org/p{f}> ; <{sh}node> <http://e.org/T{next}> .\n"
+                );
+                prov += &format!(
+                    "<http://e.org/P{l}_{f}> <{x}xmlName> \"e{f}\" ; <{x}xmlNodeKind> \"element\" .\n"
+                );
+            }
+        }
+        (shapes, prov)
+    }
+
+    #[test]
+    fn a_type_that_contains_itself_is_said_and_a_large_schema_is_refused() {
+        let lift = |levels, fan| {
+            let (shapes, provenance) = nested(levels, fan);
+            let schema = Schema {
+                shapes: &shapes,
+                provenance: &provenance,
+                skos: "",
+            };
+            xml_construct(&schema, "http://e.org/data/", None)
+        };
+        let q = lift(3, 1).unwrap();
+        assert!(
+            q.contains(
+                "# Not followed: e0 at depth 3, <http://e.org/p0>: its type contains itself."
+            ),
+            "{q}"
+        );
+        // Three children of each of eight levels: 3^8 places.
+        let e = lift(8, 3).unwrap_err();
+        assert!(e.contains("more than 2000 branches"), "{e}");
     }
 }
