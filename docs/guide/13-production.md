@@ -13,6 +13,8 @@ section is a starting point; the [server reference](../server.md) has every opti
   if many people share it.
 - Backups on a schedule, kept somewhere else.
 - `/$/ready` for the load balancer, `/$/metrics` for Prometheus.
+- The operator's part of the [security model](../security.md#the-operators-part): host names,
+  the proxy, least privilege for remote sources, and who may read the files and logs.
 
 ## Backups
 
