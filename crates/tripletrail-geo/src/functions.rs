@@ -562,7 +562,7 @@ fn line_metric_distance(a: &[Segment], b: &[Segment]) -> Option<f64> {
         for &i in &ia {
             let (r, e) = (pa[i].1, bound(planar).min(seed));
             let envelope = AABB::from_corners([r[0] - e, r[1] - e], [r[2] + e, r[3] + e]);
-            for n in tree.locate_in_envelope_intersecting(&envelope) {
+            for n in tree.locate_in_envelope_intersecting(envelope) {
                 if visit(i, n.data, &mut planar) {
                     return Some(0.0);
                 }

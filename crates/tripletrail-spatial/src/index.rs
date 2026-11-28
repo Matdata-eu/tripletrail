@@ -745,7 +745,7 @@ impl SpatialIndex {
             Crs::Other(iri) => &self.projected.iter().find(|(i, _)| i == iri)?.1,
             _ => &self.geographic,
         };
-        tree.nearest_neighbor_iter_with_distance_2(&[point[0] as f32, point[1] as f32])
+        tree.nearest_neighbor_iter_with_distance_2([point[0] as f32, point[1] as f32])
             .take(n.max(1))
             .last()
             .map(|(_, d2)| f64::from(d2).sqrt())
@@ -808,7 +808,7 @@ impl SpatialIndex {
         let estimate = histograms[position].estimate(&envelope);
         if estimate < EXACT_BELOW {
             return tree
-                .locate_in_envelope_intersecting(&widen(&envelope))
+                .locate_in_envelope_intersecting(widen(&envelope))
                 .take(4 * EXACT_BELOW as usize)
                 .count();
         }
@@ -828,7 +828,7 @@ impl SpatialIndex {
             },
             _ => &self.geographic,
         };
-        Box::new(tree.locate_in_envelope_intersecting(&widen(&envelope)))
+        Box::new(tree.locate_in_envelope_intersecting(widen(&envelope)))
     }
 }
 
