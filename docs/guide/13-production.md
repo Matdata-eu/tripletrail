@@ -342,8 +342,20 @@ SELECT ?s ?type WHERE { ?s a ?type }' | grep -o '"executor":"[a-z]*"\|"hints":\[
 ## Monitoring
 
 - `/$/ping` answers while the process lives (liveness); `/$/ready` answers `200` once every
-  dataset is open and indexed (readiness). The Docker image's health check calls `tripletrail
-  health`.
+  dataset is open and indexed (readiness), and `503` before. A script or dashboard that shows
+  the state rather than routing traffic asks `/$/ready?report`, which answers `200` either
+  way, with `ready` in its body. The Docker image's health check calls `tripletrail health`.
+
+<!-- test: run -->
+```sh
+curl -s 'http://localhost:7878/$/ready?report' | grep -o '"ready":[a-z]*'
+```
+
+<!-- test: output -->
+```text
+"ready":true
+```
+
 - `/$/metrics` is in the Prometheus format: requests, durations, timeouts, triples, cache
   hits and more:
 

@@ -1734,6 +1734,19 @@ fn ready_waits_for_start_and_spatial_index() {
     server.spawn();
     assert_eq!(status(ureq::get(&format!("{base}/$/ping")).call()), 200);
     assert_eq!(status(ureq::get(&format!("{base}/$/ready")).call()), 503);
+    // With `report`, the same state at 200, for a page that shows it (#420).
+    let report: Value = serde_json::from_str(
+        &ureq::get(&format!("{base}/$/ready?report"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        (&report["ready"], &report["starting"]),
+        (&serde_json::json!(false), &serde_json::json!(true))
+    );
     let engine = Engine::new_tripletrail();
     engine.load(RdfFormat::Turtle, TTL.as_bytes()).unwrap();
     engine.warm_up();
