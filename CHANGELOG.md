@@ -9,7 +9,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ## 0.2.0 - 2026-11-28
 
-Records you can browse and edit from the shapes, **Add data** for any file, map tools (draw an area, measure, a time slider, export and cite), periods for "valid on a day" queries, AI agents over MCP, schema lifting from XSD, JSON Schema, OpenAPI, ASN.1 and PostgreSQL, and a store that is half the size. The id executor is now the default.
+Records you can browse and edit from the shapes, **Add data** for any file, map tools (draw an area, measure, a time slider, export and cite), periods for "valid on a day" queries, AI agents over MCP, schema lifting from XSD, JSON Schema, OpenAPI, ASN.1 and PostgreSQL, and a store that takes about a fifth of the space. The id executor is now the default.
 
 ### Upgrading from 0.1.0
 
