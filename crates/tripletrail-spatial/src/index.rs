@@ -1,6 +1,6 @@
 use geo::BoundingRect;
 use oxigraph::model::{Literal, NamedNodeRef, Term};
-use rstar::{AABB, RTree, RTreeObject};
+use rstar::{AABB, RTreeObject};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -8,18 +8,21 @@ use std::time::{Duration, Instant};
 use tripletrail_geo::{Crs, Geom, parse_wkt_literal};
 use tripletrail_store::{Dataset, DatasetError, TermId};
 
+mod tree;
+use tree::Tree;
+
 const AS_WKT: NamedNodeRef<'static> =
     NamedNodeRef::new_unchecked("http://www.opengis.net/ont/geosparql#asWKT");
 
 /// An R-tree entry: a bounding box and the slot of its literal (see [`SpatialIndex::slots`]).
 ///
 /// The box is in `f32`, rounded outwards, so it holds the geometry's box: candidates are a
-/// superset of the exact ones, and the exact tests are on the geometry. An entry is 20 bytes,
-/// and a tree node (a vector and a box) 40: the index takes about 50 bytes a geometry.
+/// superset of the exact ones, and the exact tests are on the geometry. An entry is 20 bytes; a
+/// packed tree (see [`tree::Tree`]) keeps them in one vector, and its levels add about 5%.
 ///
-/// Kept without a niche on purpose: rstar's bulk load collects each leaf in place when a tree
-/// node is no larger than an entry, and the leaf then keeps the whole capacity of the slab it
-/// was cut from (over 900 MB for 700k entries of 128 bytes, and twice the time).
+/// Kept without a niche on purpose: rstar's bulk load (used for the trees in tests) collects each
+/// leaf in place when a tree node is no larger than an entry, and the leaf then keeps the whole
+/// capacity of the slab it was cut from (over 900 MB for 700k entries of 128 bytes).
 #[derive(Clone, Copy)]
 pub(crate) struct Entry {
     envelope: AABB<[f32; 2]>,
@@ -236,8 +239,8 @@ pub struct IndexStats {
 /// (CRS84/EPSG:4326, as longitude/latitude) and one per other CRS.
 #[derive(Clone)]
 pub struct SpatialIndex {
-    geographic: RTree<Entry>,
-    projected: Vec<(String, RTree<Entry>)>,
+    geographic: Tree,
+    projected: Vec<(String, Tree)>,
     /// Literals that are not in a tree: invalid, or empty geometries.
     unindexed: Vec<Literal>,
     /// `geo:asWKT` objects that are not geometry literals.
@@ -273,9 +276,9 @@ struct Histogram {
 }
 
 impl Histogram {
-    fn build(tree: &RTree<Entry>) -> Self {
+    fn build(tree: &Tree) -> Self {
         let n = tree.size();
-        let extent = tree.root().envelope();
+        let extent = tree.envelope();
         let (lo, hi) = (extent.lower().map(f64::from), extent.upper().map(f64::from));
         let cell = [
             ((hi[0] - lo[0]) / GRID as f64).max(f64::MIN_POSITIVE),
@@ -446,13 +449,14 @@ impl SpatialIndex {
                 place(&geom.crs.clone(), envelope, None, Some((literal, geom)));
             }
         }
-        let geographic = RTree::bulk_load(geographic);
+        slots.ids.shrink_to_fit();
+        let geographic = Tree::bulk_load(geographic);
         let geometries = geographic.size() + projected.iter().map(|(_, v)| v.len()).sum::<usize>();
         Ok(Self {
             geographic,
             projected: projected
                 .into_iter()
-                .map(|(iri, v)| (iri, RTree::bulk_load(v)))
+                .map(|(iri, v)| (iri, Tree::bulk_load(v)))
                 .collect(),
             unindexed,
             non_literals,
@@ -474,14 +478,13 @@ impl SpatialIndex {
     pub fn retain(&self, keep: &(dyn Fn(Option<TermId>, &Literal) -> bool + Sync)) -> Self {
         let start = Instant::now();
         let visible = |e: &&Entry| keep(self.slots.id(e.slot), self.literal(e));
-        let geographic =
-            RTree::bulk_load(self.geographic.iter().filter(visible).cloned().collect());
-        let projected: Vec<(String, RTree<Entry>)> = self
+        let geographic = Tree::bulk_load(self.geographic.iter().filter(visible).cloned().collect());
+        let projected: Vec<(String, Tree)> = self
             .projected
             .iter()
             .map(|(iri, tree)| {
                 let entries = tree.iter().filter(visible).cloned().collect();
-                (iri.clone(), RTree::bulk_load(entries))
+                (iri.clone(), Tree::bulk_load(entries))
             })
             .collect();
         let unindexed: Vec<Literal> = self
@@ -655,22 +658,23 @@ impl SpatialIndex {
                 }
             } else {
                 let all = std::mem::take(tree)
+                    .into_entries()
                     .into_iter()
                     .chain(these.into_iter().map(|(_, e)| e))
                     .collect();
-                *tree = RTree::bulk_load(all);
+                *tree = Tree::bulk_load(all);
             }
         }
     }
 
-    fn tree_mut(&mut self, crs: &Crs) -> &mut RTree<Entry> {
+    fn tree_mut(&mut self, crs: &Crs) -> &mut Tree {
         let Crs::Other(iri) = crs else {
             return &mut self.geographic;
         };
         let i = match self.projected.iter().position(|(i, _)| i == iri) {
             Some(i) => i,
             None => {
-                self.projected.push((iri.clone(), RTree::new()));
+                self.projected.push((iri.clone(), Tree::new()));
                 self.projected.len() - 1
             }
         };
@@ -685,10 +689,12 @@ impl SpatialIndex {
     /// and its histograms. The parsed geometries are the store's, and not counted here
     /// (#225).
     pub fn heap_size(&self) -> usize {
-        let entries =
-            self.geographic.size() + self.projected.iter().map(|(_, t)| t.size()).sum::<usize>();
-        // Leaves hold the entries; the inner nodes add about one in six.
-        let trees = entries * size_of::<rstar::RTreeNode<Entry>>() * 7 / 6;
+        let trees = self.geographic.heap_size()
+            + self
+                .projected
+                .iter()
+                .map(|(_, t)| t.heap_size())
+                .sum::<usize>();
         let slots = &self.slots;
         let chunks = slots.cache.iter().filter(|c| c.get().is_some()).count();
         let slots = slots.ids.capacity() * size_of::<TermId>()
