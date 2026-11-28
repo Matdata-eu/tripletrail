@@ -452,6 +452,28 @@ The guide's tests can't install the tools, so they don't run these examples;
 ones. See [schema files](../rml.md#schema-files) and
 [the import API](../server.md#importing-files).
 
+### Let the schema write the lift
+
+The shapes of an XML Schema say which element or attribute each property comes from, so they
+can write the lift for you. `tripletrail schema lift` reads the folder `schema xsd --out` wrote
+and makes the Facade-X `CONSTRUCT` for files of that schema:
+
+```sh
+tripletrail schema lift schema/ --namespace https://data.example.org/stations/ --output stations.rq
+tripletrail lift stations.rq -v location=stations.xml --output stations.nt
+tripletrail validate --data stations.nt --shapes schema/shapes.ttl --lookup schema/skos.ttl
+```
+
+Each `<station>` becomes an entity of the schema's class `Station`, with an IRI made of the
+namespace, the class and a hash of the file's location and where the element is in it: the
+same file, read from the same place, always gives the same IRIs, and two files never share
+one. Its attributes and simple elements become its properties, typed as
+the schema types them (`xs:positiveInteger` stays `xsd:positiveInteger`), an element of a type
+of its own becomes a linked entity, and a value of an enumeration becomes its SKOS concept
+from `skos.ttl`. The data conforms to the shapes it came from, so the last command reports no
+violations for a file that is valid against the XSD. Edit the query like any other lift when
+you want other IRIs or fewer properties. See [schema lift](../rml.md#the-lift-from-the-shapes).
+
 ## Useful options
 
 - `--output-dir out/` writes one file per query or mapping instead of one file.

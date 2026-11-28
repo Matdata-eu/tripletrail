@@ -453,6 +453,9 @@ the number as written; `?__name` is optional and stays a variable without a valu
 Parameters in strings, IRIs and comments are left alone. Without `-v` the queries run as
 they are. Unlike SPARQL Anything, a name given twice is an error rather than a second run.
 
+For an XML file with an XML Schema, `tripletrail schema lift` writes the lift query from the
+schema's shapes: see [the lift from the shapes](rml.md#the-lift-from-the-shapes).
+
 ## Functions
 
 `fx:entity`, `fx:literal`, `fx:bnode`, `fx:cardinal`, `fx:isContainerMembershipProperty`,

@@ -738,6 +738,24 @@ enum SchemaCommand {
         #[command(flatten)]
         tool: SchemaToolArgs,
     },
+    /// The Facade-X `CONSTRUCT` that lifts an XML file of a schema, made from what
+    /// `schema xsd --out DIR` wrote there: each element with a node shape becomes an entity of
+    /// its class, each attribute, simple element and text a value of its property, cast to the
+    /// shape's datatype, and each enumeration value its SKOS concept. The data it gives
+    /// conforms to the same shapes. Run it with `tripletrail lift QUERY -v location=FILE`.
+    Lift {
+        /// The folder `schema xsd --out` wrote `shapes.ttl`, `provenance.ttl` and `skos.ttl` to.
+        dir: PathBuf,
+        /// The namespace the entities' IRIs start with, followed by their class's name.
+        #[arg(long, value_name = "IRI")]
+        namespace: String,
+        /// The top-level element the files start with, when the schema has more than one.
+        #[arg(long, value_name = "NAME")]
+        root: Option<String>,
+        /// Write the query to this file instead of standard output.
+        #[arg(long, value_name = "FILE")]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -3516,6 +3534,36 @@ fn run() -> Result<()> {
                 ],
             )
         }
+        Command::Schema {
+            command:
+                SchemaCommand::Lift {
+                    dir,
+                    namespace,
+                    root,
+                    output,
+                },
+        } => {
+            let read = |name: &str| {
+                std::fs::read_to_string(dir.join(name))
+                    .map_err(|e| format!("{}: {e}", dir.join(name).display()))
+            };
+            let (shapes, provenance) = (read("shapes.ttl")?, read("provenance.ttl")?);
+            let skos = read("skos.ttl").unwrap_or_default();
+            let query = tripletrail_server::schema_lift::xml_construct(
+                &tripletrail_server::schema_lift::Schema {
+                    shapes: &shapes,
+                    provenance: &provenance,
+                    skos: &skos,
+                },
+                &namespace,
+                root.as_deref(),
+            )?;
+            match output {
+                Some(file) => std::fs::write(file, query)?,
+                None => print!("{query}"),
+            }
+            Ok(())
+        }
         Command::Schema { command } => {
             let (tool, args, download) = match command {
                 SchemaCommand::Xsd {
@@ -3525,6 +3573,7 @@ fn run() -> Result<()> {
                 SchemaCommand::Jsonschema { tool } => (schema_tools::Tool::JsonSchema, tool, false),
                 SchemaCommand::Openapi { tool } => (schema_tools::Tool::OpenApi, tool, false),
                 SchemaCommand::Asn1 { tool } => (schema_tools::Tool::Asn1, tool, false),
+                SchemaCommand::Lift { .. } => unreachable!("matched above"),
                 #[cfg(feature = "postgres")]
                 SchemaCommand::Database { .. } => unreachable!("matched above"),
             };

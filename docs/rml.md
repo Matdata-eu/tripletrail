@@ -116,6 +116,36 @@ same rerun report as [database schema](#database-schema):
 Without `--out`, all four are written to standard output as one Turtle document. The tool's
 warnings and the number of triples of each file are written to standard error.
 
+### The lift from the shapes
+
+`tripletrail schema lift DIR --namespace IRI [--root NAME] [--output FILE]` writes the Facade-X
+`CONSTRUCT` that lifts an XML file of the schema whose `shapes.ttl`, `provenance.ttl` and
+`skos.ttl` are in `DIR`, as `schema xsd --out DIR` writes them (#277). It needs
+`xsd2rdf:xmlName`, `xsd2rdf:xmlNamespace` and `xsd2rdf:xmlNodeKind` on the property shapes
+and the `dct:source` of the top-level element's node shape, which `xsd2rdf --source-provenance`
+writes; the tool itself is not run.
+
+| From the shapes | In the query |
+|---|---|
+| the node shape of the top-level element (its `dct:source` is `…xscd(/schemaElement::NAME)`) | the root container; `--root NAME` picks one when the schema has several |
+| a property shape of an `element` with `sh:node` | a linked entity, typed by the property shape's `sh:class` and the node shape's `sh:targetClass`, whose own property shapes are read in turn |
+| a property shape of an `element` without `sh:node`, an `attribute`, or `text` | a value: the element's text, the attribute's value, or the text of an element with simple content |
+| `sh:datatype` | the value cast with `STRDT` (`xsd:string` stays a plain string) |
+| `sh:class skos:Concept` with xsd2rdf's `skos:inScheme` constraint | the concept of that scheme whose `skos:notation` is the value, from `skos.ttl` |
+| `sh:node`, `sh:and`, `sh:or` and `sh:xone` of a node shape | their property shapes are the node shape's too (base types, groups, choices) |
+
+An entity's IRI is `NAMESPACE`, the local name of its class, `/` and the MD5 of the element's
+Facade-X container, which is the file's location followed by the element's place in it
+(`file:///data/stations.xml/stations/1:station/3:track`): a file read from the same place
+always gives the same IRIs, and two files never share one. Each value is a branch of its own
+in a `UNION`, so repeated elements do not multiply. A type that contains itself is followed
+to its first repeat, and the walk stops 12 elements deep; each element not followed is named
+in a `# Not followed:` comment at the top of the query, to add by hand. A schema that gives
+more than 2,000 branches is refused: pick a smaller top-level element with `--root`. An XML
+name and namespace that make no IRI are refused with the shape's name. The query reads `?_location`: run it
+with `tripletrail lift QUERY -v location=FILE`. Not yet: entity IRIs from `xs:key`, the items
+of an `xs:list` (`xsd2rdf:xmlList`), JSON Schema and the other tools' shapes.
+
 ## Sources (RML-IO)
 
 A logical source names a file, relative to the base directory (`--base`, else the current
