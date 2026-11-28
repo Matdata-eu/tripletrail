@@ -81,6 +81,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Fixed
 
+- The OGC API's OpenAPI definition lists every parameter the items and one feature take (#367): `properties` (an array of the collection's keys, or `*`), `lang`, `timeout` and `f` on both, and `area`, `rel` and `dist` on the items, with a `400` response, so clients such as QGIS, GDAL and generated clients can offer them. A feature's path listed only its id before.
 - The Query page reads a `\U` escape for a backslash or a quote in an N-Triples answer (CONSTRUCT, DESCRIBE) as that character; it used to fail to parse the line.
 
 - A query reads the numeric value columns of its own snapshot (#328). The range rewrite (#71) and the top-k values of `ORDER BY ?v LIMIT k` (#297) read columns that followed the engine's current data, so a `DELETE` between a query's snapshot and its reading the column could drop rows the snapshot has. Each column is now kept with the store generation it holds, and a query whose snapshot differs (where the predicate changed in between) builds it from its snapshot.
