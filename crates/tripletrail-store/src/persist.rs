@@ -2190,19 +2190,22 @@ fn write_index_in(
     let window = window.clamp(1, slots.max(1));
     let mut carry = Vec::new();
     let mut buf: Vec<u64> = Vec::new();
-    let mut bytes: Vec<u8> = Vec::new();
+    // The window goes out through a small buffer of bytes, not a copy of it: the window is
+    // the only large allocation.
+    let mut bytes: Vec<u8> = Vec::with_capacity(1 << 20);
     for lo in (0..slots).step_by(window) {
         let len = window.min(slots - lo);
         buf.clear();
         buf.resize(len, 0);
         carry = dict.fill_index_window(from, keys, lo, &mut buf, &carry);
-        bytes.clear();
-        bytes.reserve(8 * len);
-        for s in &buf {
-            bytes.extend_from_slice(&s.to_le_bytes());
+        for piece in buf.chunks(bytes.capacity() / 8) {
+            bytes.clear();
+            for s in piece {
+                bytes.extend_from_slice(&s.to_le_bytes());
+            }
+            out.write_all(&bytes)?;
+            crc.update(&bytes);
         }
-        out.write_all(&bytes)?;
-        crc.update(&bytes);
     }
     drop((buf, bytes));
     out.flush()?;
