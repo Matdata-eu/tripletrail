@@ -1493,7 +1493,7 @@ fn an_answer_says_when_the_connection_closes() {
     let update = "INSERT DATA { <urn:a> <urn:b> <urn:c> }";
     let request = |connection: &str| {
         format!(
-            "POST /ds/update HTTP/1.1\r\nHost: x\r\nContent-Type: application/sparql-update\r\n\
+            "POST /ds/update HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/sparql-update\r\n\
              Content-Length: {}\r\n{connection}\r\n{update}",
             update.len()
         )
@@ -1576,7 +1576,7 @@ fn many_keep_alive_connections_at_once_are_all_answered() {
             .map(|_| std::net::TcpStream::connect(&address).unwrap())
             .collect();
         for mut s in &streams {
-            s.write_all(b"GET /$/ping HTTP/1.1\r\nHost: x\r\n\r\n")
+            s.write_all(b"GET /$/ping HTTP/1.1\r\nHost: localhost\r\n\r\n")
                 .unwrap();
         }
         let answered = streams
