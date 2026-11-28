@@ -16,6 +16,9 @@ labels), and the first search after a write adds and removes the labels that cha
 40 ms on the same data). A search then takes milliseconds. Full-text search needs the
 TripleTrail store, the default.
 
+The index takes about 90 MiB of memory on RINF Germany (11.7M quads, 572,000 labels), and its
+build at most a third more than that while it runs. `/$/stats` counts it (`textIndex`).
+
 ## What is indexed
 
 The literals of `rdfs:label`, `rdfs:comment`, `skos:prefLabel`, `skos:altLabel`,
