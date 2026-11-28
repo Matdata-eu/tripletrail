@@ -3325,7 +3325,10 @@ curl 'http://localhost:7878/kg/ogc/collections/Station/items?bbox=5.5,58.2,6,58.
 - **Property filters.** A property with an `tts:facet` in the shapes (generated shapes give
   one to properties with a few values or a range) filters the items by its key:
   `…/items?tracks=2&open=true` keeps the features with those values, compared as text (an
-  IRI by its full form). Several filters must all hold. The OpenAPI definition lists them per
+  IRI by its full form). An IRI value also matches by the label the items show for it (#368):
+  in the reader's language (`lang`, else `Accept-Language`, else English) and without what
+  `tts:labelStrip` matches, so `country=Belgium` finds what `country=http://publications.europa.eu/resource/authority/country/BEL`
+  finds, for a property with up to 10,000 IRI values. Several filters must all hold. The OpenAPI definition lists them per
   collection; a property without a facet is refused as an unknown parameter. A key that is
   also a parameter of the items (`limit`, `offset`, `bbox`, `bbox-crs`, `crs`, `datetime`,
   `geometries`, `filter`, `filter-lang`, `filter-crs`, `area`, `rel`, `dist`, `properties`, `lang`, `f`, `timeout`) is never a filter:
