@@ -3,7 +3,7 @@
 TripleTrail is open core: the engine, the server and almost every feature are Apache-2.0. A small
 set of features for larger organisations (central sign-on, row-level data governance, audit and
 team process) is sold as TripleTrail Enterprise, with a subscription that includes updates and
-support. The design is in issue #734.
+support.
 
 This page covers the build, the licence key and how customers get updates. It is for
 Matdata and for customers' operators.
@@ -13,19 +13,20 @@ Matdata and for customers' operators.
 | | Open (Apache-2.0) | Enterprise |
 |---|---|---|
 | Build | `cargo build -p tripletrail-server` | `cargo build -p tripletrail-server --features enterprise` |
-| Image | `ghcr.io/matdata-eu/tripletrail` | `docker build --build-arg EDITION=enterprise .`, pushed to the private registry only |
+| Image | `ghcr.io/matdata-eu/tripletrail` | `docker build --build-arg EDITION=enterprise .`, published as `ghcr.io/matdata-eu/tripletrail-enterprise` |
 | Binary | `tripletrail` | `tripletrail` (the same name, so scripts do not change) |
 | `tripletrail --version` | `0.1.0` | `0.1.0 (enterprise)` |
 | `GET /$/server` | `"edition": "open"` | `"edition": "enterprise"` |
 
 The enterprise code lives in `crates/tripletrail-enterprise`, which is proprietary (see its
-`LICENSE`), `publish = false`, and only compiled with the cargo feature `enterprise`. CI checks
-that the default build of `tripletrail-server` does not depend on it, and the release workflow and
-the public image build only the default features. When the repository goes public (#150), the
-crate moves to a private repository and the public export leaves it out:
-`python3 .github/scripts/public-export.py OUT --check --strict` writes the public tree to `OUT`
-without either enterprise crate or the `enterprise` features, checks that it builds, and fails
-on the names and paths listed in `.github/scripts/public-export-deny.txt`.
+`LICENSE`), `publish = false`, and only compiled with the cargo feature `enterprise`. It is kept
+in a private repository, which builds this repository's code with that crate added. The open release workflow and the open image build only the default
+features.
+
+The enterprise image is public: anyone can pull it, with no account or token.
+`docker run ghcr.io/matdata-eu/tripletrail-enterprise` starts a server that checks its licence
+at start (below). Without a licence that covers them, the enterprise features stay off and the
+server works as the open edition, with the reason in the log.
 
 ## The licence key
 
@@ -179,10 +180,11 @@ installs at start. Their tests run with
 ## Updates
 
 - Releases are versioned (`vX.Y.Z`) and built from the same tag in both editions.
-- Customers pull the enterprise image and binaries from Matdata's private registry with a
-  token tied to their subscription. When a subscription ends, the token is revoked: no new
-  updates, while the installed version keeps running under the rules above.
+- Each release of the enterprise image is published to the public
+  `ghcr.io/matdata-eu/tripletrail-enterprise`, tagged with its version. Pulling it needs no
+  token; what a server may do with it depends on its licence. An expired licence keeps everything
+  working for a 30-day grace period, after which the enterprise features turn off and the open
+  features keep working (see [what happens when a licence
+  expires](#what-happens-when-a-licence-expires)).
 - From 1.0, an LTS branch (`release/N.x`) gets security and data-loss fixes for 24 months for
   Enterprise contracts.
-
-The private registry is not set up yet (#734).

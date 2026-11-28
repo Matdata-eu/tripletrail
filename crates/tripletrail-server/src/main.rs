@@ -1067,6 +1067,16 @@ struct ServeArgs {
         value_name = "ORIGIN"
     )]
     cors: Option<Vec<String>>,
+    /// Without authentication, answer only for these host names besides IP addresses and
+    /// localhost (against DNS rebinding): `kg.example.org`, `.example.org` for it and the
+    /// names under it, `*` for any. Without it, any name beyond loopback, none on loopback.
+    #[arg(
+        long = "allowed-host",
+        env = "TRIPLETRAIL_ALLOWED_HOST",
+        value_delimiter = ',',
+        value_name = "HOST"
+    )]
+    allowed_hosts: Vec<String>,
     /// Writes (SPARQL updates, and POST, PUT and DELETE on /<name>/data) need
     /// `Authorization: Bearer <token>`, this token or the admin token. Queries stay open.
     #[arg(long, env = "TRIPLETRAIL_UPDATE_TOKEN", hide_env_values = true)]
@@ -2322,6 +2332,7 @@ fn serve(args: ServeArgs) -> Result<()> {
         threads,
         query_threads,
         cors,
+        allowed_hosts,
         update_token,
         max_body,
         max_upload,
@@ -2681,6 +2692,7 @@ fn serve(args: ServeArgs) -> Result<()> {
             config_file: config,
             cors: cors_all,
             cors_origins,
+            allowed_hosts: allowed_hosts.clone(),
             update_token: update_token.filter(|t| !t.is_empty()),
             max_body: Some(max_body),
             schema_tools,
@@ -2811,6 +2823,14 @@ fn serve(args: ServeArgs) -> Result<()> {
         eprintln!(
             "warning: users sign in with passwords over plain HTTP: put the server behind \
              HTTPS (--tls-cert, or a proxy that ends TLS) so passwords are not sent in the clear"
+        );
+    }
+    if !server.has_auth() && !server.address().ip().is_loopback() && allowed_hosts.is_empty() {
+        eprintln!(
+            "warning: no authentication, and every host name is answered: a web page can reach \
+             this server through a name of its own (DNS rebinding) when a visitor's browser can \
+             reach it. Give its names with --allowed-host (e.g. --allowed-host kg.example.org), \
+             or turn on --auth-config"
         );
     }
     // Opened after binding, so liveness checks (/$/ping) answer while large datasets open.

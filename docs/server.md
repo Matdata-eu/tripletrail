@@ -1507,6 +1507,22 @@ does).
   anyone who should only query. A browser sends a form `POST` to `/{ds}/update` from any web
   page without asking first, so without a token any page a user opens can change the data.
 - Prefer `--cors https://your.app` over `--cors` alone, which answers every origin.
+- Changes sent from a browser by a page of another site are refused (403), whatever the
+  caller signs in with (a browser sends saved passwords and cookies along with a form posted
+  from anywhere). A change is taken when the browser says it comes from the server's own
+  pages (`Sec-Fetch-Site: same-origin`), when its `Origin` is the server's own (its `Host`,
+  `X-Forwarded-Host` or an exact `--allowed-host` name, of any scheme and port; `*` and
+  `.domain` entries do not count) or one listed with `--cors`, and from clients
+  that send neither header (curl, scripts, agents). With `--cors` for every origin, a script's
+  change is taken but a form body (`application/x-www-form-urlencoded`, `multipart/form-data`,
+  `text/plain`), which a browser sends with credentials without asking first, is not.
+- Without `--auth-config`, the server answers only for its own host names, against DNS
+  rebinding (a page of another site giving its own name the server's address): IP addresses,
+  `localhost` and names under `.localhost`, and those of `--allowed-host`
+  (`TRIPLETRAIL_ALLOWED_HOST`, repeatable or comma-separated: `kg.example.org`, `.example.org`
+  for it and every name under it, `*` for any). Other names get 403. When no
+  `--allowed-host` is given, a server listening beyond loopback answers every name, and warns
+  at start. With `--auth-config`, every name is answered.
 - Set `--timeout` so a single query cannot hold a worker for long; queries, updates, routing
   functions and long geo functions stop at the deadline with a 503.
 

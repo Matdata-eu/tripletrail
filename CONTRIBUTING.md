@@ -29,6 +29,10 @@ approach; to work on an open issue, say so in a comment on it.
   cargo deny check
   ```
 
+  A pull request that changes only documentation (top-level Markdown, `docs/`, `bench/`,
+  `LICENSE`, `NOTICE`) skips the `test`, `audit` and `licenses` jobs, which still count as
+  passed for the merge; any other file runs them all (`.github/scripts/code-changed.sh`).
+
   A change to the REST API or OGC API Features also passes `.github/scripts/lint-openapi.sh target/debug/tripletrail`
   (after `cargo build -p tripletrail-server`; needs Node.js): Spectral's OpenAPI rules on the
   definitions it makes, with no warning.

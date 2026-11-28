@@ -464,7 +464,7 @@ fn unread_expected_bodies_keep_the_connection_usable() {
     let body = "isolation-level=http%3A%2F%2Fwww.openrdf.org%2Fschema%2Fsesame%23SNAPSHOT_READ";
     write!(
         stream,
-        "POST /rdf4j-server/repositories/kg/transactions HTTP/1.1\r\nHost: x\r\n\
+        "POST /rdf4j-server/repositories/kg/transactions HTTP/1.1\r\nHost: localhost\r\n\
          Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\
          Expect: 100-continue\r\n\r\n",
         body.len()
@@ -502,7 +502,7 @@ fn unread_expected_bodies_keep_the_connection_usable() {
     reader.read_exact(&mut skip).unwrap();
     write!(
         stream,
-        "GET /rdf4j-server/protocol HTTP/1.1\r\nHost: x\r\n\r\n"
+        "GET /rdf4j-server/protocol HTTP/1.1\r\nHost: localhost\r\n\r\n"
     )
     .unwrap();
     let mut status = String::new();

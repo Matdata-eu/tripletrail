@@ -13,13 +13,10 @@ on:
       - "bench/**"
       - "LICENSE"
       - "NOTICE"
+  # Every pull request, documentation only too: `test`, `audit` and `licenses` are required
+  # checks, and a workflow its paths filter skips reports none of them, so the pull request
+  # could never merge (#408). The `changes` job skips them instead, which counts as passing.
   pull_request:
-    paths-ignore:
-      - "*.md"
-      - "docs/**"
-      - "bench/**"
-      - "LICENSE"
-      - "NOTICE"
   workflow_dispatch:
 
 # A newer push cancels the run it replaces, on main too: after a merge only the newest main
@@ -51,10 +48,35 @@ permissions:
   contents: read
 
 jobs:
+  # Whether a pull request changes more than documentation (the paths the push trigger
+  # ignores); a push or a manual run always runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      # A pull request's merge commit: its first parent is the base, so the diff between them is
+      # the pull request's change.
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      - id: diff
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            git diff --name-only HEAD^1 HEAD | .github/scripts/code-changed.sh >> "$GITHUB_OUTPUT"
+          else
+            echo code=true >> "$GITHUB_OUTPUT"
+          fi
+
   # One job builds and tests everything (workspace, every feature, Python binding): one queue
   # slot and one cache restore per run. As three jobs, each waited for a free runner and spent
   # most of its time restoring the cache.
   test:
+    needs: changes
+    # A failed `changes` job runs everything rather than skipping it.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -216,6 +238,9 @@ jobs:
   # Known vulnerabilities in the dependencies of the workspace and of the Python binding, and
   # drift between the two lockfiles.
   audit:
+    needs: changes
+    # A failed `changes` job runs everything rather than skipping it.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -234,6 +259,9 @@ jobs:
 
   # Licenses and sources of every dependency, for the workspace and the Python binding (deny.toml).
   licenses:
+    needs: changes
+    # A failed `changes` job runs everything rather than skipping it.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
