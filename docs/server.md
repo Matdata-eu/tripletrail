@@ -1700,7 +1700,7 @@ A token or key sent in `Authorization` wins over the cookie.
 
 | Endpoint | |
 |---|---|
-| `GET /$/sso` | The sign-in choices (`signIn`: `name`, `issuer`, `login`) and who is signed in (`signedIn`: `agent`, `groups`, `groupClaims` (the claim each group came from), `issuer`, `ends`, or `null`). |
+| `GET /$/sso` | The sign-in choices (`signIn`: `name`, `issuer`, `login`) and who is signed in (`signedIn`: `agent`, `groups`, `groupClaims` (the claim each group came from), `issuer`, `ends`, or `null`). Without browser sign-in, and in the open edition, `{"signIn": [], "signedIn": null}`; the other paths are then `404`. |
 | `GET /$/sso/login?issuer=N&return=PATH` | Starts a sign-in with issuer `N` (by default the first with a `browser`), coming back to `PATH`. |
 | `GET /$/sso/callback` | Where the provider sends the browser back. |
 | `POST /$/sso/logout` | Ends the session (from the server's own pages) and clears the cookie: `204`. It does not sign out at the provider. |

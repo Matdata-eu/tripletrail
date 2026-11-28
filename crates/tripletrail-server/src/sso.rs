@@ -1,6 +1,7 @@
 //! Browser sign-in with single sign-on (#198, TripleTrail Enterprise): `/$/sso`.
 //!
-//! - `GET /$/sso`: the issuers people can sign in with, and who is signed in.
+//! - `GET /$/sso`: the issuers people can sign in with, and who is signed in (none without
+//!   browser sign-in).
 //! - `GET /$/sso/login?issuer=N&return=PATH`: off to the provider.
 //! - `GET /$/sso/callback`: back from it; sets the session cookie and returns to `PATH`.
 //! - `POST /$/sso/logout`: ends the session.
@@ -19,19 +20,24 @@ pub(crate) fn route(
     rest: &[&str],
     params: &Params,
 ) -> Result<Reply, HttpError> {
-    let sign_in = state
-        .auth
-        .as_ref()
-        .and_then(|a| a.browser_sign_in())
-        .ok_or_else(|| {
-            HttpError(
-                404,
-                "Browser sign-in is not configured: give an auth.oidc issuer a browser client"
-                    .to_owned(),
-            )
-        })?;
+    let sign_in = state.auth.as_ref().and_then(|a| a.browser_sign_in());
     let method = request.method();
     let get = matches!(method, Method::Get | Method::Head);
+    // Without browser sign-in there is nothing to choose: the web UI asks on every page, so
+    // the answer is an empty list, not a 404 its console would show (#369).
+    if sign_in.is_none() && rest.is_empty() && get {
+        return Ok(json_reply(
+            200,
+            &serde_json::json!({ "signIn": [], "signedIn": null }),
+        ));
+    }
+    let sign_in = sign_in.ok_or_else(|| {
+        HttpError(
+            404,
+            "Browser sign-in is not configured: give an auth.oidc issuer a browser client"
+                .to_owned(),
+        )
+    })?;
     match rest {
         [] if get => Ok(overview(&sign_in, request)),
         ["login"] if get => {
