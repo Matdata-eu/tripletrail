@@ -186,3 +186,5 @@ installs at start. Their tests run with
   working for a 30-day grace period, after which the enterprise features turn off and the open
   features keep working (see [what happens when a licence
   expires](#what-happens-when-a-licence-expires)).
+- From 1.0, an LTS branch (`release/N.x`) gets security and data-loss fixes for 24 months for
+  Enterprise contracts.
