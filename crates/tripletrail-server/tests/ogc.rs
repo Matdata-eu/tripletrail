@@ -506,6 +506,15 @@ fn html_pages_for_browsers() {
     assert!(!items.contains("<1>"), "{items}");
     let (_, _, tracks) = page(&format!("{ogc}/collections/Track/items"), browser);
     assert!(tracks.contains("<polyline"), "{tracks}");
+    // Which features of how many, and the way back after the first page (#371).
+    assert!(items.contains("Features 1–2 of 2."), "{items}");
+    let (_, _, second) = page(
+        &format!("{ogc}/collections/Station/items?limit=1&offset=1"),
+        browser,
+    );
+    assert!(second.contains("Feature 2 of 2."), "{second}");
+    assert!(second.contains(">Previous page</a>"), "{second}");
+    assert!(!second.contains(">Next page</a>"), "{second}");
 
     // A feature, and the other resources.
     let one = format!(
