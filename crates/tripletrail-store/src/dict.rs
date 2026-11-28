@@ -1082,10 +1082,66 @@ impl Dictionary {
     /// keys after the first `from`, which [`Dictionary::replace_saved`] can then take as the
     /// index of the piece holding them.
     pub(crate) fn fill_index(&self, from: usize, keys: usize, slots: &mut [u64]) {
+        debug_assert_eq!(slots.len(), index_slots(keys));
+        let carry = self.fill_index_window(from, keys, 0, slots, &[]);
+        debug_assert!(carry.is_empty(), "the whole index wraps around");
+    }
+
+    /// Fills the slots `lo..lo + window.len()` (all 0) of the saved index [`fill_index`]
+    /// makes, out of [`index_slots`] of `keys`: first with `carry`, the entries an earlier
+    /// window had no room left for, then with each key whose first slot is in the window, in
+    /// order. Returns the entries this window has no room for, which go on in the next window
+    /// (after the last, from slot 0). A window that is the whole index wraps around itself, as
+    /// [`fill_index`] does.
+    ///
+    /// Any order of insertion makes a valid index: each entry sits after its first slot with
+    /// no empty slot between, which is all a lookup needs. A window at a time lets
+    /// [`crate::persist`] build an index larger than memory on the heap, a part at a time,
+    /// and write it in order, instead of in a mapped file whose pages, written at random for
+    /// minutes, the system writes back again and again (60 times the index's size in a load
+    /// of 400M triples under a memory cap, #232).
+    ///
+    /// [`fill_index`]: Dictionary::fill_index
+    pub(crate) fn fill_index_window(
+        &self,
+        from: usize,
+        keys: usize,
+        lo: usize,
+        window: &mut [u64],
+        carry: &[u64],
+    ) -> Vec<u64> {
         use rayon::prelude::*;
         const CHUNK: usize = 1 << 20;
-        debug_assert_eq!(slots.len(), index_slots(keys));
-        let n = slots.len();
+        let n = index_slots(keys);
+        let len = window.len();
+        debug_assert!(lo + len <= n);
+        let whole = lo == 0 && len == n;
+        let mut left = Vec::new();
+        // The first empty slot from `i`, or `None` past the window's end.
+        let free = |window: &[u64], mut i: usize| -> Option<usize> {
+            while window[i] != 0 {
+                i += 1;
+                if i == len {
+                    if !whole {
+                        return None;
+                    }
+                    i = 0;
+                }
+            }
+            Some(i)
+        };
+        for (k, &entry) in carry.iter().enumerate() {
+            match (len > 0).then(|| free(window, 0)).flatten() {
+                Some(i) => window[i] = entry,
+                None => {
+                    left.extend_from_slice(&carry[k..]);
+                    break;
+                }
+            }
+        }
+        if len == 0 {
+            return left;
+        }
         let mut hashes = Vec::with_capacity(CHUNK.min(keys));
         for start in (from + 1..from + 1 + keys).step_by(CHUNK) {
             let end = (start + CHUNK).min(from + 1 + keys);
@@ -1094,16 +1150,20 @@ impl Dictionary {
                 .map(|o| self.hash(self.raw_key(o as u32)))
                 .collect_into_vec(&mut hashes);
             for (o, &h) in (start..end).zip(&hashes) {
-                let mut i = first_slot(h, n);
-                while slots[i] != 0 {
-                    i += 1;
-                    if i == n {
-                        i = 0;
-                    }
+                let first = first_slot(h, n);
+                if first < lo || first >= lo + len {
+                    continue;
                 }
-                slots[i] = (h & 0xFFFF_FFFF) << 32 | o as u64;
+                let entry = (h & 0xFFFF_FFFF) << 32 | o as u64;
+                // Once one entry runs past the window, every later one whose probe reaches
+                // the end does too: kept in order for the next window.
+                match free(window, first - lo) {
+                    Some(i) => window[i] = entry,
+                    None => left.push(entry),
+                }
             }
         }
+        left
     }
 
     /// Whether saved parts can be rebuilt into a dictionary whose keys all [`decode`]: the
