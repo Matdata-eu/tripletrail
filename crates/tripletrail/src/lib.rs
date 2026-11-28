@@ -2769,6 +2769,10 @@ impl Engine {
             *self.spatial.last.lock_unpoisoned() = stats;
             self.check_cancelled()?;
         }
+        // With the result tables the spatial rewrite registered after the view was taken (the
+        // pairs of a spatial join): the count pass reads them as tables, not through the
+        // evaluator (#363).
+        let at = at.map(Snapshot::with_pending_tables);
         // Joins written as filters (#185), before the count shortcuts read the pattern.
         // Substituted variables are bound already: they are not renamed.
         if shortcuts && let Some(at) = &at {
@@ -2988,6 +2992,8 @@ impl Engine {
                 (query, ranges) = range::rewrite(rewritten, self, at.as_ref());
             }
         }
+        // As run_query_scoped: with the tables the spatial rewrite registered (#363).
+        let at = at.map(Snapshot::with_pending_tables);
         // While the ids executor is on: whether it answers the query or hands it on.
         let mut executor = None;
         let union = !has_own_dataset(&query);
