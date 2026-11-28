@@ -603,6 +603,7 @@ body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-
 nav,main,footer{max-width:72rem;margin:0 auto;padding:.75rem 1rem}\
 nav,footer{color:var(--muted);font-size:13px}\
 a{color:var(--accent)}h1{font-size:1.5rem;margin:.25rem 0 1rem}\
+h1,nav,td,dd,code{overflow-wrap:anywhere}\
 table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{text-align:left;vertical-align:top;padding:.35rem .6rem;border-bottom:1px solid var(--line)}\
 th{font-weight:600}.wide{overflow-x:auto}dl{display:grid;grid-template-columns:max-content 1fr;gap:.25rem 1rem}dd{margin:0}\
 code{font-size:13px}.sketch{display:block;width:100%;max-height:28rem;border:1px solid var(--line);border-radius:6px}\
