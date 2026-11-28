@@ -124,6 +124,7 @@ versions may change the store format and the API; the release notes say how to u
 
 ### Changed
 
+- The spatial index takes half the memory (#393): each tree is now a packed R-tree of 20-byte entries in one vector, instead of an `rstar` tree of about 47 bytes an entry. On OSM Norway the index went from 17.8 MB to 8.5 MB, with the same answers and the same query times; on 4 million boxes building it takes 0.42–0.48 s instead of 0.68–0.77 s. See [the spatial index](docs/spatial-index.md#the-packed-r-tree-393).
 - [TripleTrail Enterprise](docs/enterprise.md) and the production guide describe the enterprise image as it is delivered (#391): the public, licence-gated `ghcr.io/matdata-eu/tripletrail-enterprise`, which needs no token to pull and keeps its enterprise features off without a licence that covers them, where they spoke of a private registry.
 - A bulk load's checkpoint writes the dictionary's hash index in order from the heap, a window of at most half of `--memory-limit` at a time, instead of filling a mapped file at random (#232). Loading 400M triples with `--memory-limit 2560M` under a 10 GB memory cap wrote 85 to 99 GB, most of it while the 960 MB index was written; now 22 GB, and the load takes 1,413 s instead of 1,637 to 1,675 s.
 

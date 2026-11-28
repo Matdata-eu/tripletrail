@@ -8,7 +8,7 @@ rewrite that uses it.
 
 `tripletrail-spatial::SpatialIndex` collects every geometry literal in the store (`geo:wktLiteral`,
 `geo:geoJSONLiteral`, `geo:gmlLiteral`, `geo:kmlLiteral`, H3), whatever predicate carries it,
-parses each distinct literal once, and bulk-loads its envelope into an R-tree (`rstar`). The
+parses each distinct literal once, and bulk-loads its envelope into a packed R-tree. The
 TripleTrail store keeps geometry literals as their own kind of term, so it finds them from the quad
 ids and decodes only the geometries; Oxigraph's store is scanned. Geographic geometries (CRS84,
 EPSG:4326) share one tree; each other CRS gets its own tree. Literals that are not valid, or are
@@ -299,6 +299,24 @@ Building the index takes 2.3–2.9 s for 242k geometries. About 1.1 s of that is
 `geo:asWKT` quads from Oxigraph's in-memory store (about 4.5 µs per quad), about 0.6 s is WKT
 parsing (spread over all cores) and about 0.3 s is the R-tree bulk load. The large-polygon query
 is dominated by evaluating the remaining FILTER and joins for its 1269 hits.
+
+### The packed R-tree (#393)
+
+Each tree is packed once, sort-tile-recursive: the entries are sorted by the centre of their box
+along x, cut into vertical slices, each slice sorted along y, and every 16 entries share one box in
+the level above, up to a single root. An entry is a box in `f32`, rounded outwards, and the slot
+of its literal: 20 bytes, kept in one flat vector, and the levels above add about 5% to that.
+Geometries inserted later go into a small `rstar` tree beside it, and removed ones are marked as
+removed; once the changes pass an eighth of the entries (or 1,024), the tree is packed again.
+Window queries read both, and nearest-neighbour queries merge both in order of distance.
+
+It replaced an `rstar` tree, whose nodes cost about 47 bytes an entry. On OSM Norway (store from
+`bench/`, two alternating runs each) the index's size in `/$/stats` went from 17,754,578 to
+8,450,792 bytes, the server's anonymous memory at start from 137–141 MB to 123–124 MB, and every
+query answered the same rows, at the same speed (warm best times: k nearest 9.9–11.2 ms before,
+9.0–10.7 ms after; a window over Oslo 50.8–56.7 ms before, 48.5–52.7 ms after). On 4 million
+random boxes, the pack takes 0.42–0.48 s instead of 0.68–0.77 s, 2,000 windows 275–281 ms instead
+of 293–315 ms, and 2,000 10-nearest queries 23 ms instead of 39–42 ms.
 
 Joins, same data, one run:
 
